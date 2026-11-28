@@ -25,8 +25,9 @@ import (
 // ViolationEvent; a successful re-attestation triggers restore.
 //
 // Observers are registered on the Service via RegisterObserver and called
-// synchronously inside VerifyManifest after the verification result is
-// computed. Observers must not block; move slow work to a goroutine.
+// synchronously from RecordDeviceVerdict, which dispatches device verdicts.
+// VerifyManifest dispatches nothing: an inspection is not a verdict.
+// Observers must not block; move slow work to a goroutine.
 type AttestationObserver interface {
 	// OnAttestationFailed is called when manifest verification fails.
 	// deviceID identifies the platform device record associated with hostID.
@@ -34,8 +35,9 @@ type AttestationObserver interface {
 	// VerificationResult details.
 	OnAttestationFailed(ctx context.Context, deviceID uint64, hostID, detail string)
 
-	// OnAttestationPassed is called when manifest verification succeeds.
-	// It is the trigger for the quarantine restore path.
+	// OnAttestationPassed is called for a passed device verdict (a
+	// verified quote), never from VerifyManifest. It is the trigger for
+	// the quarantine restore path.
 	OnAttestationPassed(ctx context.Context, deviceID uint64, hostID string)
 }
 
@@ -57,8 +59,9 @@ type DeviceResolver interface {
 	DeviceForHost(hostID string) (deviceID uint64, ok bool)
 }
 
-// RegisterObserver adds observer to the set notified on every VerifyManifest
-// call. Observers are called in registration order. This method is safe to
+// RegisterObserver adds observer to the set notified of every dispatched
+// device verdict (RecordDeviceVerdict; VerifyManifest dispatches nothing). Observers are
+// called in registration order. This method is safe to
 // call before or after the service handles its first verification.
 func (s *Service) RegisterObserver(obs AttestationObserver) {
 	s.mu.Lock()
@@ -76,7 +79,8 @@ func (s *Service) SetDeviceResolver(r DeviceResolver) {
 }
 
 // notifyObservers dispatches the attestation outcome to all registered
-// observers. It is called inside VerifyManifest after the result is final.
+// observers. RecordDeviceVerdict calls it for each device verdict;
+// VerifyManifest never does.
 func (s *Service) notifyObservers(ctx context.Context, hostID string, passed bool, detail string) {
 	s.mu.RLock()
 	hasObservers := len(s.observers) > 0

@@ -32,3 +32,21 @@ func (s serveShutdowner) Shutdown(_ context.Context, _ *platformv1.ShutdownReque
 func platformShutdowner(sig chan<- os.Signal) platformrest.Shutdowner {
 	return serveShutdowner{sig: sig}
 }
+
+// stopWithSwitchesFirst closes the switch service and then stops the daemon
+// transports. Closing the switch connections first interrupts any switch RPC
+// stalled in SSH; stopping first would let a graceful transport stop wait on
+// that RPC forever, with the Close that frees it never reached. The switch
+// close also turns off switch operation admission, so an RPC that arrives, or
+// is queued, before the transports stop fails at once instead of dialing a
+// new SSH connection. Either func
+// may be nil (no switch service, no daemon); the caller logs the errors.
+func stopWithSwitchesFirst(ctx context.Context, closeSwitches func() error, stop func(context.Context) error) (closeErr, stopErr error) {
+	if closeSwitches != nil {
+		closeErr = closeSwitches()
+	}
+	if stop != nil {
+		stopErr = stop(ctx)
+	}
+	return closeErr, stopErr
+}

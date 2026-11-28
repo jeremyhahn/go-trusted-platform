@@ -82,14 +82,19 @@ func (s *Service) BuildManifest(ctx context.Context, config *manifest.BuilderCon
 // PlatformCACert that's not threaded through this surface yet).
 // It does not check a manifest signature: a supplied publicKey is
 // refused with ErrAttestationManifestSignatureUnchecked rather than
-// reported valid unchecked (#304).
+// reported valid unchecked (#304). A manifest with no timestamp fails
+// closed: its age cannot be established, so it is never reported fresh.
 //
 // Used by /attestation/manifests/verify and by the WebUI's per-row
 // Verify action. Both success and rejection paths emit events for
 // the audit trail.
 //
-// On completion, registered AttestationObservers are notified so the
-// quarantine loop can react to failures and re-attestation successes.
+// An inspection is not a verdict: VerifyManifest checks no signature and
+// no fresh quote, and it may read stored evidence long past its freshness
+// window, so neither a pass nor a failure reaches the AttestationObservers.
+// Quarantine and restore come only from device verdicts
+// (RecordDeviceVerdict, verdict.go); expired evidence never quarantines
+// (docs/attestation/architecture.md, failure section; #2038).
 func (s *Service) VerifyManifest(
 	ctx context.Context,
 	m *manifest.HostManifest,
@@ -135,10 +140,17 @@ func (s *Service) VerifyManifest(
 	}
 	result.HostAttestationValid = hostValid
 	// Freshness: 24h policy matches the existing manifest verifier
-	// default; older manifests are flagged as failed timestamps.
-	result.TimestampValid = m.Timestamp.IsZero() || time.Since(m.Timestamp) <= 24*time.Hour
-	if !result.TimestampValid {
-		result.Errors = append(result.Errors, "manifest is older than 24 hours")
+	// default; older manifests are flagged as failed timestamps. A
+	// manifest with no timestamp has no establishable age, so it fails
+	// closed.
+	if m.Timestamp.IsZero() {
+		result.TimestampValid = false
+		result.Errors = append(result.Errors, "manifest has no timestamp, its age cannot be established")
+	} else {
+		result.TimestampValid = time.Since(m.Timestamp) <= 24*time.Hour
+		if !result.TimestampValid {
+			result.Errors = append(result.Errors, "manifest is older than 24 hours")
+		}
 	}
 	// Signature is not checked at this layer today — the AK signature
 	// over the quote is validated by the enrollment hook at capture
@@ -172,10 +184,6 @@ func (s *Service) VerifyManifest(
 		Outcome:    outcome,
 		Reason:     reason,
 	})
-
-	// Notify quarantine-loop observers of the verification outcome.
-	passed := result.Status == manifest.VerificationStatusVerified
-	s.notifyObservers(ctx, m.HostID, passed, attestationDetail(result.Errors))
 
 	return result, nil
 }

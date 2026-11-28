@@ -112,6 +112,9 @@ func (s *SwitchGRPCService) GetPortStatus(
 	if portName == "" {
 		return nil, status.Error(codes.InvalidArgument, "port_name is required")
 	}
+	if err := switchmgmt.ValidatePortName(portName); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 
 	mgr, err := s.switchService.Manager(switchName)
 	if err != nil {
@@ -147,6 +150,9 @@ func (s *SwitchGRPCService) SetPortVLAN(
 	portName := req.GetPortName()
 	if portName == "" {
 		return nil, status.Error(codes.InvalidArgument, "port_name is required")
+	}
+	if err := switchmgmt.ValidatePortName(portName); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	vlanID := req.GetVlanId()
@@ -191,6 +197,9 @@ func (s *SwitchGRPCService) EnablePort(
 	if portName == "" {
 		return nil, status.Error(codes.InvalidArgument, "port_name is required")
 	}
+	if err := switchmgmt.ValidatePortName(portName); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 
 	mgr, err := s.switchService.Manager(switchName)
 	if err != nil {
@@ -228,6 +237,9 @@ func (s *SwitchGRPCService) DisablePort(
 	portName := req.GetPortName()
 	if portName == "" {
 		return nil, status.Error(codes.InvalidArgument, "port_name is required")
+	}
+	if err := switchmgmt.ValidatePortName(portName); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	mgr, err := s.switchService.Manager(switchName)
