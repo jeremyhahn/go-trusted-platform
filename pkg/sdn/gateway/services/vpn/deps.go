@@ -113,6 +113,17 @@ type PendingDeleteStore interface {
 	RetryPendingDeletes(ctx context.Context) error
 }
 
+// RecordedLeaseStore is a LeaseStore whose reads are served from a projection
+// of an authoritative record (the control plane). GetRecorded reads the lease
+// from the record itself and brings the projection in line with it. It
+// returns ErrLeaseNotFound when the record does not hold the lease and
+// ErrLeaseStoreUnavailable when the record cannot be read. The service uses
+// it where the projection may lag a write whose answer was lost.
+type RecordedLeaseStore interface {
+	LeaseStore
+	GetRecorded(ctx context.Context, id LeaseID) (*Lease, error)
+}
+
 // Clock is the time source; tests inject one.
 type Clock interface {
 	Now() time.Time

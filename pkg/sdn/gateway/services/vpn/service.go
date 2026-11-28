@@ -367,7 +367,7 @@ func (s *Service) bypassRenewal(id LeaseID) {
 // committed (a lost response), so the mark is stored again before the failure
 // is returned, and the renew bypass is granted: the refusal is then durable
 // and Restore rebuilds the bypass from the stored mark. When that write fails
-// too, the store is read back: a record without the mark means the clear is
+// too, the record is read back (readRecord): a record without the mark means the clear is
 // stored and the renewal is done; otherwise the failure is returned with the
 // bypass kept in memory.
 func (s *Service) confirmClientDeadline(ctx context.Context, lease *Lease) error {
@@ -389,15 +389,27 @@ func (s *Service) confirmClientDeadline(ctx context.Context, lease *Lease) error
 	if rErr := s.deps.Leases.Put(ctx, lease); rErr == nil {
 		return err
 	}
-	// Both outcomes are unknown: the record decides. No other writer moves
-	// it, as Renew holds the device lock.
-	if stored, gErr := s.deps.Leases.Get(ctx, lease.ID); gErr == nil &&
+	// Both outcomes are unknown: the record decides, read from the
+	// authoritative store and not from a projection that a lost answer left
+	// behind. No other writer moves it, because Renew holds the device lock.
+	if stored, gErr := s.readRecord(ctx, lease.ID); gErr == nil &&
 		stored.ClientExpiresAt.IsZero() && stored.ExpiresAt.Equal(lease.ExpiresAt) {
 		lease.ClientExpiresAt = time.Time{}
 		s.clearRenewBypass(lease.ID)
 		return nil
 	}
 	return err
+}
+
+// readRecord reads the lease from the store's authoritative record:
+// GetRecorded when the store is a RecordedLeaseStore (a projection of the
+// control plane), Get otherwise, because a store with no projection is its
+// own record.
+func (s *Service) readRecord(ctx context.Context, id LeaseID) (*Lease, error) {
+	if rs, ok := s.deps.Leases.(RecordedLeaseStore); ok {
+		return rs.GetRecorded(ctx, id)
+	}
+	return s.deps.Leases.Get(ctx, id)
 }
 
 // extensionOwed reports whether lease id waits on a deadline extension.
