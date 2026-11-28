@@ -22,6 +22,20 @@ import { Gated } from "@/components/features/capabilities/gated";
 
 const OP = "GET /api/v1/attestation/verdicts";
 
+// baselineLabel names the provenance of the baseline a verdict was judged
+// against, so a TOFU pass never looks identical to a signed-manifest pass
+// (docs/attestation/architecture.md).
+function baselineLabel(source: string | undefined): string {
+  switch (source) {
+    case "signed":
+      return "Signed baseline";
+    case "tofu":
+      return "TOFU baseline";
+    default:
+      return "Baseline unknown";
+  }
+}
+
 // DeviceVerdictsPage lists the device attestation verdicts the tenant may
 // see (AttestationService.PollDeviceVerdicts), polled only when the server
 // offers GET /api/v1/attestation/verdicts. Each further poll continues from
@@ -189,13 +203,14 @@ export default function DeviceVerdictsPage() {
                   <TableHead>Serial</TableHead>
                   <TableHead>Host</TableHead>
                   <TableHead>Verdict</TableHead>
+                  <TableHead>Baseline</TableHead>
                   <TableHead>Reason</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {verdicts.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground">
+                    <TableCell colSpan={7} className="text-center text-muted-foreground">
                       No verdicts yet
                     </TableCell>
                   </TableRow>
@@ -216,6 +231,7 @@ export default function DeviceVerdictsPage() {
                           </span>
                         )}
                       </TableCell>
+                      <TableCell>{baselineLabel(v.baselineSource)}</TableCell>
                       <TableCell>{v.reason || "-"}</TableCell>
                     </TableRow>
                   ))

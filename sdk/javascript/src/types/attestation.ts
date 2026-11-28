@@ -751,6 +751,11 @@ export interface DeviceVerdictEvent {
   cryptographic: boolean;
   /** The failure detail; empty when passed. */
   reason: string;
+  /**
+   * The provenance of the baseline the verdict was judged against when it
+   * was recorded: "signed" or "tofu"; absent or empty when unknown.
+   */
+  baselineSource?: string;
 }
 
 /** The answer to a device verdicts poll. */
