@@ -1232,7 +1232,10 @@ func (s *SDNService) SetPortState(ctx context.Context, req *platformv1.SetPortSt
 // The cookie carries only a 32-bit hash of the policy ID: an enabled apply
 // whose hash another in-memory policy record holds is refused
 // FailedPrecondition. The claim lives in memory only, so a delete, a
-// disable or a clean rollback leaves no reservation.
+// disable or a clean rollback leaves no reservation. A surviving flow under
+// the policy's cookie hash at an entry its in-memory record does not hold
+// is refused FailedPrecondition, as the hash cannot tell the policy from a
+// colliding ID: with no record, a reapply after a restart is refused too.
 // The whole call runs under policyMu.
 func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolicyRequest) (*platformv1.ApplyPolicyResponse, error) {
 	if req.GetConfig() == nil {
@@ -1342,23 +1345,22 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		}
 		// The cookie carries a truncated hash of the policy ID: two IDs
 		// with one hash would share flow IDs and stats, so refuse it. The
-		// check reads only the in-memory records, so without a recorded
-		// entry (no record after a restart, or a disabled one) the switch's
-		// surviving flows are read too.
+		// check reads the in-memory records, and the switch's surviving
+		// flows too: a same-hash flow at an entry the record does not hold
+		// (every entry after a restart, or of a disabled record) may be
+		// another policy's, so it is refused.
 		if owner, ok := policyCookieCollision(policyID, others); ok {
 			return nil, status.Errorf(codes.FailedPrecondition,
 				"policy %q flow cookies collide with those of policy %q; apply it under another ID", policyID, owner)
 		}
-		if len(recorded) == 0 {
-			bridge, fl, err := s.survivingCookieCollision(ctx, client, policyID, flows)
-			if err != nil {
-				return nil, status.Errorf(codes.Unavailable, "%v", err)
-			}
-			if fl != nil {
-				return nil, status.Errorf(codes.FailedPrecondition,
-					"a surviving flow with cookie %s on bridge %s priority %d match %q carries the flow cookie hash of policy %q; apply it under another ID",
-					fl.Cookie, bridge, fl.Priority, fl.Match, policyID)
-			}
+		bridge, fl, err := s.survivingCookieCollision(ctx, client, policyID, recorded, flows)
+		if err != nil {
+			return nil, status.Errorf(codes.Unavailable, "%v", err)
+		}
+		if fl != nil {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"a surviving flow with cookie %s on bridge %s priority %d match %q carries the flow cookie hash of policy %q; apply it under another ID",
+				fl.Cookie, bridge, fl.Priority, fl.Match, policyID)
 		}
 		if owner, flow, ok := s.conflictingPolicyFlow(flows, others); ok {
 			return nil, status.Errorf(codes.FailedPrecondition,
@@ -1377,7 +1379,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		// refuse an entry a flow with another cookie (SDNService.AddFlow,
 		// another owner) holds, before any write, so the policy never
 		// replaces, and its strict deletes never meet, a flow it does not own.
-		adopted, occupied, occupant, err := s.occupiedPolicyFlow(ctx, client, policyID, flows)
+		adopted, occupied, occupant, err := s.occupiedPolicyFlow(ctx, client, policyID, recorded, flows)
 		if err != nil {
 			return nil, status.Errorf(codes.Unavailable, "%v", err)
 		}
@@ -1939,10 +1941,11 @@ func (s *SDNService) conflictingPolicyFlow(flows []policyFlow, others []policyRe
 // returned as adopted, for the rollback to restore. The stats filter is not
 // strict, so the flows it returns are keyed here.
 //
-// A flow under the policy's own cookie hash is the policy's own: the
-// in-memory records (policyCookieCollision) refuse a colliding ID, and a
-// surviving flow after a restart is adopted and replaced by the apply.
-func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientInterface, policyID string, flows []policyFlow) ([]policyFlow, policyFlow, *ovs.Flow, error) {
+// A flow under the policy's own cookie hash is the policy's own only at an
+// entry its in-memory record (recorded) holds: the cookie carries a 32-bit
+// hash of the policy ID, so anywhere else, every entry after a restart
+// included, it may be a colliding ID's and is returned as the occupant.
+func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientInterface, policyID string, recorded map[policyFlowKey]struct{}, flows []policyFlow) ([]policyFlow, policyFlow, *ovs.Flow, error) {
 	var adopted []policyFlow
 	for _, flow := range flows {
 		filter := fmt.Sprintf("table=%d", flow.mod.Table)
@@ -1955,19 +1958,23 @@ func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientIn
 		}
 		want := flowKey(flow)
 		for _, fl := range installed {
-			// The policy's own flow, of this or an earlier apply (whose
-			// rule order may differ), or one surviving a restart:
-			// OFPFC_ADD replacing it is the apply.
 			if fl == nil {
-				continue
-			}
-			ownCookie := fl.Cookie == flow.mod.Cookie || samePolicyCookie(fl.Cookie, flow.mod.Cookie)
-			if ownCookie {
 				continue
 			}
 			theirs := policyFlow{bridge: flow.bridge, mod: &ovs.FlowMod{Table: fl.Table, Priority: fl.Priority, Match: fl.Match}}
 			if flowKey(theirs) != want {
 				continue
+			}
+			// The policy's own flow, of this or an earlier apply (whose
+			// rule order may differ), at an entry its record holds:
+			// OFPFC_ADD replacing it is the apply. Without the record the
+			// hash is no proof, so the flow is an occupant.
+			ownCookie := fl.Cookie == flow.mod.Cookie || samePolicyCookie(fl.Cookie, flow.mod.Cookie)
+			if ownCookie {
+				if _, ok := recorded[want]; ok {
+					continue
+				}
+				return nil, flow, fl, nil
 			}
 			// A cookie-0 flow with the same actions is this flow installed
 			// before policy cookies, and a flow under the policy's legacy
@@ -1994,17 +2001,14 @@ func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientIn
 }
 
 // survivingCookieCollision returns the first flow installed on a target
-// bridge that carries policyID's flow cookie hash at an entry none of
-// flows writes. The cookie carries only a 32-bit hash of the policy ID and
-// a restart empties the policy map, so without a recorded entry such a
-// surviving flow may be another policy's; sharing the hash would give both
-// one flow ID and one stats entry. The flows are read with an unfiltered
-// stats request because ListFlows reports no match.
-func (s *SDNService) survivingCookieCollision(ctx context.Context, client ovs.ClientInterface, policyID string, flows []policyFlow) (string, *ovs.Flow, error) {
-	want := make(map[policyFlowKey]struct{}, len(flows))
-	for _, flow := range flows {
-		want[flowKey(flow)] = struct{}{}
-	}
+// bridge that carries policyID's flow cookie hash at an entry the policy's
+// in-memory record (recorded) does not hold. The cookie carries only a
+// 32-bit hash of the policy ID, so only the in-memory record proves an
+// entry is the policy's own: any other such flow, every one after a
+// restart included, may be another policy's, and replacing or sharing it
+// would give both one flow ID and one stats entry. The flows are read with
+// an unfiltered stats request because ListFlows reports no match.
+func (s *SDNService) survivingCookieCollision(ctx context.Context, client ovs.ClientInterface, policyID string, recorded map[policyFlowKey]struct{}, flows []policyFlow) (string, *ovs.Flow, error) {
 	own := fmt.Sprintf("0x%x", policyFlowCookie(policyID, 0))
 	seen := make(map[string]struct{})
 	for _, flow := range flows {
@@ -2022,7 +2026,7 @@ func (s *SDNService) survivingCookieCollision(ctx context.Context, client ovs.Cl
 				continue
 			}
 			theirs := policyFlow{bridge: bridge, mod: &ovs.FlowMod{Table: fl.Table, Priority: fl.Priority, Match: fl.Match}}
-			if _, ok := want[flowKey(theirs)]; !ok {
+			if _, ok := recorded[flowKey(theirs)]; !ok {
 				return bridge, fl, nil
 			}
 		}
