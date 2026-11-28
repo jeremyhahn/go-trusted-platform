@@ -205,14 +205,12 @@ export type {
 
 // BMC users and web certificate (#1720)
 export {
-  BMCService,
   BMC_PRIVILEGE_CODES,
   bmcPrivilegeName,
   type BMCPrivilegeName,
   type BMCUser,
   type CreateBMCUserRequest,
   type ReplaceBMCWebCertificateRequest,
-  type BMCStatusResponse,
 } from './services/bmc-service.js';
 
 // =============================================================================
@@ -1155,11 +1153,8 @@ export type {
   BMCPowerStatus,
   BMCBootDevice,
   BMCMountISORequest,
-  BMCVirtualMediaStatus,
   BMCSensor,
-  BMCSystemInfo,
   BMCProvisionStatus,
-  BMCWebCertificate,
   BMCOperationResult,
 } from './services/bmc-service.js';
 
