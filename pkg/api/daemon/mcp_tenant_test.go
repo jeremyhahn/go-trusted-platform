@@ -221,6 +221,13 @@ func (b *memoryTenantBarriers) TenantBarrierStatus(_ context.Context, req *quicb
 	}, nil
 }
 
+// TenantIsolationType answers barrier: every parity tenant is
+// barrier-isolated. It records no call, so the per-transport call snapshots
+// do not change.
+func (b *memoryTenantBarriers) TenantIsolationType(_ context.Context, _ string) (string, error) {
+	return "barrier", nil
+}
+
 func (b *memoryTenantBarriers) state(tenantID string) string {
 	b.mu.Lock()
 	defer b.mu.Unlock()

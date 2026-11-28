@@ -6,6 +6,7 @@ package tenant
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -15,7 +16,8 @@ import (
 // fakeQRDBTenants is a QRDB tenant client that implements only the four
 // per-tenant barrier verbs the manager uses. Every other method of the
 // embedded interface panics (nil embedded value), so a call the adapter
-// should not make fails the test loudly.
+// should not make fails the test loudly. It also answers GetTenant with each
+// tenant's isolation type (barrier unless set otherwise).
 type fakeQRDBTenants struct {
 	quicbaassdk.QRDBTenantClient
 
@@ -27,12 +29,21 @@ type fakeQRDBTenants struct {
 	sealed      map[string]bool
 	initialized map[string]bool
 	initErr     error
+
+	// prefix tenants answer "prefix" from GetTenant; untyped tenants answer
+	// an empty isolation type; every other tenant answers "barrier".
+	prefix  map[string]bool
+	untyped map[string]bool
+	getErr  error
+	gets    []string
 }
 
 func newFakeQRDBTenants() *fakeQRDBTenants {
 	return &fakeQRDBTenants{
 		sealed:      map[string]bool{},
 		initialized: map[string]bool{},
+		prefix:      map[string]bool{},
+		untyped:     map[string]bool{},
 	}
 }
 
@@ -80,6 +91,24 @@ func (f *fakeQRDBTenants) TenantBarrierStatus(ctx context.Context, req *quicbaas
 		Strategy:       "software",
 		HardwareBacked: true,
 	}, nil
+}
+
+func (f *fakeQRDBTenants) GetTenant(ctx context.Context, tenantID string) (*quicbaassdk.QRDBGetTenantResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gets = append(f.gets, tenantID)
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	info := quicbaassdk.QRDBTenantInfo{ID: tenantID}
+	switch {
+	case f.untyped[tenantID]:
+	case f.prefix[tenantID]:
+		info.IsolationType = "prefix"
+	default:
+		info.IsolationType = "barrier"
+	}
+	return &quicbaassdk.QRDBGetTenantResponse{Tenant: info}, nil
 }
 
 func TestNewTenantBarrierClient_NilIsNil(t *testing.T) {
@@ -217,5 +246,107 @@ func TestManager_BarrierLifecycleThroughSDKAdapter(t *testing.T) {
 	}
 	if len(fake.seals) != 1 || fake.seals[0] != id {
 		t.Fatalf("seals = %v, want [%s]", fake.seals, id)
+	}
+}
+
+// newSDKAdapterManager builds a Manager whose barrier client is the SDK
+// adapter over fake.
+func newSDKAdapterManager(t *testing.T, fake *fakeQRDBTenants) *Manager {
+	t.Helper()
+	iamClient := newMockIAMClient()
+	cfg := &ManagerConfig{
+		IAMTenantClient:     iamClient,
+		IAMRoleClient:       iamClient,
+		TenantBarrierClient: NewTenantBarrierClient(fake),
+		Config:              DefaultConfig(),
+		Logger:              newTestLogger(),
+	}
+	cfg.Config.EnableDEKIsolation = false
+	m, err := NewManager(cfg)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	return m
+}
+
+// TestManager_BarrierOpsRefusedForNonBarrierIsolation: a tenant whose data
+// routes through the shared store (prefix, or no type, which the engine reads
+// as prefix) refuses Initialize, Unseal and Seal, so the card can never show
+// Sealed over readable data; nothing reaches the barrier backend.
+func TestManager_BarrierOpsRefusedForNonBarrierIsolation(t *testing.T) {
+	cases := []struct {
+		name string
+		set  func(f *fakeQRDBTenants, id string)
+	}{
+		{"prefix", func(f *fakeQRDBTenants, id string) { f.prefix[id] = true }},
+		{"untyped", func(f *fakeQRDBTenants, id string) { f.untyped[id] = true }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeQRDBTenants()
+			m := newSDKAdapterManager(t, fake)
+			ctx := context.Background()
+			entity, err := m.CreateTenant(ctx, &CreateTenantRequest{Name: "iso-" + tc.name})
+			if err != nil {
+				t.Fatalf("CreateTenant: %v", err)
+			}
+			id := entity.ID
+			fake.mu.Lock()
+			tc.set(fake, id)
+			inits, unseals, seals := len(fake.inits), len(fake.unseals), len(fake.seals)
+			fake.mu.Unlock()
+
+			ops := []struct {
+				op string
+				fn func() error
+			}{
+				{"init", func() error { return m.InitTenantBarrier(ctx, id, []byte("operator-pass")) }},
+				{"unseal", func() error { return m.UnsealTenantBarrier(ctx, id, []byte("k")) }},
+				{"seal", func() error { return m.SealTenantBarrier(ctx, id) }},
+			}
+			for _, o := range ops {
+				err := o.fn()
+				var bad ErrInvalidRequest
+				if !errors.As(err, &bad) || !strings.Contains(bad.Reason, "prefix isolation") {
+					t.Fatalf("%s on a %s tenant: err = %v, want ErrInvalidRequest naming prefix isolation", o.op, tc.name, err)
+				}
+			}
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if len(fake.inits) != inits || len(fake.unseals) != unseals || len(fake.seals) != seals {
+				t.Fatalf("a refused barrier operation reached the backend")
+			}
+		})
+	}
+}
+
+// TestManager_BarrierOpsFailClosedOnIsolationLookupError: when the tenant's
+// isolation type cannot be read, the barrier operation is refused with the
+// lookup error and nothing reaches the barrier backend.
+func TestManager_BarrierOpsFailClosedOnIsolationLookupError(t *testing.T) {
+	fake := newFakeQRDBTenants()
+	m := newSDKAdapterManager(t, fake)
+	ctx := context.Background()
+	entity, err := m.CreateTenant(ctx, &CreateTenantRequest{Name: "iso-lookup-down"})
+	if err != nil {
+		t.Fatalf("CreateTenant: %v", err)
+	}
+	id := entity.ID
+	fake.mu.Lock()
+	fake.getErr = errors.New("qrdb tenant lookup down")
+	inits, seals := len(fake.inits), len(fake.seals)
+	fake.mu.Unlock()
+
+	if err := m.InitTenantBarrier(ctx, id, []byte("operator-pass")); !errors.Is(err, fake.getErr) {
+		t.Fatalf("InitTenantBarrier err = %v, want the lookup error", err)
+	}
+	if len(fake.inits) != inits {
+		t.Fatalf("init reached the backend after a failed isolation lookup")
+	}
+	if err := m.SealTenantBarrier(ctx, id); !errors.Is(err, fake.getErr) {
+		t.Fatalf("SealTenantBarrier err = %v, want the lookup error", err)
+	}
+	if len(fake.seals) != seals {
+		t.Fatalf("seal reached the backend after a failed isolation lookup")
 	}
 }

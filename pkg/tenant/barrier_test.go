@@ -39,6 +39,10 @@ type testBarrierClient struct {
 	unsealErr error
 	sealErr   error
 	statusErr error
+
+	// isolation answers TenantIsolationType per tenant; a tenant not listed
+	// is barrier-isolated.
+	isolation map[string]string
 }
 
 func newTestBarrierClient() *testBarrierClient {
@@ -103,6 +107,15 @@ func (c *testBarrierClient) TenantBarrierStatus(ctx context.Context, req *quicba
 		Strategy:       "software",
 		HardwareBacked: false,
 	}, nil
+}
+
+func (c *testBarrierClient) TenantIsolationType(ctx context.Context, tenantID string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if iso, ok := c.isolation[tenantID]; ok {
+		return iso, nil
+	}
+	return "barrier", nil
 }
 
 func (c *testBarrierClient) isInitialized(tenantID string) bool {
