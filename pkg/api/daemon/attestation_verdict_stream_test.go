@@ -453,3 +453,41 @@ func TestPollDeviceVerdictsRefusesAForbiddenCaller(t *testing.T) {
 		t.Fatalf("err = %v, want PermissionDenied for an unscoped bearer token", err)
 	}
 }
+
+// The console renders the baseline provenance beside every verdict
+// (docs/attestation/architecture.md), so each feed event carries the source
+// of the baseline the verdict was judged against: a TOFU pass must not look
+// identical to a signed-manifest pass.
+func TestPollDeviceVerdictsCarriesTheBaselineSource(t *testing.T) {
+	server, attestation, _, _ := verdictFeedServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), streamDeadline)
+	defer cancel()
+
+	head, err := server.PollDeviceVerdicts(ctx, &platformv1.PollDeviceVerdictsRequest{})
+	if err != nil {
+		t.Fatalf("PollDeviceVerdicts(head): %v", err)
+	}
+
+	attestation.record(verdict.DeviceVerdict{DeviceID: 1, TenantID: "tenant-a", Passed: true, BaselineSource: "tofu"}, "ev-tofu")
+	attestation.record(verdict.DeviceVerdict{DeviceID: 2, TenantID: "tenant-a", Passed: true, BaselineSource: "signed"}, "ev-signed")
+	attestation.record(verdict.DeviceVerdict{DeviceID: 3, TenantID: "tenant-a", Passed: true}, "ev-unknown")
+
+	page, err := server.PollDeviceVerdicts(ctx,
+		&platformv1.PollDeviceVerdictsRequest{Cursor: head.GetCursor(), WaitMs: 1000})
+	if err != nil {
+		t.Fatalf("PollDeviceVerdicts: %v", err)
+	}
+	want := map[string]string{"ev-tofu": "tofu", "ev-signed": "signed", "ev-unknown": ""}
+	if len(page.GetVerdicts()) != len(want) {
+		t.Fatalf("want %d verdicts, got %+v", len(want), page.GetVerdicts())
+	}
+	for _, event := range page.GetVerdicts() {
+		source, ok := want[event.GetEventId()]
+		if !ok {
+			t.Fatalf("unexpected verdict event %q", event.GetEventId())
+		}
+		if got := event.GetBaselineSource(); got != source {
+			t.Errorf("event %s: baseline source %q, want %q", event.GetEventId(), got, source)
+		}
+	}
+}
