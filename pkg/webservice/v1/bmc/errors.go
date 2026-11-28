@@ -50,6 +50,17 @@ func (e ErrMissingISOURL) Error() string {
 	return "bmc: iso_url is required"
 }
 
+// ErrInvalidISOURL indicates the ISO URL cannot be fetched by a BMC: it is
+// malformed or its scheme is not http, https, cifs, smb or nfs.
+type ErrInvalidISOURL struct {
+	URL    string
+	Reason string
+}
+
+func (e ErrInvalidISOURL) Error() string {
+	return fmt.Sprintf("bmc: invalid iso_url %q: %s", e.URL, e.Reason)
+}
+
 // ErrBMCServiceNotAvailable indicates the BMC service is not configured or available.
 type ErrBMCServiceNotAvailable struct{}
 

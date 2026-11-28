@@ -84,6 +84,11 @@ export {
   DeviceService,
   DNSService,
   NTPService,
+  BMCService,
+  CapabilitiesService,
+  CAPABILITY_REASON_NOT_CONFIGURED,
+  CAPABILITY_REASON_UNIMPLEMENTED,
+  CAPABILITY_REASON_BLOCKED_INTEGRATION,
   GatewayService,
   IAMService,
   IDevIDService,
@@ -98,11 +103,6 @@ export {
   type RegistryComponentHealth,
   SDNService,
   SwitchService,
-  SWITCH_MAX_VLAN_ID,
-  type SwitchPortMode,
-  type SwitchPortStatus,
-  type SwitchPortActionResponse,
-  type SwitchSetPortVLANResponse,
   TenantService,
   TPMService,
   VTPMService,
@@ -154,6 +154,29 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './services/ntp-service.js';
+export type {
+  BMCPowerAction,
+  BMCPowerActionResponse,
+  BMCPowerStatusResponse,
+  BMCSetBootDeviceRequest,
+  BMCSetBootDeviceResponse,
+  BMCBootDeviceResponse,
+  BMCVirtualMediaStatus,
+  BMCMountISOResponse,
+  BMCStatusResponse,
+  BMCSensorReading,
+  BMCSystemInfo,
+  BMCWebCertificate,
+  BMCProvisionRequest,
+  BMCProvisionResult,
+} from './services/bmc-service.js';
+
+export type {
+  SwitchPortMode,
+  SwitchPortStatus,
+  SwitchPortActionResponse,
+  SetSwitchPortVLANResponse,
+} from './services/switch-service.js';
 
 export type { Capability, CapabilitiesResponse } from './services/capabilities-service.js';
 
@@ -1103,6 +1126,7 @@ export type {
   ExtendBundlePCRRequest,
   ExtendBundlePCRResponse,
   ReadBundlePCRResponse,
+  GetBundleStateResponse,
 } from './types/vtpm.js';
 
 // VPN types

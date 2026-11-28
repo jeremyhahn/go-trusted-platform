@@ -51,21 +51,21 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `BMCService.PowerOn` | - | - | - | - | missing |
-| `BMCService.PowerOff` | - | - | - | - | missing |
-| `BMCService.PowerReset` | - | - | - | - | missing |
-| `BMCService.PowerCycle` | - | - | - | - | missing |
-| `BMCService.PowerStatus` | `GET /bmc/{profileID:[0-9]+}/power` | - | - | - | missing |
-| `BMCService.SetBootDevice` | `POST /bmc/{profileID:[0-9]+}/boot-device` | - | - | - | missing |
-| `BMCService.GetBootDevice` | `GET /bmc/{profileID:[0-9]+}/boot-device` | - | - | - | missing |
-| `BMCService.MountISO` | `POST /bmc/{profileID:[0-9]+}/virtual-media` | - | - | - | missing |
-| `BMCService.UnmountISO` | `DELETE /bmc/{profileID:[0-9]+}/virtual-media` | - | - | - | missing |
-| `BMCService.VirtualMediaStatus` | `GET /bmc/{profileID:[0-9]+}/virtual-media` | - | - | - | missing |
-| `BMCService.GetSensors` | `GET /bmc/{profileID:[0-9]+}/sensors` | - | - | - | missing |
-| `BMCService.GetSystemInfo` | `GET /bmc/{profileID:[0-9]+}/system-info` | - | - | - | missing |
-| `BMCService.Provision` | `POST /bmc/{profileID:[0-9]+}/provision` | - | - | - | missing |
-| `BMCService.ProvisionStatus` | `GET /bmc/{profileID:[0-9]+}/provision` | - | - | - | missing |
-| `BMCService.GetWebCertificate` | `GET /bmc/{profileID:[0-9]+}/cert` | - | - | - | missing |
+| `BMCService.PowerOn` | `POST /bmc/{profileID:[0-9]+}/power` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.PowerOff` | `POST /bmc/{profileID:[0-9]+}/power` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.PowerReset` | `POST /bmc/{profileID:[0-9]+}/power` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.PowerCycle` | `POST /bmc/{profileID:[0-9]+}/power` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.PowerStatus` | `GET /bmc/{profileID:[0-9]+}/power` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.SetBootDevice` | `POST /bmc/{profileID:[0-9]+}/boot-device` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.GetBootDevice` | `GET /bmc/{profileID:[0-9]+}/boot-device` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.MountISO` | `POST /bmc/{profileID:[0-9]+}/virtual-media` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.UnmountISO` | `DELETE /bmc/{profileID:[0-9]+}/virtual-media` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.VirtualMediaStatus` | `GET /bmc/{profileID:[0-9]+}/virtual-media` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.GetSensors` | `GET /bmc/{profileID:[0-9]+}/sensors` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.GetSystemInfo` | `GET /bmc/{profileID:[0-9]+}/system-info` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.Provision` | `POST /bmc/{profileID:[0-9]+}/provision` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.ProvisionStatus` | `GET /bmc/{profileID:[0-9]+}/provision` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
+| `BMCService.GetWebCertificate` | `GET /bmc/{profileID:[0-9]+}/cert` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
 | `BMCService.ReplaceWebCertificate` | `PUT /bmc/{profileID:[0-9]+}/cert` | - | - | - | missing |
 | `BMCService.EnrollBMC` | - | - | - | - | missing |
 | `BMCService.RestoreFactoryCert` | - | - | - | - | missing |
@@ -182,24 +182,24 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `PlatformDaemon.GetStatus` | `GET /status` | - | `Dashboard.svelte` | - | partial |
+| `PlatformDaemon.GetStatus` | `GET /status` | `(dashboard)/platform/health/page.tsx` | `Dashboard.svelte` | `real-server/platform-daemon.spec.ts` | covered |
 | `PlatformDaemon.GetHealth` | `GET /health` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/platform/events/page.tsx`<br>`(dashboard)/platform/health/page.tsx` (+2) | `Dashboard.svelte` | `auth.spec.ts`<br>`dashboard.spec.ts`<br>`platform.spec.ts` (+1) | covered |
-| `PlatformDaemon.Liveness` | - | - | - | - | missing |
-| `PlatformDaemon.Readiness` | - | - | - | - | missing |
-| `PlatformDaemon.Shutdown` | - | - | - | - | missing |
-| `PlatformDaemon.GetVersion` | `GET /version` | - | `Dashboard.svelte` | - | partial |
-| `PlatformDaemon.GetConfig` | `GET /config` | - | - | - | missing |
-| `PlatformDaemon.UpdateConfig` | - | - | - | - | missing |
-| `PlatformDaemon.ReloadConfig` | `POST /config/reload` | - | - | - | missing |
-| `PlatformDaemon.StartService` | `POST /services/{service}/start` | - | `Dashboard.svelte` | - | partial |
-| `PlatformDaemon.StopService` | `POST /services/{service}/stop` | - | `Dashboard.svelte` | - | partial |
-| `PlatformDaemon.RestartService` | `POST /services/{service}/restart` | - | `Dashboard.svelte` | - | partial |
-| `PlatformDaemon.GetServiceStatus` | `GET /services/{service}` | - | - | - | missing |
-| `PlatformDaemon.ListServices` | `GET /services` | - | `Dashboard.svelte` | - | partial |
+| `PlatformDaemon.Liveness` | `GET /liveness` | `(dashboard)/platform/health/page.tsx` | - | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.Readiness` | `GET /readiness` | `(dashboard)/platform/health/page.tsx` | - | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.Shutdown` | `POST /shutdown` | `(dashboard)/platform/health/page.tsx` | - | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.GetVersion` | `GET /version` | `(dashboard)/platform/health/page.tsx` | `Dashboard.svelte` | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.GetConfig` | `GET /config` | `(dashboard)/platform/config/page.tsx` | - | `real-server/platform-config.spec.ts` | covered |
+| `PlatformDaemon.UpdateConfig` | `PUT /config/sections/{section}` | `(dashboard)/platform/config/page.tsx` | - | `real-server/platform-config.spec.ts` | covered |
+| `PlatformDaemon.ReloadConfig` | `POST /config/reload` | `(dashboard)/platform/config/page.tsx` | - | `real-server/platform-config.spec.ts` | covered |
+| `PlatformDaemon.StartService` | `POST /services/{service}/start` | `(dashboard)/platform/services/page.tsx` | `Dashboard.svelte` | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.StopService` | `POST /services/{service}/stop` | `(dashboard)/platform/services/page.tsx` | `Dashboard.svelte` | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.RestartService` | `POST /services/{service}/restart` | `(dashboard)/platform/services/page.tsx` | `Dashboard.svelte` | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.GetServiceStatus` | `GET /services/{service}` | `(dashboard)/platform/services/page.tsx` | - | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.ListServices` | `GET /services` | `(dashboard)/platform/services/page.tsx` | `Dashboard.svelte` | `real-server/platform-daemon.spec.ts` | covered |
 | `PlatformDaemon.StreamEvents` | - | - | - | - | not-UI: streaming plumbing |
 | `PlatformDaemon.StreamLogs` | `GET /logs/stream` | - | - | - | not-UI: streaming plumbing |
 | `PlatformDaemon.StreamMetrics` | - | - | - | - | not-UI: streaming plumbing |
-| `PlatformDaemon.ListEntityTypes` | - | - | - | - | missing |
+| `PlatformDaemon.ListEntityTypes` | `GET /entity-types` | `(dashboard)/platform/health/page.tsx` | - | `real-server/platform-daemon.spec.ts` | covered |
 | `PlatformDaemon.DumpEntityType` | - | - | - | - | not-UI: streaming plumbing |
 
 ## DeviceService (`device.proto`)
@@ -442,9 +442,9 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `NTPService.GetStatus` | `GET /status` | - | - | - | missing |
-| `NTPService.ListSources` | `GET /sources` | - | - | - | missing |
-| `NTPService.Step` | `POST /step` | - | - | - | missing |
+| `NTPService.GetStatus` | `GET /status` | `(dashboard)/networking/ntp/page.tsx` | - | `web/e2e/real-server/ntp.spec.ts` | covered |
+| `NTPService.ListSources` | `GET /sources` | `(dashboard)/networking/ntp/page.tsx` | - | `web/e2e/real-server/ntp.spec.ts` | covered |
+| `NTPService.Step` | `POST /step` | `(dashboard)/networking/ntp/page.tsx` | - | `web/e2e/real-server/ntp.spec.ts` | covered |
 
 ## ObjectStorageService (`objectstorage.proto`)
 
@@ -618,11 +618,11 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `SwitchService.ListPorts` | `GET /{switch}/ports` | `/networking/switches/[switch]` | - | `real-server/switch-ports.spec.ts` | covered |
-| `SwitchService.GetPortStatus` | `GET /{switch}/ports/{port}` | `/networking/switches/[switch]` | - | `real-server/switch-ports.spec.ts` | covered |
-| `SwitchService.SetPortVLAN` | `POST /{switch}/ports/{port}/vlan` | `/networking/switches/[switch]` | - | `real-server/switch-ports.spec.ts` | covered |
-| `SwitchService.EnablePort` | `POST /{switch}/ports/{port}/enable` | `/networking/switches/[switch]` | - | `real-server/switch-ports.spec.ts` | covered |
-| `SwitchService.DisablePort` | `POST /{switch}/ports/{port}/disable` | `/networking/switches/[switch]` | - | `real-server/switch-ports.spec.ts` | covered |
+| `SwitchService.ListPorts` | `GET /{switch}/ports` | `(dashboard)/networking/switches/page.tsx` | - | `real-server/switch-harness.spec.ts` | covered |
+| `SwitchService.GetPortStatus` | `GET /{switch}/ports/{port}` | `(dashboard)/networking/switches/page.tsx` | - | `real-server/switch-harness.spec.ts` | covered |
+| `SwitchService.SetPortVLAN` | `POST /{switch}/ports/{port}/vlan` | `(dashboard)/networking/switches/page.tsx` | - | `real-server/switch-harness.spec.ts` | covered |
+| `SwitchService.EnablePort` | `POST /{switch}/ports/{port}/enable` | `(dashboard)/networking/switches/page.tsx` | - | `real-server/switch-harness.spec.ts` | covered |
+| `SwitchService.DisablePort` | `POST /{switch}/ports/{port}/disable` | `(dashboard)/networking/switches/page.tsx` | - | `real-server/switch-harness.spec.ts` | covered |
 
 ## TenantService (`tenant.proto`)
 
@@ -666,23 +666,23 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `TPMService.GetSRK` | `GET /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.DeleteSRK` | `DELETE /srk` | `(dashboard)/tpm/keys/page.tsx`<br>`(dashboard)/tpm/status/page.tsx` (read-only) | - | - | partial |
 | `TPMService.CreateAK` | `POST /ak` | - | - | - | missing |
-| `TPMService.GetAK` | `GET /ak` | - | - | - | missing |
+| `TPMService.GetAK` | `GET /ak` | `(dashboard)/tpm/credential/page.tsx` | - | `real-server/tpm-ops.spec.ts` | covered |
 | `TPMService.DeleteAK` | `DELETE /ak` | - | - | - | missing |
 | `TPMService.Seal` | `POST /seal` | `(dashboard)/tpm/seal/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.Unseal` | `POST /unseal` | `(dashboard)/tpm/seal/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.Quote` | `POST /quote` | `(dashboard)/tpm/quote/page.tsx` | - | - | partial |
 | `TPMService.VerifyQuote` | `POST /quote/verify` | `(dashboard)/tpm/quote/page.tsx` | - | - | partial |
 | `TPMService.Certify` | `POST /certify` | - | - | - | missing |
-| `TPMService.GetEventLog` | `GET /eventlog` | `(dashboard)/tpm/eventlog/page.tsx` | - | - | partial |
+| `TPMService.GetEventLog` | `GET /eventlog` | `(dashboard)/tpm/eventlog/page.tsx` | - | `real-server/tpm-ops.spec.ts` | covered |
 | `TPMService.GetPCRs` | `GET /pcrs` | `(dashboard)/tpm/pcrs/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.ExtendPCR` | `POST /pcrs/extend` | - | - | - | missing |
-| `TPMService.MakeCredential` | `POST /make-credential` | - | - | - | missing |
-| `TPMService.ActivateCredential` | `POST /activate-credential` | - | - | - | missing |
+| `TPMService.ExtendPCR` | `POST /pcrs/extend` | `(dashboard)/tpm/pcrs/page.tsx` | - | `real-server/tpm-ops.spec.ts` | covered |
+| `TPMService.MakeCredential` | `POST /make-credential` | `(dashboard)/tpm/credential/page.tsx` | - | `real-server/tpm-ops.spec.ts` | covered |
+| `TPMService.ActivateCredential` | `POST /activate-credential` | `(dashboard)/tpm/credential/page.tsx` | - | `real-server/tpm-ops.spec.ts` | covered |
 | `TPMService.DefineNVRAM` | `POST /nvram` | `(dashboard)/tpm/nvram/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.WriteNVRAM` | `PUT /nvram/{index}` | `(dashboard)/tpm/nvram/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.ReadNVRAM` | `GET /nvram/{index}` | `(dashboard)/tpm/nvram/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `TPMService.UndefineNVRAM` | `DELETE /nvram/{index}` | `(dashboard)/tpm/nvram/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `TPMService.GetRandom` | `POST /random` | - | - | - | missing |
+| `TPMService.GetRandom` | `POST /random` | `(dashboard)/tpm/credential/page.tsx` | - | `real-server/tpm-ops.spec.ts` | covered |
 
 ## VPNService (`vpn.proto`)
 
@@ -711,19 +711,19 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `VTPMService.ListTemplates` | `GET /templates` | `(dashboard)/devices/vtpm/templates/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
 | `VTPMService.CloneTemplate` | `POST /templates/{id}/clone` | `(dashboard)/devices/vtpm/templates/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
 | `VTPMService.ExportBundle` | `GET /bundles/{id}/export` | - | - | - | not-UI: streaming plumbing |
-| `VTPMService.ImportBundle` | `POST /bundles/import` | `(dashboard)/devices/vtpm/bundles/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
-| `VTPMService.ValidateBundle` | `POST /bundles/{id}/validate` | `(dashboard)/devices/vtpm/bundles/[id]/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
-| `VTPMService.GetBundlePath` | `GET /bundles/{id}/path` | `(dashboard)/devices/vtpm/bundles/[id]/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
-| `VTPMService.GetTPMSocketPath` | `GET /bundles/{id}/tpm-socket` | `(dashboard)/devices/vtpm/bundles/[id]/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
-| `VTPMService.GetNVRAMPath` | `GET /bundles/{id}/nvram` | `(dashboard)/devices/vtpm/bundles/[id]/page.tsx` | - | `real-server/vtpm.spec.ts` | covered |
-| `VTPMService.StartVTPM` | `POST /bundles/{id}/start` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` | covered |
-| `VTPMService.StopVTPM` | `POST /bundles/{id}/stop` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` | covered |
-| `VTPMService.IsVTPMRunning` | `GET /bundles/{id}/state` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` | covered |
-| `VTPMService.QuoteVTPM` | `POST /bundles/{id}/quote` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` | covered |
-| `VTPMService.SealVTPM` | `POST /bundles/{id}/seal` | `(dashboard)/tpm/vtpm/[id]/page.tsx`<br>`(dashboard)/devices/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts`<br>`real-server/vtpm.spec.ts` | covered |
-| `VTPMService.UnsealVTPM` | `POST /bundles/{id}/unseal` | `(dashboard)/tpm/vtpm/[id]/page.tsx`<br>`(dashboard)/devices/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` | covered |
-| `VTPMService.ExtendVTPMPCR` | `POST /bundles/{id}/pcrs/extend` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` | covered |
-| `VTPMService.ReadVTPMPCR` | `GET /bundles/{id}/pcrs` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` | covered |
+| `VTPMService.ImportBundle` | `POST /bundles/import` | `(dashboard)/devices/vtpm/[id]/page.tsx`<br>`(dashboard)/devices/vtpm/page.tsx` (read-only) | - | - | partial |
+| `VTPMService.ValidateBundle` | `POST /bundles/{id}/validate` | - | - | - | missing |
+| `VTPMService.GetBundlePath` | `GET /bundles/{id}/path` | - | - | - | missing |
+| `VTPMService.GetTPMSocketPath` | `GET /bundles/{id}/tpm-socket` | - | - | - | missing |
+| `VTPMService.GetNVRAMPath` | `GET /bundles/{id}/nvram` | - | - | - | missing |
+| `VTPMService.StartVTPM` | `POST /bundles/{id}/start` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
+| `VTPMService.StopVTPM` | `POST /bundles/{id}/stop` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
+| `VTPMService.IsVTPMRunning` | `GET /bundles/{id}/state` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
+| `VTPMService.QuoteVTPM` | `POST /bundles/{id}/quote` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
+| `VTPMService.SealVTPM` | `POST /bundles/{id}/seal` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
+| `VTPMService.UnsealVTPM` | `POST /bundles/{id}/unseal` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
+| `VTPMService.ExtendVTPMPCR` | `POST /bundles/{id}/pcrs/extend` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
+| `VTPMService.ReadVTPMPCR` | `GET /bundles/{id}/pcrs` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-runtime.spec.ts` (capability gate; runtime flow when the runner has swtpm)<br>`vtpm-runtime.spec.ts` (api-mock) | partial: the Web Console E2E runner has no swtpm, so the flow test records createBundle's refusal there |
 
 ## Status summary by area
 
@@ -738,7 +738,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | ClusterService | 5 | 0 | 0 | 5 | 0 | 0 |
 | ComputeService | 37 | 20 | 1 | 11 | 5 | 0 |
 | ConfigDeliveryService | 7 | 3 | 0 | 0 | 4 | 0 |
-| PlatformDaemon | 19 | 1 | 6 | 8 | 4 | 0 |
+| PlatformDaemon | 19 | 15 | 0 | 0 | 4 | 0 |
 | DeviceService | 32 | 10 | 7 | 15 | 0 | 0 |
 | EABService | 11 | 0 | 0 | 11 | 0 | 0 |
 | FIDO2Service | 5 | 0 | 0 | 0 | 5 | 0 |
@@ -749,7 +749,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | KeyManagementService | 23 | 10 | 1 | 12 | 0 | 0 |
 | LUKSService | 10 | 0 | 0 | 0 | 10 | 0 |
 | MessagingService | 8 | 0 | 0 | 0 | 0 | 8 |
-| NTPService | 3 | 0 | 0 | 3 | 0 | 0 |
+| NTPService | 3 | 3 | 0 | 0 | 0 | 0 |
 | ObjectStorageService | 8 | 0 | 0 | 0 | 0 | 8 |
 | OverlayService | 10 | 10 | 0 | 0 | 0 | 0 |
 | PIVService | 8 | 0 | 0 | 0 | 8 | 0 |
@@ -762,10 +762,10 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | SDNService | 29 | 11 | 1 | 16 | 1 | 0 |
 | SwitchService | 5 | 5 | 0 | 0 | 0 | 0 |
 | TenantService | 19 | 4 | 4 | 11 | 0 | 0 |
-| TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
+| TPMService | 31 | 17 | 7 | 7 | 0 | 0 |
 | VPNService | 8 | 8 | 0 | 0 | 0 | 0 |
-| VTPMService | 23 | 22 | 0 | 0 | 1 | 0 |
-| **Total** | **529** | **189** | **48** | **211** | **50** | **31** |
+| VTPMService | 23 | 3 | 10 | 9 | 1 | 0 |
+| **Total** | **529** | **168** | **51** | **229** | **50** | **31** |
 
 ## Proposed slices
 
@@ -802,7 +802,7 @@ Each slice builds the missing pages and the missing specs for at most 15 operati
 29. **SwitchService**: all covered on the branch (#2041).
 30. **TenantService: Tenant, TenantByName, Quota, Sync, TenantDEK, TenantDEKStatus…**: 15 operations (11 missing, 4 partial): ListTenants, CreateTenant, UpdateTenant, DeleteTenant, SuspendTenant, ResumeTenant, GetTenantByName, UpdateQuotas, CheckQuota, Sync, RotateTenantDEK, GetTenantDEKStatus, InitTenantBarrier, UnsealTenantBarrier, SealTenantBarrier.
 31. **TPMService (1/2): Provision, Clear, Capability, PlatformAttribute, EK, EKCertificate…**: 15 operations (8 missing, 7 partial): Provision, Clear, GetCapabilities, GetPlatformAttributes, CreateEK, DeleteEK, ImportEKCertificate, CreateSRK, DeleteSRK, CreateAK, GetAK, DeleteAK, Quote, VerifyQuote, Certify.
-32. **TPMService (2/2): EventLog, PCR, Credential, Random**: 5 operations (4 missing, 1 partial): GetEventLog, ExtendPCR, MakeCredential, ActivateCredential, GetRandom.
+32. **TPMService (2/2): EventLog, PCR, Credential, Random**: covered (#2069): the 5 operations GetEventLog, ExtendPCR, MakeCredential, ActivateCredential and GetRandom, plus GetAK (its AK name fills the credential page), each through the SDK with a capability-gated control and `real-server/tpm-ops.spec.ts`.
 33. **VPNService: Peer, Status, PosturePolicy**: 8 operations (0 missing, 8 partial): EnrolPeer, ListPeers, RevokePeer, GetStatus, GetPosturePolicy, SetPosturePolicy, DeletePosturePolicy, ListPosturePolicies.
 34. **VTPMService (1/2)**: all covered on the branch (#2041).
 35. **VTPMService (2/2)**: all covered on the branch (#2041).

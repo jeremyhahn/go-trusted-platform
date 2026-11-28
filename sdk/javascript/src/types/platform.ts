@@ -179,8 +179,17 @@ export interface GetHealthRequest {
  * Get config request
  */
 export interface GetConfigRequest {
-  /** Include sensitive values */
+  /**
+   * Ask for secret values unredacted: sends `redact=false`. The server
+   * still redacts them unless the caller holds the platform-secrets
+   * capability.
+   */
   includeSensitive?: boolean;
+  /**
+   * Return one top-level config section only (sends `section=<name>`).
+   * A section the config does not have is a 404.
+   */
+  section?: string;
 }
 
 /**
@@ -200,6 +209,16 @@ export interface GetLicenseRequest {}
  * Reload config request
  */
 export interface ReloadConfigRequest {}
+
+/**
+ * Update config section request (PUT /api/v1/platform/config/sections/{section})
+ */
+export interface UpdateConfigSectionRequest {
+  /** Keys and values to apply to the section */
+  values: Record<string, string>;
+  /** Also write the section to the config file (default false) */
+  persist?: boolean;
+}
 
 // =============================================================================
 // Response Types
@@ -246,11 +265,41 @@ export interface GetHealthResponse {
 }
 
 /**
- * Get config response
+ * A file the effective config was loaded from
+ */
+export interface ConfigSource {
+  /** Path of the config file */
+  path: string;
+  /** File format, e.g. yaml */
+  format: string;
+}
+
+/**
+ * Get config response: the effective config tree the server answers
  */
 export interface GetConfigResponse {
-  /** Platform config */
-  config: PlatformConfig;
+  /** Files the config was loaded from */
+  sources: ConfigSource[];
+  /** The effective config tree (one section when `section` was sent) */
+  tree: Record<string, unknown>;
+  /** When the tree was generated (RFC 3339) */
+  generated_at: string;
+  /** Dotted keys whose values were redacted */
+  redacted_keys?: string[];
+  /** True when secret values are hidden in the tree */
+  secrets_hidden: boolean;
+}
+
+/**
+ * Update config section response. The applied values are never echoed.
+ */
+export interface UpdateConfigSectionResponse {
+  /** Section that was updated */
+  section: string;
+  /** Whether the section was written to the config file */
+  persisted: boolean;
+  /** Daemon status message */
+  message: string;
 }
 
 /**
@@ -264,11 +313,34 @@ export interface GetMetricsResponse {
 }
 
 /**
+ * One storage entity type and its entity count (PlatformDaemon.ListEntityTypes)
+ */
+export interface EntityTypeInfo {
+  name: string;
+  entityCount: number;
+  /** Entity type status; known values are 'empty', 'active' and 'error'. */
+  status: string;
+}
+
+/**
+ * List entity types response (GET /api/v1/platform/entity-types)
+ */
+export interface ListEntityTypesResponse {
+  entityTypes: EntityTypeInfo[];
+  totalEntities: number;
+  activeTypes: number;
+}
+
+/**
  * Reload config response
  */
 export interface ReloadConfigResponse {
-  /** Operation status */
-  status: PlatformStatus;
+  /** True when the config was reloaded */
+  reloaded: boolean;
+  /** Top-level sections the reload applied */
+  sections: string[];
+  /** Snapshot id taken before the reload */
+  pre_reload_snapshot: string;
 }
 
 /**

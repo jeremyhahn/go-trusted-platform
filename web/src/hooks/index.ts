@@ -11,6 +11,9 @@ export { useSessionToken, useHydrated, notifySessionChanged } from "./use-sessio
 // NTP status, sources and clock step (#1682)
 export { useNTP } from "./use-ntp";
 export type { NTPStatus, NTPSource, NTPStatusResponse, NTPSourcesResponse } from "./use-ntp";
+// Capability gate: what the server offers (#2033 item 4, #2058)
+export { useCapabilities } from "./use-capabilities";
+export type { CapabilityAnswer, UseCapabilitiesResult } from "./use-capabilities";
 
 // SDK hooks (exported from main entry point for bundler compatibility)
 export {
@@ -167,6 +170,7 @@ export type { InvitationView, InvitationWire } from './use-invitation-detail';
 export { useTenantLifecycle } from './use-tenant-lifecycle';
 export type { UseTenantLifecycleResult } from './use-tenant-lifecycle';
 export { useOverlayVteps } from './use-overlay-vteps';
+export { useSwitches } from './use-switches';
 export { useRegistry, encodeRepository } from './use-registry';
 export type {
   RegistryHealthCode,

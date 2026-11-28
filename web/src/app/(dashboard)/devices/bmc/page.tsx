@@ -1,80 +1,54 @@
-"use client";
+'use client';
 
 /**
- * BMC landing page: opens the power, boot device, virtual media, sensors
- * and provision page of one BMC profile (#1736), or its users and web
- * certificate page (#1720).
+ * BMC Page
+ * One BMC profile's system, power, boot and media, provisioning, sensor and
+ * web certificate cards. Each card gates its write controls on the server's
+ * capabilities.
  */
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { Server } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { useState } from 'react';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { BMCSystemCard } from '@/components/features/bmc/bmc-system-card';
+import { BMCPowerCard } from '@/components/features/bmc/bmc-power-card';
+import { BMCBootMediaCard } from '@/components/features/bmc/bmc-boot-media-card';
+import { BMCProvisionCard } from '@/components/features/bmc/bmc-provision-card';
+import { BMCSensorsCard } from '@/components/features/bmc/bmc-sensors-card';
+import { BMCWebCertCard } from '@/components/features/bmc/bmc-web-cert-card';
 
 export default function BMCPage() {
-  const router = useRouter();
-  const [profileID, setProfileID] = useState("");
-  const [error, setError] = useState<string | null>(null);
-
-  // The form's submit opens the profile landing page; "Open Users" opens
-  // the users and web certificate page (#1720).
-  const open = (e: React.SyntheticEvent, page = "") => {
-    e.preventDefault();
-    const id = profileID.trim();
-    if (id && !/^[0-9]+$/.test(id)) {
-      setError("The BMC profile ID is a number, such as 1.");
-      return;
-    }
-    setError(null);
-    if (id) {
-      router.push(`/devices/bmc/${encodeURIComponent(id)}/${page}`);
-    }
-  };
+  const [profileID, setProfileID] = useState('');
+  const id = profileID.trim();
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">BMC</h1>
-        <p className="text-muted-foreground">Out-of-band power, boot, media and provisioning</p>
+        <p className="text-muted-foreground">Out-of-band management of a device through its BMC profile</p>
       </div>
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Server className="h-5 w-5" />
-            Open a BMC profile
-          </CardTitle>
-          <CardDescription>Enter the numeric ID of the device profile whose BMC to manage</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={open} className="flex items-end gap-2">
-            <div className="flex-1">
-              <Label htmlFor="bmc-profile-id">BMC profile ID</Label>
-              <Input
-                id="bmc-profile-id"
-                value={profileID}
-                onChange={(e) => {
-                  setProfileID(e.target.value);
-                  setError(null);
-                }}
-                placeholder="1"
-                inputMode="numeric"
-              />
-            </div>
-            <Button type="submit">Open</Button>
-            <Button type="button" variant="outline" onClick={(e) => open(e, "users")}>
-              Open Users
-            </Button>
-          </form>
-          {error && (
-            <p data-testid="bmc-profile-id-error" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
-        </CardContent>
-      </Card>
+
+      <div className="flex max-w-sm flex-col gap-2">
+        <Label htmlFor="bmc-profile-id">BMC profile ID</Label>
+        <Input
+          id="bmc-profile-id"
+          inputMode="numeric"
+          placeholder="1"
+          value={profileID}
+          onChange={(e) => setProfileID(e.target.value)}
+        />
+      </div>
+
+      {id !== '' && (
+        <div key={id} className="grid gap-6 lg:grid-cols-2">
+          <BMCSystemCard profileID={id} />
+          <BMCPowerCard profileID={id} />
+          <BMCBootMediaCard profileID={id} />
+          <BMCProvisionCard profileID={id} />
+          <BMCSensorsCard profileID={id} />
+          <BMCWebCertCard profileID={id} />
+        </div>
+      )}
     </div>
   );
 }

@@ -143,7 +143,7 @@ func (h *handler) PowerAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req PowerActionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeSingleJSON(r.Body, &req); err != nil {
 		h.logger.Debug("bmc: failed to decode request body", slog.String("error", err.Error()))
 		h.responseWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
 		return
@@ -295,6 +295,12 @@ func (h *handler) MountISO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	spec := bmcpkg.MediaSpec{URL: req.ISOURL}
+	if err := spec.Validate(); err != nil {
+		h.responseWriter.Error400(w, r, ErrInvalidISOURL{URL: req.ISOURL, Reason: err.Error()})
+		return
+	}
+
 	if err := h.bmcService.MountISO(r.Context(), profileID, req.ISOURL); err != nil {
 		h.writeBMCError(w, r, profileID, "mount ISO", err)
 		return
@@ -428,6 +434,17 @@ func (h *handler) Provision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The workflow mounts the ISO asynchronously, after this handler has
+	// answered 201, so a URL the BMC cannot fetch must be refused here.
+	// An omitted iso_url stays optional (the workflow skips the mount).
+	if req.ISOURL != "" {
+		spec := bmcpkg.MediaSpec{URL: req.ISOURL}
+		if err := spec.Validate(); err != nil {
+			h.responseWriter.Error400(w, r, ErrInvalidRequestBody{Reason: "iso_url: " + err.Error()})
+			return
+		}
+	}
+
 	provReq := baremetal.ProvisionRequest{
 		ProfileID: profileID,
 		ISOURL:    req.ISOURL,
@@ -448,6 +465,11 @@ func (h *handler) Provision(w http.ResponseWriter, r *http.Request) {
 
 // ProvisionStatus returns the status of a provisioning workflow.
 // GET /api/v1/bmc/{profileID}/provision
+// ProvisioningConfigured reports whether a bare metal service is wired.
+func (h *handler) ProvisioningConfigured() bool {
+	return h.baremetalService != nil
+}
+
 func (h *handler) ProvisionStatus(w http.ResponseWriter, r *http.Request) {
 	h.logger.Debug("bmc: provision status request received")
 

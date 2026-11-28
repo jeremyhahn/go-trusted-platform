@@ -193,11 +193,13 @@ const (
 	// only that PR's older run (#510). On main it keys by event alone
 	// (ci-template v1.53, `main-{event}`, ruling 1087): a newer main push
 	// cancels the older main run in progress, and a dispatch never shares a
-	// group with a push. A schedule
+	// group with a push. Since ci-template v1.61 each push to main has its own
+	// group, `main-push-{sha}`, so no main push cancels another; a dispatch
+	// keeps `main-{event}`. A schedule
 	// run keys by repository alone, tested first (v1.29.3, ruling
 	// 255(10)/(11)(c)), so a repository has one schedule run at a time. Gitea
 	// 1.27.1 evaluates expressions in `group`, not in `cancel-in-progress`.
-	supersededGroup = "${{ github.workflow }}-${{ github.event_name == 'schedule' && format('schedule-{0}', github.repository) || github.ref == 'refs/heads/main' && format('main-{0}', github.event_name) || github.ref }}"
+	supersededGroup = "${{ github.workflow }}-${{ github.event_name == 'schedule' && format('schedule-{0}', github.repository) || github.ref == 'refs/heads/main' && github.event_name == 'push' && format('main-push-{0}', github.sha) || github.ref == 'refs/heads/main' && format('main-{0}', github.event_name) || github.ref }}"
 )
 
 // prTriggerTypes are ci.yml's pull_request activity types. `ci:full` takes
@@ -711,8 +713,10 @@ func TestCIGateTiersMatchTheJobs(t *testing.T) {
 }
 
 // TestCIGateRequiresTheHostedJobs pins the jobs the gate must require on a
-// named tier and runner: web-e2e runs the real-server Playwright specs on a
-// GitHub-hosted runner, which installs chromium in the job (ruling 1031).
+// named tier and runner: web-e2e runs the real-server Playwright specs
+// (ruling 1031) on the preflight runner_docker selection (DS-10475), which is
+// GitHub-hosted unless the hosted pool is full on a push to main or a
+// same-repository pull request.
 func TestCIGateRequiresTheHostedJobs(t *testing.T) {
 	wf := loadCIWorkflow(t, repoRoot(t), ciWorkflowFile)
 	jobs := make(map[string]ciJob, len(wf.Jobs))
@@ -727,7 +731,7 @@ func TestCIGateRequiresTheHostedJobs(t *testing.T) {
 	for _, tc := range []struct {
 		job, tier, runsOn string
 	}{
-		{job: "web-e2e", tier: tierFull, runsOn: "ubuntu-latest"},
+		{job: "web-e2e", tier: tierFull, runsOn: selectionDocker},
 	} {
 		j, ok := jobs[tc.job]
 		if !ok {

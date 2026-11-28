@@ -251,12 +251,15 @@ GET /api/v1/platform
 GET /api/v1/platform/config
 GET /api/v1/platform/config/snapshots
 GET /api/v1/platform/config/snapshots/{id}
+GET /api/v1/platform/entity-types
 GET /api/v1/platform/health
+GET /api/v1/platform/liveness
 GET /api/v1/platform/logs
 GET /api/v1/platform/logs/services
 GET /api/v1/platform/logs/stream
 GET /api/v1/platform/metrics
 GET /api/v1/platform/protocols
+GET /api/v1/platform/readiness
 GET /api/v1/platform/service-registry
 GET /api/v1/platform/services
 GET /api/v1/platform/services/{service}
@@ -519,6 +522,7 @@ POST /api/v1/platform/config/validate
 POST /api/v1/platform/services/{service}/restart
 POST /api/v1/platform/services/{service}/start
 POST /api/v1/platform/services/{service}/stop
+POST /api/v1/platform/shutdown
 POST /api/v1/provisioning/config
 POST /api/v1/provisioning/devices/{mac}/install-complete
 POST /api/v1/provisioning/devices/{mac}/register
@@ -625,6 +629,7 @@ PUT /api/v1/kms/keys/{name}/policy
 PUT /api/v1/kms/keys/{name}/status
 PUT /api/v1/kms/secrets/{name}/policy
 PUT /api/v1/kms/secrets/{name}/status
+PUT /api/v1/platform/config/sections/{section}
 PUT /api/v1/proxy/pools/{id}
 PUT /api/v1/proxy/routes/{id}
 PUT /api/v1/pxe/devices/{id}/state

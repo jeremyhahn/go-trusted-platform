@@ -27,7 +27,6 @@ import { IDevIDService } from '../services/idevid-service.js';
 import { KMSService } from '../services/kms-service.js';
 import { OverlayService } from '../services/overlay-service.js';
 import { PlatformService } from '../services/platform-service.js';
-import type { PlatformRouteLayout } from '../services/platform-service.js';
 import { PXEService } from '../services/pxe-service.js';
 import { SDNService } from '../services/sdn-service.js';
 import { SwitchService } from '../services/switch-service.js';
@@ -104,13 +103,6 @@ export interface PlatformClientConfig extends ApiClientConfig {
    * (in-memory transport), and gRPC-Web deployments.
    */
   transport?: Transport;
-
-  /**
-   * Route layout of the platform service's getStatus and service-management
-   * methods: 'webservice' (default, /api/v1/platform/...) or 'daemon' (the
-   * daemon REST listener's /api/v1/status and /api/v1/services).
-   */
-  platformRouteLayout?: PlatformRouteLayout;
 }
 
 /**
@@ -195,11 +187,12 @@ export class PlatformClient {
 
   /** DNS service for zone and record management */
   public readonly dns: DNSService;
-  /** BMC users and web certificate service (#1720) */
-  public readonly bmc: BMCService;
 
   /** NTP status, sources and clock step */
   public readonly ntp: NTPService;
+
+  /** BMC power and boot-device service */
+  public readonly bmc: BMCService;
 
   /** What the server offers, enabled and dark */
   public readonly capabilities: CapabilitiesService;
@@ -228,9 +221,7 @@ export class PlatformClient {
   /** SDN service for bridges, ports, and flows */
   public readonly sdn: SDNService;
 
-  /**
-   * Switch port operations (list, status, enable, disable, VLAN)
-   */
+  /** Switch service for physical switch ports (list, status, VLAN, enable, disable) */
   public readonly switches: SwitchService;
 
   /** Tenant service for multi-tenant management */
@@ -385,7 +376,7 @@ export class PlatformClient {
     this.idevid = new IDevIDService(t);
     this.kms = new KMSService(t);
     this.overlay = new OverlayService(t);
-    this.platform = new PlatformService(t, { routeLayout: config?.platformRouteLayout });
+    this.platform = new PlatformService(t);
     this.pxe = new PXEService(t);
     this.sdn = new SDNService(t);
     this.switches = new SwitchService(t);

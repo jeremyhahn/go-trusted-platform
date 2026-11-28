@@ -29,13 +29,22 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './ntp-service.js';
-export { BMCService, BMC_PRIVILEGE_CODES, bmcPrivilegeName } from './bmc-service.js';
+export { BMCService } from './bmc-service.js';
 export type {
-  BMCPrivilegeName,
-  BMCUser,
-  CreateBMCUserRequest,
-  ReplaceBMCWebCertificateRequest,
+  BMCPowerAction,
+  BMCPowerActionResponse,
+  BMCPowerStatusResponse,
+  BMCSetBootDeviceRequest,
+  BMCSetBootDeviceResponse,
+  BMCBootDeviceResponse,
+  BMCVirtualMediaStatus,
+  BMCMountISOResponse,
   BMCStatusResponse,
+  BMCSensorReading,
+  BMCSystemInfo,
+  BMCWebCertificate,
+  BMCProvisionRequest,
+  BMCProvisionResult,
 } from './bmc-service.js';
 export { GatewayService } from './gateway-service.js';
 export { IAMService } from './iam-service.js';
@@ -52,14 +61,6 @@ export {
   type RegistryComponentHealth,
 } from './registry-service.js';
 export { SDNService } from './sdn-service.js';
-export {
-  SwitchService,
-  SWITCH_MAX_VLAN_ID,
-  type SwitchPortMode,
-  type SwitchPortStatus,
-  type SwitchPortActionResponse,
-  type SwitchSetPortVLANResponse,
-} from './switch-service.js';
 export { TenantService } from './tenant-service.js';
 export { TPMService } from './tpm-service.js';
 export { VTPMService, InvalidDeviceProfileIdError } from './vtpm-service.js';
@@ -87,6 +88,13 @@ export type {
   DeleteProxyPoolResponse,
   ReloadProxyConfigResponse,
 } from './proxy-service.js';
+export { SwitchService } from './switch-service.js';
+export type {
+  SwitchPortMode,
+  SwitchPortStatus,
+  SwitchPortActionResponse,
+  SetSwitchPortVLANResponse,
+} from './switch-service.js';
 export { InvitationService } from './invitation-service.js';
 export { EABService } from './eab-service.js';
 

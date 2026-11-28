@@ -14,6 +14,7 @@
 package arch
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -110,8 +111,7 @@ func runnerProblems(body []byte) []string {
 				problems = append(problems, where+" "+p)
 			}
 		case isSelectionRunsOn(j.runsOn.Value):
-			// v1.48: the preflight selection, hosted unless the hosted
-			// pool is full; its step keeps fork pull requests hosted.
+			// The preflight selection; its step keeps fork pull requests hosted.
 		case j.name == "preflight" && j.runsOn.Value == selectionPreflight:
 			// Its expression keeps fork pull requests and other events hosted.
 		case strings.Contains(j.runsOn.Value, "${{"):
@@ -169,47 +169,61 @@ func TestCIRunsHostedFirst(t *testing.T) {
 	}
 }
 
-// TestWebE2EPlaywrightHostOverride pins the web-e2e job's Playwright host
-// override (DS-10151): ubuntu-latest is the 26.04 image, for which the pinned
-// Playwright has no chromium build, so the job installs and runs the 24.04 one.
-func TestWebE2EPlaywrightHostOverride(t *testing.T) {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(readCI(t), &doc); err != nil || len(doc.Content) == 0 {
-		t.Fatalf("ci.yml does not parse: %s", errString(err))
-	}
-	job := mapValue(mapValue(doc.Content[0], "jobs"), "web-e2e")
-	if job == nil {
-		t.Fatal("ci.yml has no web-e2e job")
-	}
-	const key, want = "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE", "ubuntu24.04-x64"
-	v := mapValue(mapValue(job, "env"), key)
-	if v == nil {
-		t.Fatalf("web-e2e env has no %s; want %q", key, want)
-	}
-	if v.Value != want {
-		t.Fatalf("web-e2e env %s = %q, want %q", key, v.Value, want)
-	}
-}
-
-// The v1.48 runner selection (ci-template v1.48, Tenant Agent rulings 1024
-// and 1031, #2128): the preflight step `Hosted or overflow runner (ruling
-// 1024)` decides once per run whether its jobs run on the GitHub-hosted
-// default or overflow to the self-hosted overflow runners, and every hosted
-// job reads that decision. Off github.com each job keeps its label.
+// The runner selection (ci-template v1.60): the preflight step `Balanced
+// runner pool (ruling 1137)` decides once per run whether its jobs run on the
+// GitHub-hosted default or the self-hosted pool, and every job that reads
+// the selection takes that decision. Off github.com each job keeps its label.
 const (
-	selectionStep        = "Hosted or overflow runner (ruling 1024)"
-	selectionRunner      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}"
-	selectionDocker      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}"
-	selectionGate        = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '\"ubuntu-latest\"') || 'ubuntu-latest' }}"
-	selectionForkEvents  = "case \"$EVENT\" in\n  pull_request|pull_request_target)\n"
-	selectionForkGuard   = `if [ "$HEAD_REPO" != "$REPO" ]; then`
-	selectionOverflowMsg = "the self-hosted overflow runners (bigdisk, bigdisk-docker)"
+	selectionStep      = "Balanced runner pool (ruling 1137)"
+	selectionRunner    = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner) || 'ubuntu-latest' }}"
+	selectionDocker    = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}"
+	selectionGate      = "${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner || '\"ubuntu-latest\"') || 'ubuntu-latest' }}"
+	selectionForkGuard = `if [ "$HEAD_REPO" != "$REPO" ]; then`
+	// DS-10475: the event case is an allow-list; a push counts only on
+	// refs/heads/main and every other event takes the hosted default.
+	selectionEventCase   = "case \"$EVENT\" in\n"
+	selectionMainGuard   = `if [ "$REF" != refs/heads/main ]; then`
+	selectionOtherEvents = "  *)\n    hosted_only "
+	selectionTie         = `[ "$SQ" -le "$HQ" ] && pick=self`
 	// selectionPreflight is preflight's runs-on: the bigdisk pool, or
 	// CI_PREFLIGHT_RUNS_ON, on a push to main or a same-repository pull
 	// request, the only events the self-hosted runners accept; hosted on
 	// every other event and off github.com.
 	selectionPreflight = `${{ github.server_url == 'https://github.com' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON(vars.CI_PREFLIGHT_RUNS_ON || '["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}`
 )
+
+// selectionEventArms are the arms of the selection step's event case, in
+// order: nothing but a push and a pull request may reach the API count.
+var selectionEventArms = []string{"push", "pull_request", "*"}
+
+// eventArms returns the patterns of the arms of the `case "$EVENT" in` block
+// of run, an arm being a line at the case's indent plus two that ends its
+// pattern with `)`; nil when run has no such block.
+func eventArms(run string) []string {
+	start := strings.Index(run, selectionEventCase)
+	if start < 0 {
+		return nil
+	}
+	lineStart := strings.LastIndex(run[:start], "\n") + 1
+	indent := run[lineStart:start]
+	if strings.TrimSpace(indent) != "" {
+		return nil
+	}
+	armIndent := indent + "  "
+	var arms []string
+	for _, l := range strings.Split(run[start+len(selectionEventCase):], "\n") {
+		if strings.TrimSpace(l) == "esac" && strings.HasPrefix(l, indent+"esac") {
+			return arms
+		}
+		if !strings.HasPrefix(l, armIndent) || strings.HasPrefix(l, armIndent+" ") {
+			continue
+		}
+		if pattern, _, ok := strings.Cut(strings.TrimPrefix(l, armIndent), ")"); ok {
+			arms = append(arms, pattern)
+		}
+	}
+	return nil
+}
 
 // selectionRunsOn is the runs-on every job of ci.yml carries under v1.48:
 // a job whose steps run Docker reads runner_docker, CI Gate reads runner with
@@ -223,8 +237,9 @@ var selectionRunsOn = map[string]string{
 	"sdkjs":      selectionRunner,
 	"race":       selectionRunner,
 	"web":        selectionRunner,
-	// Hosted only: `playwright install --with-deps` installs system packages.
-	"web-e2e":           hostedRunner,
+	// DS-10475: its `playwright install --with-deps` (sudo) and apt steps
+	// run on a GitHub-hosted runner only.
+	"web-e2e":           selectionDocker,
 	"integration-image": selectionDocker,
 	"integration":       selectionDocker,
 	"soak":              selectionDocker,
@@ -248,9 +263,9 @@ func selectionProblems(body []byte) []string {
 	root := doc.Content[0]
 	var problems []string
 	env := mapValue(root, "env")
-	for key, want := range map[string]string{"HOSTED_JOBS_PER_REPO": "12", "HOSTED_QUEUE_GRACE_SECONDS": "60"} {
-		if v := mapValue(env, key); v == nil || v.Value != want {
-			problems = append(problems, "env "+key+" is not "+want)
+	for _, key := range []string{"HOSTED_JOBS_PER_REPO", "HOSTED_QUEUE_GRACE_SECONDS"} {
+		if mapValue(env, key) != nil {
+			problems = append(problems, "env "+key+" is a v1.48 limit; the limits are repository variables")
 		}
 	}
 	jobs := mapValue(root, "jobs")
@@ -321,16 +336,89 @@ func selectionProblems(body []byte) []string {
 	if r := mapValue(first, "run"); r != nil {
 		run = r.Value
 	}
-	for _, want := range []string{selectionForkEvents + "    " + selectionForkGuard, selectionOverflowMsg, `emit "$(overflow bigdisk)" "$(overflow bigdisk-docker)"`} {
+	for _, want := range []string{selectionEventCase, selectionMainGuard, selectionForkGuard, selectionOtherEvents, selectionTie, `emit "$(selfhosted bigdisk)" "$(selfhosted bigdisk-docker)"`} {
 		if !strings.Contains(run, want) {
 			problems = append(problems, "the selection step's run lacks "+strconv.Quote(want))
 		}
+	}
+	if arms := eventArms(run); !slices.Equal(arms, selectionEventArms) {
+		problems = append(problems, fmt.Sprintf("the selection step's event case has the arms %q, want %q: only a push to refs/heads/main or a pull request from this repository may reach a self-hosted runner (DS-10475)", arms, selectionEventArms))
 	}
 	return problems
 }
 
 func TestCIJobsReadThePreflightRunnerSelection(t *testing.T) {
 	for _, p := range selectionProblems(readCI(t)) {
+		t.Error(p)
+	}
+}
+
+// Codex P1 on #2382: a self-hosted web-e2e runner installs chromium without
+// --with-deps (no sudo), so its image must carry chromium's system
+// libraries. The job proves it with a launch check before the specs run.
+const (
+	webE2EJob            = "web-e2e"
+	selfHostedIf         = "runner.environment != 'github-hosted'"
+	selfHostedInstall    = "Install the Playwright chromium"
+	chromiumLaunchCheck  = "Check the Playwright chromium launches on this runner"
+	realServerSpecs      = "Real-server Playwright specs"
+	chromiumLaunchErrMsg = "::error::chromium does not launch on this self-hosted runner"
+)
+
+// webE2EChromiumProblems reports what keeps the web-e2e job from checking,
+// on a self-hosted runner, that chromium launches before the specs run.
+func webE2EChromiumProblems(body []byte) []string {
+	var doc struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string `yaml:"name"`
+				If   string `yaml:"if"`
+				Run  string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		return []string{"ci.yml does not parse: " + err.Error()}
+	}
+	job, ok := doc.Jobs[webE2EJob]
+	if !ok {
+		return []string{"ci.yml has no " + webE2EJob + " job"}
+	}
+	install, check, specs := -1, -1, -1
+	for i, s := range job.Steps {
+		switch s.Name {
+		case selfHostedInstall:
+			install = i
+		case chromiumLaunchCheck:
+			check = i
+		case realServerSpecs:
+			specs = i
+		}
+	}
+	var out []string
+	if install < 0 || specs < 0 {
+		return append(out, fmt.Sprintf("%s: steps %q and %q must both exist", webE2EJob, selfHostedInstall, realServerSpecs))
+	}
+	if check < 0 {
+		return append(out, fmt.Sprintf("%s: no step %q checks chromium launches on a self-hosted runner", webE2EJob, chromiumLaunchCheck))
+	}
+	if install >= check || check >= specs {
+		out = append(out, fmt.Sprintf("%s: step %q must run after %q and before %q", webE2EJob, chromiumLaunchCheck, selfHostedInstall, realServerSpecs))
+	}
+	s := job.Steps[check]
+	if strings.TrimSpace(s.If) != selfHostedIf {
+		out = append(out, fmt.Sprintf("%s: step %q needs if: %s, has %q", webE2EJob, chromiumLaunchCheck, selfHostedIf, s.If))
+	}
+	for _, want := range []string{"chromium", "launch(", "executablePath()", "ldd", "not found", chromiumLaunchErrMsg, "exit 1"} {
+		if !strings.Contains(s.Run, want) {
+			out = append(out, fmt.Sprintf("%s: step %q run does not contain %q", webE2EJob, chromiumLaunchCheck, want))
+		}
+	}
+	return out
+}
+
+func TestWebE2EChecksChromiumLaunchesSelfHosted(t *testing.T) {
+	for _, p := range webE2EChromiumProblems(readCI(t)) {
 		t.Error(p)
 	}
 }
@@ -348,14 +436,32 @@ func TestSelectionProblems_Mutations(t *testing.T) {
 		{"a hosted job back on a plain label", func(b string) string { return replaceJobRunner(t, b, "race", hostedRunner) }, "job race runs on"},
 		{"a Docker job reading runner", func(b string) string { return replaceJobRunner(t, b, "integration", selectionRunner) }, "job integration runs on"},
 		{"the gate without its fallback", func(b string) string { return replaceJobRunner(t, b, "ci-gate", selectionRunner) }, "job ci-gate runs on"},
-		{"another limit", func(b string) string {
-			return strings.Replace(b, "HOSTED_JOBS_PER_REPO: 12", "HOSTED_JOBS_PER_REPO: 20", 1)
-		}, "env HOSTED_JOBS_PER_REPO is not 12"},
-		{"another grace", func(b string) string {
-			return strings.Replace(b, "HOSTED_QUEUE_GRACE_SECONDS: 60", "HOSTED_QUEUE_GRACE_SECONDS: 5", 1)
-		}, "env HOSTED_QUEUE_GRACE_SECONDS is not 60"},
+		{"a v1.48 limit put back", func(b string) string {
+			return strings.Replace(b, "\njobs:\n", "\n  HOSTED_JOBS_PER_REPO: 12\n\njobs:\n", 1)
+		}, "env HOSTED_JOBS_PER_REPO is a v1.48 limit"},
+		{"the event case dropped", func(b string) string {
+			return inSelectionStep(t, b, `case "$EVENT" in`, `case "$EVENT:$REF" in`)
+		}, "lacks"},
+		{"a tie back to hosted", func(b string) string { return strings.Replace(b, selectionTie, `[ "$SQ" -lt "$HQ" ] && pick=self`, 1) }, "lacks"},
 		{"the fork guard dropped", func(b string) string { return strings.Replace(b, selectionForkGuard, "if false; then", 1) }, "lacks"},
 		{"the step renamed", func(b string) string { return strings.Replace(b, "name: "+selectionStep, "name: Runner", 1) }, "first step"},
+		// DS-10475: no event but a push to main and a same-repository
+		// pull request may leave the hosted path.
+		{"the push/main condition dropped", func(b string) string {
+			return inSelectionStep(t, b, selectionMainGuard, "if false; then")
+		}, "lacks"},
+		{"a schedule run let through with the push", func(b string) string {
+			return inSelectionStep(t, b, "push)\n", "push|schedule)\n")
+		}, "event case has the arms"},
+		{"a workflow_dispatch run let through", func(b string) string {
+			return inSelectionStep(t, b, "            *)\n", "            workflow_dispatch) ;;\n            *)\n")
+		}, "event case has the arms"},
+		{"pull_request_target let through with the fork check", func(b string) string {
+			return inSelectionStep(t, b, "pull_request)\n", "pull_request|pull_request_target)\n")
+		}, "event case has the arms"},
+		{"the other events no longer hosted", func(b string) string {
+			return inSelectionStep(t, b, "*)\n              hosted_only ", "*)\n              : hosted_only ")
+		}, "lacks"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			mutated := c.mutate(body)
@@ -453,6 +559,20 @@ func replaceJobRunner(t *testing.T, body, job, runsOn string) string {
 	i := strings.Index(body[start:], "    runs-on: ") + start
 	end := strings.Index(body[i:], "\n") + i
 	return body[:i] + "    runs-on: " + runsOn + body[end:]
+}
+
+// inSelectionStep replaces the first old after the selection step's name in
+// the ci.yml body with repl.
+func inSelectionStep(t *testing.T, body, old, repl string) string {
+	t.Helper()
+	start := strings.Index(body, "name: "+selectionStep)
+	if start < 0 {
+		t.Fatalf("ci.yml has no step %q", selectionStep)
+	}
+	if !strings.Contains(body[start:], old) {
+		t.Fatalf("the selection step has no %q", old)
+	}
+	return body[:start] + strings.Replace(body[start:], old, repl, 1)
 }
 
 // replaceJobIf sets (or adds) the job-level if: of job in the ci.yml body.

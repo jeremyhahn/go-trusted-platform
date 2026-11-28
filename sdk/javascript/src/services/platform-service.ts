@@ -11,12 +11,20 @@ import { BaseService } from './base-service.js';
 import { TPM_BASE_PATH } from './tpm-service.js';
 import type { TPMInfoResponse } from '../types/tpm.js';
 import type {
+  PlatformServicesListResponse,
+  PlatformServiceInfo,
+  PlatformServiceActionResponse,
+} from '../types/platform-services.js';
+import type {
   GetVersionResponse,
   GetSystemInfoResponse,
   GetHealthRequest,
   GetHealthResponse,
+  UpdateConfigSectionRequest,
+  UpdateConfigSectionResponse,
   GetConfigRequest,
   GetConfigResponse,
+  ListEntityTypesResponse,
   GetMetricsRequest,
   GetMetricsResponse,
   ReloadConfigResponse,
@@ -155,24 +163,50 @@ export class PlatformService extends BaseService {
   // =========================================================================
 
   /**
-   * Get platform configuration
+   * Get the effective platform configuration (`GET /api/v1/platform/config`)
+   *
+   * Sends `redact=false` when `includeSensitive` is true and
+   * `section=<name>` when a section is named; neither is sent otherwise.
    *
    * @param request - Config request options
-   * @returns Platform configuration
+   * @returns The config tree, its sources and the redaction state
    */
   async getConfig(request?: GetConfigRequest): Promise<ApiResponse<GetConfigResponse>> {
-    return this.client.get<GetConfigResponse>(this.buildUrl('/config', {
-      filters: { includeSensitive: request?.includeSensitive?.toString() },
-    }));
+    const params = new URLSearchParams();
+    if (request?.includeSensitive === true) {
+      params.set('redact', 'false');
+    }
+    if (typeof request?.section === 'string' && request.section !== '') {
+      params.set('section', request.section);
+    }
+    const query = params.toString();
+    const url = this.buildUrl('/config');
+    return this.client.get<GetConfigResponse>(query ? `${url}?${query}` : url);
   }
 
   /**
    * Reload platform configuration from disk
    *
-   * @returns Reload result
+   * @returns `reloaded`, the `sections` the reload applied and the
+   *   `pre_reload_snapshot` id taken before it
    */
   async reloadConfig(): Promise<ApiResponse<ReloadConfigResponse>> {
     return this.client.post<ReloadConfigResponse>(this.buildUrl('/config/reload'), {});
+  }
+
+  /**
+   * Apply (and optionally persist) one config section.
+   * `PUT /api/v1/platform/config/sections/{section}`, served by
+   * PlatformDaemon.UpdateConfig.
+   */
+  async updateConfigSection(
+    section: string,
+    request: UpdateConfigSectionRequest,
+  ): Promise<ApiResponse<UpdateConfigSectionResponse>> {
+    return this.client.put<UpdateConfigSectionResponse>(
+      this.buildUrl(`/config/sections/${this.encodePathSegment(section)}`),
+      { values: request.values, persist: request.persist ?? false },
+    );
   }
 
   // =========================================================================
@@ -191,6 +225,16 @@ export class PlatformService extends BaseService {
     }));
   }
 
+  /**
+   * List storage entity types and their entity counts
+   * (GET /api/v1/platform/entity-types, PlatformDaemon.ListEntityTypes)
+   *
+   * @returns Entity types, total entities and active type count
+   */
+  async listEntityTypes(): Promise<ApiResponse<ListEntityTypesResponse>> {
+    return this.client.get<ListEntityTypesResponse>(this.buildUrl('/entity-types'));
+  }
+
   // =========================================================================
   // License Operations
   // =========================================================================
@@ -200,81 +244,53 @@ export class PlatformService extends BaseService {
   // =========================================================================
 
   /**
-   * Get the daemon status
-   *
-   * @returns Daemon status
+   * List the daemon services and their state.
+   * REST: GET /v1/platform/services (PlatformDaemon.ListServices).
    */
-  async getStatus(): Promise<ApiResponse<DaemonStatusResponse>> {
-    return withUnixTimestamp(
-      await this.client.get<DaemonStatusResponse>(this.buildUrlUnder(this.lifecycleBasePath, '/status'))
+  async listServices(): Promise<ApiResponse<PlatformServicesListResponse>> {
+    return this.client.get<PlatformServicesListResponse>(this.buildUrl('/services'));
+  }
+
+  /**
+   * Get one daemon service's state; an unknown name answers 404.
+   * REST: GET /v1/platform/services/{service} (PlatformDaemon.GetServiceStatus).
+   */
+  async getServiceStatus(name: string): Promise<ApiResponse<PlatformServiceInfo>> {
+    return this.client.get<PlatformServiceInfo>(
+      this.buildUrl(`/services/${this.encodePathSegment(name)}`)
     );
   }
 
   /**
-   * List the daemon services
-   *
-   * @returns Services and their status
+   * Start a daemon service.
+   * REST: POST /v1/platform/services/{service}/start (PlatformDaemon.StartService).
    */
-  async listServices(): Promise<ApiResponse<ListDaemonServicesResponse>> {
-    return withUnixTimestamp(
-      await this.client.get<ListDaemonServicesResponse>(this.buildUrlUnder(this.lifecycleBasePath, '/services'))
+  async startService(name: string): Promise<ApiResponse<PlatformServiceActionResponse>> {
+    return this.client.post<PlatformServiceActionResponse>(
+      this.buildUrl(`/services/${this.encodePathSegment(name)}/start`),
+      {}
     );
   }
 
   /**
-   * Get one daemon service's status
-   *
-   * @param service - Service name
-   * @returns Service status
+   * Stop a daemon service.
+   * REST: POST /v1/platform/services/{service}/stop (PlatformDaemon.StopService).
    */
-  async getServiceStatus(service: string): Promise<ApiResponse<DaemonServiceInfo>> {
-    return this.client.get<DaemonServiceInfo>(
-      this.buildUrlUnder(this.lifecycleBasePath, `/services/${encodeURIComponent(service)}`)
+  async stopService(name: string): Promise<ApiResponse<PlatformServiceActionResponse>> {
+    return this.client.post<PlatformServiceActionResponse>(
+      this.buildUrl(`/services/${this.encodePathSegment(name)}/stop`),
+      {}
     );
   }
 
   /**
-   * Start a daemon service
-   *
-   * @param service - Service name
-   * @returns Action result
+   * Restart a daemon service.
+   * REST: POST /v1/platform/services/{service}/restart (PlatformDaemon.RestartService).
    */
-  async startService(service: string): Promise<ApiResponse<DaemonServiceActionResponse>> {
-    return this.serviceAction(service, 'start');
-  }
-
-  /**
-   * Stop a daemon service
-   *
-   * @param service - Service name
-   * @returns Action result
-   */
-  async stopService(service: string): Promise<ApiResponse<DaemonServiceActionResponse>> {
-    return this.serviceAction(service, 'stop');
-  }
-
-  /**
-   * Restart a daemon service
-   *
-   * @param service - Service name
-   * @returns Action result
-   */
-  async restartService(service: string): Promise<ApiResponse<DaemonServiceActionResponse>> {
-    return this.serviceAction(service, 'restart');
-  }
-
-  private async serviceAction(
-    service: string,
-    action: DaemonServiceAction
-  ): Promise<ApiResponse<DaemonServiceActionResponse>> {
-    // No automatic retries: a network error can arrive after the daemon
-    // acted, and the REST handler has no idempotency key, so a resend could
-    // stop or restart the service a second time.
-    return this.client.post<DaemonServiceActionResponse>(
-      this.buildUrlUnder(this.lifecycleBasePath, `/services/${encodeURIComponent(service)}/${action}`),
-      {},
-      { retry: { enabled: false } }
+  async restartService(name: string): Promise<ApiResponse<PlatformServiceActionResponse>> {
+    return this.client.post<PlatformServiceActionResponse>(
+      this.buildUrl(`/services/${this.encodePathSegment(name)}/restart`),
+      {}
     );
   }
-
 }

@@ -1,160 +1,21 @@
 /**
- * BMCService wire tests (#1720): each method sends the verb, path and
- * body the REST handlers in pkg/webservice/v1/bmc decode.
+ * Unit tests for the BMC power and boot-device routes
+ * (pkg/webservice/v1/bmc/handler.go, /api/v1/bmc/{profileID}/...).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ApiClient } from '../../client/api-client.js';
-import { BMCService, bmcPrivilegeName } from '../bmc-service.js';
-import {
-  BMCService as RootBMCService,
-  BMC_PRIVILEGE_CODES as RootBMCPrivilegeCodes,
-  bmcPrivilegeName as rootBMCPrivilegeName,
-  PlatformClient,
-} from '../../index.js';
+import { BMCService } from '../bmc-service.js';
+import { BMCService as IndexedBMCService } from '../index.js';
+import { BMCService as RootBMCService } from '../../index.js';
+import type { ApiClient } from '../../client/api-client.js';
 
 function createMockApiClient(): ApiClient {
   return {
-    get: vi.fn().mockResolvedValue({ data: [] }),
-    post: vi.fn().mockResolvedValue({ data: {} }),
-    put: vi.fn().mockResolvedValue({ data: { status: 'ok' } }),
-    patch: vi.fn(),
-    delete: vi.fn().mockResolvedValue({ data: { status: 'ok' } }),
-    head: vi.fn(),
-    options: vi.fn(),
-    fetch: vi.fn(),
-    baseUrl: 'https://api.example.com',
-  } as unknown as ApiClient;
-}
-
-describe('BMCService', () => {
-  let client: ApiClient;
-  let service: BMCService;
-
-  beforeEach(() => {
-    client = createMockApiClient();
-    service = new BMCService(client);
-  });
-
-  it('listUsers GETs /v1/bmc/{profileID}/users', async () => {
-    await service.listUsers(7);
-    expect(client.get).toHaveBeenCalledWith('/v1/bmc/7/users');
-  });
-
-  it('createUser POSTs the snake_case body to /v1/bmc/{profileID}/users', async () => {
-    await service.createUser(7, {
-      slot: 3,
-      username: 'ops',
-      password: 'pw',
-      privilege: 'operator',
-      enabled: true,
-      channel: 1,
-    });
-    expect(client.post).toHaveBeenCalledWith('/v1/bmc/7/users', {
-      slot: 3,
-      username: 'ops',
-      password: 'pw',
-      privilege: 'operator',
-      enabled: true,
-      channel: 1,
-    });
-  });
-
-  it('deleteUser DELETEs /v1/bmc/{profileID}/users/{slot}', async () => {
-    await service.deleteUser(7, 3);
-    expect(client.delete).toHaveBeenCalledWith('/v1/bmc/7/users/3');
-  });
-
-  it('setUserPassword PUTs the password to the slot', async () => {
-    await service.setUserPassword(7, 3, 'new');
-    expect(client.put).toHaveBeenCalledWith('/v1/bmc/7/users/3/password', { password: 'new' });
-  });
-
-  it('setUserPrivilege PUTs privilege and channel to the slot', async () => {
-    await service.setUserPrivilege(7, 3, 'administrator', 1);
-    expect(client.put).toHaveBeenCalledWith('/v1/bmc/7/users/3/privilege', {
-      privilege: 'administrator',
-      channel: 1,
-    });
-  });
-
-  it('replaceWebCertificate PUTs cert_pem and key_pem to /cert', async () => {
-    await service.replaceWebCertificate(7, { certPem: 'C', keyPem: 'K' });
-    expect(client.put).toHaveBeenCalledWith('/v1/bmc/7/cert', { cert_pem: 'C', key_pem: 'K' });
-  });
-
-  const profileCalls: Array<[string, (id: number | string) => Promise<unknown>]> = [
-    ['replaceWebCertificate', (id) => service.replaceWebCertificate(id, { certPem: 'C', keyPem: 'K' })],
-    ['listUsers', (id) => service.listUsers(id)],
-    [
-      'createUser',
-      (id) =>
-        service.createUser(id, {
-          slot: 3,
-          username: 'ops',
-          password: 'pw',
-          privilege: 'operator',
-          enabled: true,
-          channel: 1,
-        }),
-    ],
-    ['deleteUser', (id) => service.deleteUser(id, 3)],
-    ['setUserPassword', (id) => service.setUserPassword(id, 3, 'new')],
-    ['setUserPrivilege', (id) => service.setUserPrivilege(id, 3, 'operator', 1)],
-  ];
-
-  function requestCount(): number {
-    return [client.get, client.post, client.put, client.delete].reduce(
-      (sum, fn) => sum + vi.mocked(fn).mock.calls.length,
-      0
-    );
-  }
-
-  for (const [name, call] of profileCalls) {
-    it(`${name} refuses an unsafe or non-numeric profile id with no request`, async () => {
-      await expect(call(2 ** 53 + 2)).rejects.toThrow(RangeError);
-      await expect(call('12a')).rejects.toThrow(RangeError);
-      await expect(call('18446744073709551616')).rejects.toThrow(RangeError);
-      expect(requestCount()).toBe(0);
-    });
-
-    it(`${name} accepts a uint64 profile id as a decimal string`, async () => {
-      await call('18446744073709551615');
-      expect(requestCount()).toBe(1);
-    });
-  }
-
-  it('bmcPrivilegeName maps IPMI codes and names', () => {
-    expect(bmcPrivilegeName(0x04)).toBe('administrator');
-    expect(bmcPrivilegeName(0x0f)).toBe('no-access');
-    expect(bmcPrivilegeName('operator')).toBe('operator');
-    expect(bmcPrivilegeName(0x09)).toBe('unknown');
-  });
-});
-
-describe('BMC through the package root', () => {
-  it('exports BMCService and its helpers from the root entry point', () => {
-    expect(RootBMCService).toBe(BMCService);
-    expect(rootBMCPrivilegeName).toBe(bmcPrivilegeName);
-    expect(RootBMCPrivilegeCodes.administrator).toBe(4);
-  });
-
-  it('constructs client.bmc as a BMCService', () => {
-    const client = new PlatformClient({ baseUrl: 'https://api.example.com' });
-    expect(client.bmc).toBeInstanceOf(RootBMCService);
-  });
-});
-/**
- * BMC service routes (#1736): each method hits
- * `/v1/bmc/{profileID}/...` with the verb the server registers.
- */
-function createRouteMockApiClient(): ApiClient {
-  return {
-    get: vi.fn().mockResolvedValue({ success: true, data: {} }),
-    post: vi.fn().mockResolvedValue({ success: true, data: {} }),
+    get: vi.fn(),
+    post: vi.fn(),
     put: vi.fn(),
     patch: vi.fn(),
-    delete: vi.fn().mockResolvedValue({ success: true, data: {} }),
+    delete: vi.fn(),
     head: vi.fn(),
     options: vi.fn(),
     fetch: vi.fn(),
@@ -162,170 +23,146 @@ function createRouteMockApiClient(): ApiClient {
   } as unknown as ApiClient;
 }
 
-describe('BMCService routes (#1736)', () => {
+const noRetry = { retry: { enabled: false } };
+
+describe('BMCService', () => {
   let service: BMCService;
   let mockClient: ApiClient;
 
   beforeEach(() => {
-    mockClient = createRouteMockApiClient();
+    mockClient = createMockApiClient();
     service = new BMCService(mockClient);
   });
 
-  const gets: Array<[string, (s: BMCService) => Promise<unknown>, string]> = [
-    ['getPowerStatus', (s) => s.getPowerStatus('1'), '/v1/bmc/1/power'],
-    ['getBootDevice', (s) => s.getBootDevice('1'), '/v1/bmc/1/boot-device'],
-    ['getVirtualMediaStatus', (s) => s.getVirtualMediaStatus('1'), '/v1/bmc/1/virtual-media'],
-    ['getSensors', (s) => s.getSensors('1'), '/v1/bmc/1/sensors'],
-    ['getSystemInfo', (s) => s.getSystemInfo('1'), '/v1/bmc/1/system-info'],
-    ['getProvisionStatus', (s) => s.getProvisionStatus('1'), '/v1/bmc/1/provision'],
-    ['getWebCertificate', (s) => s.getWebCertificate('1'), '/v1/bmc/1/cert'],
-  ];
+  it('is exported from the services index and the package root', () => {
+    expect(IndexedBMCService).toBe(BMCService);
+    expect(RootBMCService).toBe(BMCService);
+  });
 
-  it.each(gets)('%s GETs its route', async (_name, call, url) => {
-    await call(service);
+  it('powerAction posts the action to /v1/bmc/{id}/power with retries off', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { status: 'ok', action: 'cycle' } });
+
+    const result = await service.powerAction(7, 'cycle');
+
+    expect(result.success).toBe(true);
+    expect(mockClient.post).toHaveBeenCalledTimes(1);
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/7/power', { action: 'cycle' }, noRetry);
+  });
+
+  it('powerOn, powerOff and powerReset post their action to the power route', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { status: 'ok', action: 'x' } });
+
+    await service.powerOn(7);
+    await service.powerOff(7);
+    await service.powerReset(7);
+
+    const calls = vi.mocked(mockClient.post).mock.calls;
+    expect(calls).toEqual([
+      ['/v1/bmc/7/power', { action: 'on' }, noRetry],
+      ['/v1/bmc/7/power', { action: 'off' }, noRetry],
+      ['/v1/bmc/7/power', { action: 'reset' }, noRetry],
+    ]);
+  });
+
+  it('getPowerStatus gets /v1/bmc/{id}/power', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { state: 'On' } });
+
+    await service.getPowerStatus(7);
+
     expect(mockClient.get).toHaveBeenCalledTimes(1);
-    expect(mockClient.get).toHaveBeenCalledWith(url);
-    expect(mockClient.post).not.toHaveBeenCalled();
+    expect(vi.mocked(mockClient.get).mock.calls[0]?.[0]).toBe('/v1/bmc/7/power');
   });
 
-  it('setBootDevice POSTs the device to boot-device', async () => {
-    await service.setBootDevice('1', { device: 'pxe', persistent: false });
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/1/boot-device', { device: 'pxe', persistent: false });
+  it('getBootDevice gets /v1/bmc/{id}/boot-device', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { device: 'pxe' } });
+
+    await service.getBootDevice(7);
+
+    expect(mockClient.get).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(mockClient.get).mock.calls[0]?.[0]).toBe('/v1/bmc/7/boot-device');
   });
 
-  it('mountISO POSTs the iso_url to virtual-media', async () => {
-    await service.mountISO('1', { iso_url: 'installer.iso' });
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/1/virtual-media', { iso_url: 'installer.iso' });
+  it('setBootDevice posts the request to /v1/bmc/{id}/boot-device with retries off', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { status: 'ok', device: 'pxe' } });
+
+    await service.setBootDevice(7, { device: 'pxe', persistent: true });
+
+    expect(mockClient.post).toHaveBeenCalledWith(
+      '/v1/bmc/7/boot-device',
+      { device: 'pxe', persistent: true },
+      noRetry,
+    );
   });
 
-  it('getSensors returns the plain sensor array the server sends', async () => {
-    const readings = [{ name: 'CPU1 Temp', value: 54, units: 'C', status: 'OK' }];
-    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: readings });
-    const res = await service.getSensors('1');
-    expect(Array.isArray(res.data)).toBe(true);
-    expect(res.data?.[0]?.value).toBe(54);
+  it('getVirtualMediaStatus gets /v1/bmc/{id}/virtual-media', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { mounted: false } });
+
+    await service.getVirtualMediaStatus(7);
+
+    expect(mockClient.get).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(mockClient.get).mock.calls[0]?.[0]).toBe('/v1/bmc/7/virtual-media');
   });
 
-  it('unmountISO DELETEs virtual-media', async () => {
-    await service.unmountISO('1');
-    expect(mockClient.delete).toHaveBeenCalledWith('/v1/bmc/1/virtual-media');
-    expect(mockClient.post).not.toHaveBeenCalled();
-  });
-
-  it('provision POSTs to provision', async () => {
-    await service.provision('1');
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/1/provision', {});
-  });
-
-  it('encodes the profile ID as one path segment', async () => {
-    await service.getPowerStatus('rack 1/node');
-    expect(mockClient.get).toHaveBeenCalledWith('/v1/bmc/rack%201%2Fnode/power');
-  });
-
-  it('propagates a transport error unchanged', async () => {
-    const failure = new Error('404 Not Found: bmc: no profile 9');
-    vi.mocked(mockClient.get).mockRejectedValue(failure);
-    await expect(service.getSensors('9')).rejects.toBe(failure);
-  });
-});
-
-describe('BMCService.provision without client retries', () => {
-  it('surfaces a lost response with exactly one POST', async () => {
-    // The server starts provisioning before it answers; a resend after a
-    // lost response is rejected 409 while the host is being reinstalled.
-    const fetchImpl = vi
-      .fn<unknown[], Promise<Response>>()
-      .mockRejectedValueOnce(new TypeError('network error: response lost after the server acted'))
-      .mockResolvedValue(
-        new Response(JSON.stringify({ success: true, payload: { provision_id: 'second' } }), {
-          status: 201,
-          headers: { 'content-type': 'application/json' },
-        })
-      );
-    const client = new ApiClient({
-      baseUrl: 'https://platform.test/api/v1',
-      fetch: fetchImpl as unknown as typeof fetch,
-      retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1 },
+  it('mountISO posts the ISO URL to /v1/bmc/{id}/virtual-media with retries off', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({
+      success: true,
+      data: { status: 'mounted', iso_url: 'https://example.com/a.iso' },
     });
 
-    const result = await new BMCService(client).provision('bmc-1');
+    await service.mountISO(7, 'https://example.com/a.iso');
 
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const init = fetchImpl.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect(init?.method).toBe('POST');
-    expect(result.success).toBe(false);
-    expect(result.error?.message).toMatch(/network error/);
-  });
-});
-
-describe('BMCService.createUser without client retries (#2022 Codex r2)', () => {
-  it('surfaces a lost response with exactly one POST', async () => {
-    // The BMC creates the Redfish account before it answers and the POST
-    // carries no idempotency key: a resend after a lost response would
-    // create the account twice or fail on the slot it already took.
-    const fetchImpl = vi
-      .fn<unknown[], Promise<Response>>()
-      .mockRejectedValueOnce(new TypeError('network error: response lost after the BMC created the user'))
-      .mockResolvedValue(
-        new Response(JSON.stringify({ success: true, payload: { slot: 3, username: 'ops' } }), {
-          status: 201,
-          headers: { 'content-type': 'application/json' },
-        })
-      );
-    const client = new ApiClient({
-      baseUrl: 'https://platform.test/api/v1',
-      fetch: fetchImpl as unknown as typeof fetch,
-      retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1 },
-    });
-
-    const result = await new BMCService(client).createUser('1', {
-      slot: 3,
-      username: 'ops',
-      password: 'pw',
-      privilege: 'operator',
-      enabled: true,
-      channel: 1,
-    });
-
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const init = fetchImpl.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect(init?.method).toBe('POST');
-    expect(result.success).toBe(false);
-    expect(result.error?.message).toMatch(/network error/);
-  });
-});
-
-describe('BMCService provision keeps the profile ID string (#2022 Codex r1)', () => {
-  // The server sends profile_id as a JSON number; above 2^53 it rounds
-  // (9007199254740993 parses as 9007199254740992).
-  const rounded = { success: true, data: { provision_id: 'p-1', profile_id: Number.MAX_SAFE_INTEGER + 1, state: 'running' } };
-
-  it('provision returns the requested profile ID', async () => {
-    const client = createRouteMockApiClient();
-    vi.mocked(client.post).mockResolvedValue(rounded);
-
-    const res = await new BMCService(client).provision('9007199254740993');
-
-    expect(res.data?.profile_id).toBe('9007199254740993');
-    expect(res.data?.provision_id).toBe('p-1');
+    expect(mockClient.post).toHaveBeenCalledTimes(1);
+    expect(mockClient.post).toHaveBeenCalledWith(
+      '/v1/bmc/7/virtual-media',
+      { iso_url: 'https://example.com/a.iso' },
+      noRetry,
+    );
   });
 
-  it('getProvisionStatus returns the requested profile ID', async () => {
-    const client = createRouteMockApiClient();
-    vi.mocked(client.get).mockResolvedValue(rounded);
+  it('unmountISO deletes /v1/bmc/{id}/virtual-media with retries off', async () => {
+    vi.mocked(mockClient.delete).mockResolvedValue({ success: true, data: { status: 'unmounted' } });
 
-    const res = await new BMCService(client).getProvisionStatus('9007199254740993');
+    await service.unmountISO(7);
 
-    expect(res.data?.profile_id).toBe('9007199254740993');
+    expect(mockClient.delete).toHaveBeenCalledTimes(1);
+    expect(mockClient.delete).toHaveBeenCalledWith('/v1/bmc/7/virtual-media', noRetry);
   });
 
-  it('leaves a response without data alone', async () => {
-    const client = createRouteMockApiClient();
-    vi.mocked(client.get).mockResolvedValue({ success: false, error: { code: 'NOT_FOUND', message: 'no' } });
+  it('getSensors, getSystemInfo, getWebCertificate and getProvisionStatus get their routes', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: {} });
 
-    const res = await new BMCService(client).getProvisionStatus('9007199254740993');
+    await service.getSensors(7);
+    await service.getSystemInfo(7);
+    await service.getWebCertificate(7);
+    await service.getProvisionStatus(7);
 
-    expect(res.data).toBeUndefined();
-    expect(res.success).toBe(false);
+    const paths = vi.mocked(mockClient.get).mock.calls.map((call) => call[0]);
+    expect(paths).toEqual([
+      '/v1/bmc/7/sensors',
+      '/v1/bmc/7/system-info',
+      '/v1/bmc/7/cert',
+      '/v1/bmc/7/provision',
+    ]);
+  });
+
+  it('provision posts the request, or an empty body, to /v1/bmc/{id}/provision with retries off', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { status: 'pending' } });
+
+    await service.provision(7, { iso_url: 'https://example.com/a.iso' });
+    await service.provision(7);
+
+    const calls = vi.mocked(mockClient.post).mock.calls;
+    expect(calls).toEqual([
+      ['/v1/bmc/7/provision', { iso_url: 'https://example.com/a.iso' }, noRetry],
+      ['/v1/bmc/7/provision', {}, noRetry],
+    ]);
+  });
+
+  it('escapes a string profile id in the path', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { status: 'ok', action: 'on' } });
+
+    await service.powerOn('a/b');
+
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/a%2Fb/power', { action: 'on' }, noRetry);
   });
 });

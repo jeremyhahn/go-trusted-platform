@@ -112,6 +112,8 @@ func (h *cov964BMCHandler) RestoreBMC(w http.ResponseWriter, r *http.Request) {
 	h.record("RestoreBMC", w, r)
 }
 
+func (h *cov964BMCHandler) ProvisioningConfigured() bool { return true }
+
 func (h *cov964BMCHandler) SetRestorer(bmc.BMCRestorerServicer, bmc.ProfileLookup) {
 	h.restore = true
 }

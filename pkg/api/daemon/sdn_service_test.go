@@ -1008,25 +1008,6 @@ func TestSDNService_DeleteVLAN_NotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "VLAN not found")
 }
 
-// A bridge target that does not resolve fails the apply with NotFound: no
-// flow is installed and no policy is recorded as active (#2024 Codex round 5).
-func TestSDNService_ApplyPolicy_UnknownBridgeTarget(t *testing.T) {
-	svc, _, mods := newPolicyFlowFixture(t)
-	req := denyPolicy("p", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
-	req.Config.Targets = append(req.Config.Targets, &platformv1.PolicyTarget{
-		Type: platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE,
-		Id:   "no-such-bridge",
-	})
-
-	_, err := svc.ApplyPolicy(context.Background(), req)
-	require.Error(t, err)
-	assert.Equal(t, codes.NotFound, status.Code(err))
-	assert.Empty(t, *mods, "no flow may be installed")
-	svc.mu.RLock()
-	defer svc.mu.RUnlock()
-	assert.Empty(t, svc.policies, "no policy may be recorded")
-}
-
 func TestSDNService_ConversionHelpers(t *testing.T) {
 	svc := &SDNService{
 		bridges: make(map[string]*bridgeResource),

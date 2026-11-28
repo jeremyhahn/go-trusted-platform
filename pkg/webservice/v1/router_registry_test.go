@@ -35,7 +35,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/adminclaim"
-	bmcweb "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
@@ -103,13 +103,17 @@ type testHandlerRegistry struct {
 	// Services the route-authorization audit wires so their routers
 	// actually register. Left nil by the older tests, which only assert
 	// that a nil service is skipped.
-	platformRouter        *platform.PlatformRouter
-	computeService        platformv1.ComputeServiceServer
-	dnsService            dns.DNSService
-	dnsServer             platformv1.DNSServiceServer
-	eabService            platformv1.EABServiceServer
-	ntpService            platformv1.NTPServiceServer
-	vpnService            platformv1.VPNServiceServer
+	platformRouter *platform.PlatformRouter
+	computeService platformv1.ComputeServiceServer
+	dnsService     dns.DNSService
+	dnsServer      platformv1.DNSServiceServer
+	eabService     platformv1.EABServiceServer
+	ntpService     platformv1.NTPServiceServer
+	vpnService     platformv1.VPNServiceServer
+	bmcHandler     bmcwebsvc.RestHandler
+	// withoutBMC keeps bmcHandler nil in newGatedTestRouter, which
+	// otherwise stubs it so the route audits cover the BMC routes.
+	withoutBMC            bool
 	proxyService          platformv1.ProxyServiceServer
 	appServices           restapi.AppServiceServers
 	overlayService        platformv1.OverlayServiceServer
@@ -152,14 +156,11 @@ type testHandlerRegistry struct {
 	// the skip; the route-table fixture builds one so the five claim routes
 	// are walked (#420).
 	adminClaim *adminclaim.RestHandler
-	// The BMC REST handler. Nil in the older tests; the route-table
-	// fixture sets a stub so the admin-gated /bmc routes are walked.
-	bmcHandler bmcweb.RestHandler
 }
 
-// stubBMCHandler satisfies bmcweb.RestHandler for the route-table walk. Its
+// stubBMCHandler satisfies bmcwebsvc.RestHandler for the route-table walk. Its
 // methods are never reached: the admin gate refuses every probe first.
-type stubBMCHandler struct{ bmcweb.RestHandler }
+type stubBMCHandler struct{ bmcwebsvc.RestHandler }
 
 func (r *testHandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 	return r.acmeService
@@ -206,10 +207,6 @@ func (r *testHandlerRegistry) ResponseWriter() response.HttpWriter {
 
 func (r *testHandlerRegistry) SDNService() platformv1.SDNServiceServer {
 	return r.sdnService
-}
-
-func (r *testHandlerRegistry) BMCRestHandler() bmcweb.RestHandler {
-	return r.bmcHandler
 }
 
 func (r *testHandlerRegistry) TPM() xkmssdk.TrustedPlatformModule {
@@ -314,6 +311,10 @@ func (r *testHandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {
 
 func (r *testHandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer {
 	return r.vpnService
+}
+
+func (r *testHandlerRegistry) BMCRestHandler() bmcwebsvc.RestHandler {
+	return r.bmcHandler
 }
 
 func (r *testHandlerRegistry) ProxyServiceServer() platformv1.ProxyServiceServer {

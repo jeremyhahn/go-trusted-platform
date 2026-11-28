@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"os"
 	"runtime"
 	"strconv"
@@ -519,6 +520,9 @@ func (s *Service) UpdateConfig(ctx context.Context, req *platformv1.UpdateConfig
 	}
 
 	if _, err := tpconfig.ApplySection(target, section.GetSection(), section.GetValues(), req.GetPersist()); err != nil {
+		if errors.As(err, &tpconfig.ErrInvalidSectionValue{}) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 

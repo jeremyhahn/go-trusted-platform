@@ -1,5 +1,5 @@
 import * as React from "react";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import InvitationsPage from "./page";
@@ -50,7 +50,38 @@ const mutation = { mutateAsync: vi.fn(), isLoading: false };
 const invitationHooks = { create: mutation, revoke: mutation, resend: mutation, remove: mutation };
 const listResult = { data: { invitations }, isLoading: false, error: null, refetch: vi.fn() };
 const toastResult = { toast: vi.fn() };
-const authResult = { isLoading: false };
+const authResult = { isLoading: false, tenantId: "tenant-1" };
+// #1992: the page offers the tenant's IAM role names in the invitation form.
+const iamRoles = ["so", "admin", "operator", "user", "auditor", "custodian"];
+const rolesResponse = () =>
+  Promise.resolve({ success: true, data: { roles: iamRoles.map((name) => ({ id: name, name })) } });
+const listRoles = vi.fn(rolesResponse);
+const iamResult = { listRoles };
+
+// A small stand-in for the SDK's useApi: it runs the fetcher on mount, keeps
+// the unwrapped data, the error of a rejected fetch and the loading flag, and
+// refetch runs the fetcher again.
+function useApiStub<T>(fetcher: () => Promise<{ data: T }>) {
+  const [state, setState] = React.useState<{ data?: T; isLoading: boolean; error: Error | null }>({
+    isLoading: true,
+    error: null,
+  });
+  const fetcherRef = React.useRef(fetcher);
+  fetcherRef.current = fetcher;
+  const refetch = React.useCallback(async () => {
+    setState((s) => ({ ...s, isLoading: true, error: null }));
+    try {
+      const res = await fetcherRef.current();
+      setState({ data: res.data, isLoading: false, error: null });
+    } catch (err) {
+      setState({ data: undefined, isLoading: false, error: err as Error });
+    }
+  }, []);
+  React.useEffect(() => {
+    void refetch();
+  }, [refetch]);
+  return { ...state, refetch };
+}
 
 // The server offers every op here: the gates have their own test.
 vi.mock("@/hooks/use-capabilities", async (importOriginal) => ({
@@ -72,6 +103,8 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useToast: () => toastResult,
   useInvitation: () => invitationHooks,
   useInvitationList: () => listResult,
+  useIAM: () => iamResult,
+  useApi: <T,>(fetcher: () => Promise<{ data: T }>) => useApiStub(fetcher),
 }));
 
 // The Radix menu's portal and popper do not settle in jsdom once opened, so
@@ -132,5 +165,47 @@ describe("InvitationsPage status mapping", () => {
     render(<InvitationsPage />);
     const row = rowFor("expired-invitee");
     expect(menuItems(row)).toEqual(["Delete Invitation"]);
+  });
+});
+
+describe("InvitationsPage invitation roles", () => {
+  function openInvite() {
+    fireEvent.click(screen.getByRole("button", { name: /^send invitation$/i }));
+    return screen.getByRole("dialog");
+  }
+
+  it("offers the tenant's IAM role names from listRoles", async () => {
+    listRoles.mockClear();
+    render(<InvitationsPage />);
+    await waitFor(() => expect(listRoles).toHaveBeenCalledWith({ tenantId: "tenant-1" }));
+
+    const dialog = openInvite();
+    const select = (await within(dialog).findByLabelText("Role")) as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(iamRoles);
+    expect(select.value).toBe("user");
+  });
+
+  it("shows a failed role lookup with a retry, not an empty role list", async () => {
+    listRoles.mockClear();
+    listRoles.mockImplementationOnce(() => Promise.reject(new Error("roles unavailable")));
+    render(<InvitationsPage />);
+    await waitFor(() => expect(listRoles).toHaveBeenCalledTimes(1));
+
+    const dialog = openInvite();
+    expect(await within(dialog).findByText(/roles unavailable/)).toBeTruthy();
+    expect(within(dialog).queryByText(/no IAM roles/i)).toBeNull();
+    expect(within(dialog).queryByLabelText("Role")).toBeNull();
+    fireEvent.change(within(dialog).getByLabelText("Email Address"), {
+      target: { value: "r@example.com" },
+    });
+    const submit = within(dialog).getByRole("button", { name: /send invitation/i }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
+    const select = (await within(dialog).findByLabelText("Role")) as HTMLSelectElement;
+    expect(listRoles).toHaveBeenCalledTimes(2);
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(iamRoles);
+    expect(within(dialog).queryByText(/roles unavailable/)).toBeNull();
+    expect(submit.disabled).toBe(false);
   });
 });

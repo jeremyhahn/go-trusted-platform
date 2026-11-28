@@ -33,20 +33,24 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
-// webPolicyBody is a REST create-policy body. Its bridge target names a bridge
-// the test service does not hold, so applying it installs no OpenFlow rules.
+// webPolicyBody is a REST create-policy body. Its bridge target names br0, the
+// bridge newPolicySDNService holds; it has no rules, so it installs no flows.
 const webPolicyBody = `{"name": "web", "type": "firewall", "priority": 200, "enabled": true,
 	"targets": [{"type": "bridge", "id": "br0"}]}`
 
+// newPolicySDNService returns a service whose OVS holds br0, the bridge
+// webPolicyBody targets: ApplyPolicy refuses an unresolved bridge (#2234).
 func newPolicySDNService() *SDNService {
-	svc := newTestSDNService(NewConfigurableMockOVSClient())
-	// ApplyPolicy refuses a target bridge it cannot resolve (#2022 R12-1).
-	svc.bridges["br0"] = &bridgeResource{id: "uuid-br0", name: "br0"}
-	return svc
+	mockOVS := NewConfigurableMockOVSClient()
+	mockOVS.listBridgesFunc = func(context.Context) ([]*ovs.Bridge, error) {
+		return []*ovs.Bridge{{UUID: "uuid-br0", Name: "br0"}}, nil
+	}
+	return newTestSDNService(mockOVS)
 }
 
 // applyWebPolicy stores webPolicyBody through the shared service and returns

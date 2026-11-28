@@ -1,9 +1,17 @@
 /**
  * Switch Service
  *
- * Port operations on a managed switch (docs/switch/api.md §3, §5.1).
- * Port names contain slashes (`Eth1/3`); every path segment is escaped, so a
- * port travels as `Eth1%2F3` and matches the server's encoded-path route.
+ * Physical switch ports: list, read one, move an access port's VLAN, enable
+ * and disable. Wire contract: docs/switch/api.md
+ * (`GET /api/v1/switches/{switch}/ports`,
+ * `GET /api/v1/switches/{switch}/ports/{port}`,
+ * `POST /api/v1/switches/{switch}/ports/{port}/vlan` with `{ vlan_id }`,
+ * `POST /api/v1/switches/{switch}/ports/{port}/enable`,
+ * `POST /api/v1/switches/{switch}/ports/{port}/disable`).
+ *
+ * Port names carry slashes (`Eth1/1`); the server router keeps the encoded
+ * path, so both the switch and the port name are URL-encoded
+ * (`Eth1/1` -> `Eth1%2F1`).
  */
 
 import type { ApiClient } from '../client/api-client.js';
@@ -11,10 +19,10 @@ import type { Transport } from '../transport/transport.js';
 import type { ApiResponse } from '../types/api.js';
 import { BaseService } from './base-service.js';
 
-/** Port mode reported by the switch. */
+/** A port's switching mode. */
 export type SwitchPortMode = 'access' | 'trunk';
 
-/** Status of one switch port (`switchwire.PortStatus`). */
+/** One switch port's state (snake_case, as sdk/go/wire/switchwire PortStatus). */
 export interface SwitchPortStatus {
   port: string;
   mode: SwitchPortMode;
@@ -26,24 +34,25 @@ export interface SwitchPortStatus {
   description?: string;
 }
 
-/** Acknowledgement of an enable or disable request. */
+/** The answer to an enable or disable. */
 export interface SwitchPortActionResponse {
   switch: string;
   port: string;
-  action: 'enable' | 'disable';
+  action: string;
   status: string;
 }
 
-/** Acknowledgement of a VLAN change. */
-export interface SwitchSetPortVLANResponse {
+/** The answer to a VLAN move. */
+export interface SetSwitchPortVLANResponse {
   switch: string;
   port: string;
   vlan_id: number;
   status: string;
 }
 
-/** Highest VLAN id the server accepts. */
-export const SWITCH_MAX_VLAN_ID = 4094;
+/** Lowest and highest VLAN the server accepts (802.1Q usable range). */
+const MIN_VLAN_ID = 1;
+const MAX_VLAN_ID = 4094;
 
 /**
  * Switch Service class
@@ -51,7 +60,8 @@ export const SWITCH_MAX_VLAN_ID = 4094;
  * @example
  * ```typescript
  * const ports = await client.switches.listPorts('core-1');
- * await client.switches.setPortVLAN('core-1', 'Eth1/3', 200);
+ * await client.switches.setPortVLAN('core-1', 'Eth1/1', 20);
+ * await client.switches.disablePort('core-1', 'Eth1/1');
  * ```
  */
 export class SwitchService extends BaseService {
@@ -64,76 +74,78 @@ export class SwitchService extends BaseService {
     super(client, '/v1/switches');
   }
 
-  private portPath(switchName: string, port?: string, suffix = ''): string {
-    const base = `/${this.encodePathSegment(switchName)}/ports`;
-    if (port === undefined) {
-      return this.buildUrl(base);
-    }
-    return this.buildUrl(`${base}/${this.encodePathSegment(port)}${suffix}`);
+  private portPath(switchName: string, port: string, suffix = ''): string {
+    return this.buildUrl(
+      `/${encodeURIComponent(switchName)}/ports/${encodeURIComponent(port)}${suffix}`
+    );
   }
 
   /**
-   * List the ports of a switch
+   * List a switch's ports
    *
-   * @param switchName - Switch name
-   * @returns Status of every port
+   * @param switchName - The switch name
+   * @returns The ports and their state
    */
   async listPorts(switchName: string): Promise<ApiResponse<SwitchPortStatus[]>> {
-    return this.client.get<SwitchPortStatus[]>(this.portPath(switchName));
+    return this.client.get<SwitchPortStatus[]>(
+      this.buildUrl(`/${encodeURIComponent(switchName)}/ports`)
+    );
   }
 
   /**
-   * Get the status of one port
+   * Read one port's state
    *
-   * @param switchName - Switch name
-   * @param port - Port name, for example `Eth1/3`
-   * @returns Port status
+   * @param switchName - The switch name
+   * @param port - The port name, e.g. `Eth1/1`
+   * @returns The port's state
    */
   async getPortStatus(switchName: string, port: string): Promise<ApiResponse<SwitchPortStatus>> {
     return this.client.get<SwitchPortStatus>(this.portPath(switchName, port));
   }
 
   /**
-   * Enable a port (no body)
+   * Move an access port to a VLAN
    *
-   * @param switchName - Switch name
-   * @param port - Port name
-   * @returns Acknowledgement
-   */
-  async enablePort(switchName: string, port: string): Promise<ApiResponse<SwitchPortActionResponse>> {
-    return this.client.post<SwitchPortActionResponse>(this.portPath(switchName, port, '/enable'));
-  }
-
-  /**
-   * Disable a port (no body)
-   *
-   * @param switchName - Switch name
-   * @param port - Port name
-   * @returns Acknowledgement
-   */
-  async disablePort(switchName: string, port: string): Promise<ApiResponse<SwitchPortActionResponse>> {
-    return this.client.post<SwitchPortActionResponse>(this.portPath(switchName, port, '/disable'));
-  }
-
-  /**
-   * Set the access VLAN of a port
-   *
-   * @param switchName - Switch name
-   * @param port - Port name
-   * @param vlanId - VLAN id, 1 to 4094
-   * @returns Acknowledgement
+   * @param switchName - The switch name
+   * @param port - The port name
+   * @param vlanId - The VLAN, an integer in 1..4094
+   * @throws RangeError when vlanId is outside 1..4094 (no request is sent)
    */
   async setPortVLAN(
     switchName: string,
     port: string,
     vlanId: number
-  ): Promise<ApiResponse<SwitchSetPortVLANResponse>> {
-    if (!Number.isInteger(vlanId) || vlanId < 1 || vlanId > SWITCH_MAX_VLAN_ID) {
-      throw new RangeError(`vlan_id must be an integer from 1 to ${SWITCH_MAX_VLAN_ID}`);
+  ): Promise<ApiResponse<SetSwitchPortVLANResponse>> {
+    if (!Number.isInteger(vlanId) || vlanId < MIN_VLAN_ID || vlanId > MAX_VLAN_ID) {
+      throw new RangeError(
+        `vlanId must be an integer in ${MIN_VLAN_ID}..${MAX_VLAN_ID}, got ${vlanId}`
+      );
     }
-    return this.client.post<SwitchSetPortVLANResponse>(
-      this.portPath(switchName, port, '/vlan'),
-      { vlan_id: vlanId }
-    );
+    return this.client.post<SetSwitchPortVLANResponse>(this.portPath(switchName, port, '/vlan'), {
+      vlan_id: vlanId,
+    });
+  }
+
+  /**
+   * Enable a port
+   *
+   * @param switchName - The switch name
+   * @param port - The port name
+   */
+  async enablePort(switchName: string, port: string): Promise<ApiResponse<SwitchPortActionResponse>> {
+    return this.client.post<SwitchPortActionResponse>(this.portPath(switchName, port, '/enable'), {});
+  }
+
+  /**
+   * Disable a port
+   *
+   * @param switchName - The switch name
+   * @param port - The port name
+   */
+  async disablePort(
+    switchName: string,
+    port: string
+  ): Promise<ApiResponse<SwitchPortActionResponse>> {
+    return this.client.post<SwitchPortActionResponse>(this.portPath(switchName, port, '/disable'), {});
   }
 }

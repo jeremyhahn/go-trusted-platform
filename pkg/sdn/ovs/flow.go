@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -235,11 +236,20 @@ func (c *Client) ListFlows(ctx context.Context, bridgeName string) ([]*Flow, err
 		return nil, &WrappedError{Msg: "failed to get flow stats", Err: err}
 	}
 
-	// Convert to Flow type. Each listed flow carries its match: callers
-	// compare matches to tell their own entries from foreign ones.
+	// Convert to Flow type
 	flows := make([]*Flow, 0, len(stats))
 	for _, stat := range stats {
-		flows = append(flows, flowFromStats(stat))
+		flow := &Flow{
+			Table:       int(stat.TableID),
+			Priority:    int(stat.Priority),
+			Duration:    int(stat.DurationSec),
+			IdleAge:     int(stat.IdleTimeout),
+			HardAge:     int(stat.HardTimeout),
+			Cookie:      fmt.Sprintf("0x%x", stat.Cookie),
+			PacketCount: int64(stat.PacketCount),
+			ByteCount:   int64(stat.ByteCount),
+		}
+		flows = append(flows, flow)
 	}
 
 	return flows, nil
@@ -338,26 +348,71 @@ func (c *Client) GetFlowStats(ctx context.Context, bridgeName string, match stri
 	// Convert to Flow type
 	flows := make([]*Flow, 0, len(stats))
 	for _, stat := range stats {
-		flows = append(flows, flowFromStats(stat))
+		flow := &Flow{
+			Table:       int(stat.TableID),
+			Priority:    int(stat.Priority),
+			Match:       formatMatchString(stat.Match),
+			Actions:     flowActionsFromInstructions(stat.Instructions),
+			Duration:    int(stat.DurationSec),
+			IdleAge:     int(stat.IdleTimeout),
+			HardAge:     int(stat.HardTimeout),
+			Cookie:      fmt.Sprintf("0x%x", stat.Cookie),
+			PacketCount: int64(stat.PacketCount),
+			ByteCount:   int64(stat.ByteCount),
+		}
+		flows = append(flows, flow)
 	}
 
 	return flows, nil
 }
 
-// flowFromStats converts one switch flow-stats entry, match included, to a
-// Flow. ListFlows and GetFlowStats share it so both report the match.
-func flowFromStats(stat openflow.FlowStats) *Flow {
-	return &Flow{
-		Table:       int(stat.TableID),
-		Priority:    int(stat.Priority),
-		Match:       formatMatchString(stat.Match),
-		Duration:    int(stat.DurationSec),
-		IdleAge:     int(stat.IdleTimeout),
-		HardAge:     int(stat.HardTimeout),
-		Cookie:      fmt.Sprintf("0x%x", stat.Cookie),
-		PacketCount: int64(stat.PacketCount),
-		ByteCount:   int64(stat.ByteCount),
+// flowActionsFromInstructions renders the instructions of a flow stats entry
+// in the ovs-ofctl action grammar the flow was installed with, so installed
+// actions can be compared with a flow mod's: OFPP_NORMAL is "normal",
+// OFPP_CONTROLLER "controller", a numeric port "output:N", and a flow
+// without actions "drop". Undecodable instructions render as "", which
+// equals no flow mod's actions.
+func flowActionsFromInstructions(instructions []byte) string {
+	// Only APPLY_ACTIONS renders. Any other instruction (GOTO_TABLE, METER,
+	// WRITE_ACTIONS, ...) changes forwarding in a way the rendered string
+	// cannot express, so the flow renders "" and never equals the actions
+	// of a flow the daemon would install.
+	for offset := 0; offset+4 <= len(instructions); {
+		instType := openflow.ByteOrder.Uint16(instructions[offset : offset+2])
+		length := int(openflow.ByteOrder.Uint16(instructions[offset+2 : offset+4]))
+		if instType != openflow.OFPITApplyActions || length < 8 {
+			return ""
+		}
+		offset += length
 	}
+	actions, err := openflow.ApplyActionsFromInstructions(instructions)
+	if err != nil {
+		return ""
+	}
+	if len(actions) == 0 {
+		return "drop"
+	}
+	parts := make([]string, 0, len(actions))
+	for _, action := range actions {
+		switch a := action.(type) {
+		case *openflow.ActionOutput:
+			switch a.Port {
+			case openflow.OFPPNormal:
+				parts = append(parts, "normal")
+			case openflow.OFPPController:
+				parts = append(parts, "controller")
+			default:
+				parts = append(parts, fmt.Sprintf("output:%d", a.Port))
+			}
+		case *openflow.ActionGroup:
+			parts = append(parts, fmt.Sprintf("group:%d", a.GroupID))
+		case *openflow.ActionRaw:
+			parts = append(parts, fmt.Sprintf("action_type:0x%x", a.ActionType))
+		default:
+			parts = append(parts, fmt.Sprintf("%T", action))
+		}
+	}
+	return strings.Join(parts, ",")
 }
 
 // splitStatsFilter separates the keys of an ovs-ofctl dump-flows filter
@@ -441,7 +496,89 @@ func convertToOpenFlow(flow *FlowMod) (*openflow.FlowMod, error) {
 	return ofFlow, nil
 }
 
+// ValidateFlowMod reports whether flow converts to an OpenFlow flow mod (cookie, match and actions), without contacting a switch.
+func ValidateFlowMod(flow *FlowMod) error {
+	if flow == nil {
+		return ErrInvalidFlow
+	}
+	_, err := convertToOpenFlow(flow)
+	return err
+}
+
 // parseMatchString parses ovs-ofctl style match string into OpenFlow match
+// CanonicalMatch returns the OXM match that matchStr encodes in a canonical
+// text form: the parsed fields sorted by (class, field), an all-ones mask
+// dropped (a /32 is the bare address), a fully wildcarded field (an all-zero
+// mask, such as a /0) omitted because it matches every value, each field
+// rendered as the hex of its class, field, mask flag, value and mask. Two
+// match strings that the switch would receive as the same match share one
+// canonical form. The empty string returns "".
+func CanonicalMatch(matchStr string) (string, error) {
+	if strings.TrimSpace(matchStr) == "" {
+		return "", nil
+	}
+	match := openflow.NewMatch()
+	if err := parseMatchString(match, matchStr); err != nil {
+		return "", err
+	}
+	fields := make([]openflow.OXMField, 0, len(match.Fields))
+	for _, f := range match.Fields {
+		if f.HasMask && allZeros(f.Mask) {
+			continue
+		}
+		fields = append(fields, f)
+	}
+	for i := range fields {
+		if fields[i].HasMask && allOnes(fields[i].Mask) {
+			fields[i].HasMask = false
+			fields[i].Mask = nil
+			fields[i].Length /= 2
+		}
+	}
+	sort.SliceStable(fields, func(i, j int) bool {
+		if fields[i].Class != fields[j].Class {
+			return fields[i].Class < fields[j].Class
+		}
+		return fields[i].Field < fields[j].Field
+	})
+	parts := make([]string, 0, len(fields))
+	for _, f := range fields {
+		hasMask := 0
+		if f.HasMask {
+			hasMask = 1
+		}
+		parts = append(parts, fmt.Sprintf("%04x:%02x:%d:%x/%x", f.Class, f.Field, hasMask, f.Value, f.Mask))
+	}
+	return strings.Join(parts, ","), nil
+}
+
+// allOnes reports whether every byte of mask is 0xff.
+func allOnes(mask []byte) bool {
+	if len(mask) == 0 {
+		return false
+	}
+	for _, b := range mask {
+		if b != 0xff {
+			return false
+		}
+	}
+	return true
+}
+
+// allZeros reports whether mask is non-empty and every byte is zero: the
+// field it masks matches every value.
+func allZeros(mask []byte) bool {
+	if len(mask) == 0 {
+		return false
+	}
+	for _, b := range mask {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func parseMatchString(match *openflow.Match, matchStr string) error {
 	// Parse key=value pairs from match string
 	parts := strings.Split(matchStr, ",")
@@ -596,14 +733,10 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 			if err != nil {
 				return &MessageError{Msg: fmt.Sprintf("invalid tp_src: %s", value)}
 			}
-			// The port field follows the protocol (17=UDP, 132=SCTP, else TCP):
-			// a switch rejects a TCP port field on another protocol.
-			switch ipProto {
-			case 17:
+			// Use correct method based on protocol (17=UDP, 6=TCP)
+			if ipProto == 17 {
 				match.AddUDPSrc(uint16(port))
-			case 132:
-				match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBSCTPSrc, transportPort(port), nil)
-			default:
+			} else {
 				match.AddTCPSrc(uint16(port))
 			}
 
@@ -612,12 +745,10 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 			if err != nil {
 				return &MessageError{Msg: fmt.Sprintf("invalid tp_dst: %s", value)}
 			}
-			switch ipProto {
-			case 17:
+			// Use correct method based on protocol (17=UDP, 6=TCP)
+			if ipProto == 17 {
 				match.AddUDPDst(uint16(port))
-			case 132:
-				match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBSCTPDst, transportPort(port), nil)
-			default:
+			} else {
 				match.AddTCPDst(uint16(port))
 			}
 
@@ -707,13 +838,6 @@ func icmpField(key string, ipProto uint8) uint8 {
 	default:
 		return openflow.OFPXMTOFBICMPv4Type
 	}
-}
-
-// transportPort encodes a transport port as its 2-byte OXM value.
-func transportPort(port uint64) []byte {
-	raw := make([]byte, 2)
-	openflow.ByteOrder.PutUint16(raw, uint16(port))
-	return raw
 }
 
 // parseIPv6Match parses an IPv6 address or CIDR into an OXM value and,
@@ -962,11 +1086,11 @@ func formatBasicMatchField(field openflow.OXMField) string {
 		if len(field.Value) == 1 {
 			return fmt.Sprintf("nw_proto=%d", field.Value[0])
 		}
-	case openflow.OFPXMTOFBTCPSrc, openflow.OFPXMTOFBUDPSrc, openflow.OFPXMTOFBSCTPSrc:
+	case openflow.OFPXMTOFBTCPSrc, openflow.OFPXMTOFBUDPSrc:
 		if len(field.Value) == 2 {
 			return fmt.Sprintf("tp_src=%d", openflow.ByteOrder.Uint16(field.Value))
 		}
-	case openflow.OFPXMTOFBTCPDst, openflow.OFPXMTOFBUDPDst, openflow.OFPXMTOFBSCTPDst:
+	case openflow.OFPXMTOFBTCPDst, openflow.OFPXMTOFBUDPDst:
 		if len(field.Value) == 2 {
 			return fmt.Sprintf("tp_dst=%d", openflow.ByteOrder.Uint16(field.Value))
 		}

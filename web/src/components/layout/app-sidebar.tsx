@@ -136,7 +136,6 @@ const navigation = [
       { title: "vTPM Bundle Import", href: "/devices/vtpm/bundles" },
       { title: "IDevID/IAK", href: "/devices/idevid" },
       { title: "BMC", href: "/devices/bmc" },
-      { title: "Device Lookup", href: "/devices/lookup" },
     ],
   },
   {
@@ -176,7 +175,7 @@ const navigation = [
       { title: "Gateway", href: "/networking/gateway" },
       { title: "VPN", href: "/networking/vpn" },
       { title: "PXE Boot", href: "/networking/pxe" },
-      { title: "BGP", href: "/networking/gateway/bgp" },
+      { title: "Switches", href: "/networking/switches" },
     ],
   },
   {
