@@ -159,6 +159,8 @@ const navigation = [
       { title: "Overlays", href: "/networking/overlays" },
       { title: "VTEPs", href: "/networking/overlays/vteps" },
       { title: "Gateway", href: "/networking/gateway" },
+      { title: "Proxy Routes", href: "/networking/proxy" },
+      { title: "Proxy Pools", href: "/networking/proxy/pools" },
       { title: "VPN", href: "/networking/vpn" },
       { title: "PXE Boot", href: "/networking/pxe" },
       { title: "Switches", href: "/networking/switches" },
