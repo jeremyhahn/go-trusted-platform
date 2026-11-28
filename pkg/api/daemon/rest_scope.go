@@ -6,8 +6,10 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
+	qbiam "github.com/jeremyhahn/go-quicbaas/pkg/iam"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 
+	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -75,7 +77,7 @@ func sdnRouteScope(method, route string) (string, error) {
 }
 
 // catalogRouteRPCs maps each ceremony, PIV, LUKS, FIDO2, vTPM, proxy,
-// service-control (/api/v1/services) and cluster route on the daemon
+// service-control (/api/v1/services), cluster and KMS route on the daemon
 // REST listener, as "METHOD route-template", to the gRPC method it serves. The
 // route needs the scope the gRPC catalog gives that method: several of these
 // POSTs read, delete or use a key, and every ceremony step has its own
@@ -210,6 +212,49 @@ var catalogRouteRPCs = map[string]string{
 	"POST /api/v1/sdn/gateway/perf/flows":                                  "/platform.v1.GatewayService/GetPerfFlows",
 	"GET /api/v1/sdn/gateway/perf/datapath":                                "/platform.v1.GatewayService/GetPerfDatapath",
 	"GET /api/v1/sdn/gateway/perf/conntrack":                               "/platform.v1.GatewayService/GetPerfConntrack",
+
+	"POST /api/v1/kms/keys/import":                      "/quicbaas.kms.v1.KeyManagement/ImportKey",
+	"POST /api/v1/kms/keys":                             "/quicbaas.kms.v1.KeyManagement/GenerateKey",
+	"GET /api/v1/kms/keys":                              "/quicbaas.kms.v1.KeyManagement/ListKeys",
+	"GET /api/v1/kms/keys/{name}":                       "/quicbaas.kms.v1.KeyManagement/GetKey",
+	"DELETE /api/v1/kms/keys/{name}":                    "/quicbaas.kms.v1.KeyManagement/DeleteKey",
+	"POST /api/v1/kms/keys/{name}/rotate":               "/quicbaas.kms.v1.KeyManagement/RotateKey",
+	"POST /api/v1/kms/keys/{name}/revoke":               "/quicbaas.kms.v1.KeyManagement/RevokeKey",
+	"PUT /api/v1/kms/keys/{name}/status":                "/quicbaas.kms.v1.KeyManagement/UpdateKeyStatus",
+	"GET /api/v1/kms/keys/{name}/versions":              "/quicbaas.kms.v1.KeyManagement/ListKeyVersions",
+	"GET /api/v1/kms/keys/{name}/metadata":              "/quicbaas.kms.v1.KeyManagement/GetKeyMetadata",
+	"PUT /api/v1/kms/keys/{name}/metadata":              "/quicbaas.kms.v1.KeyManagement/UpdateKeyMetadata",
+	"GET /api/v1/kms/keys/{name}/policy":                "/quicbaas.kms.v1.KeyManagement/GetKeyPolicy",
+	"PUT /api/v1/kms/keys/{name}/policy":                "/quicbaas.kms.v1.KeyManagement/SetKeyPolicy",
+	"GET /api/v1/kms/algorithms":                        "/quicbaas.kms.v1.KeyManagement/GetSupportedAlgorithms",
+	"GET /api/v1/kms/backend/status":                    "/quicbaas.kms.v1.KeyManagement/BackendStatus",
+	"POST /api/v1/kms/encrypt/{name}":                   "/quicbaas.kms.v1.Crypto/Encrypt",
+	"POST /api/v1/kms/decrypt/{name}":                   "/quicbaas.kms.v1.Crypto/Decrypt",
+	"POST /api/v1/kms/sign/{name}":                      "/quicbaas.kms.v1.Crypto/Sign",
+	"POST /api/v1/kms/verify/{name}":                    "/quicbaas.kms.v1.Crypto/Verify",
+	"POST /api/v1/kms/hmac/{name}/verify":               "/quicbaas.kms.v1.Crypto/VerifyHMAC",
+	"POST /api/v1/kms/hmac/{name}":                      "/quicbaas.kms.v1.Crypto/GenerateHMAC",
+	"POST /api/v1/kms/hash":                             "/quicbaas.kms.v1.Crypto/Hash",
+	"POST /api/v1/kms/random":                           "/quicbaas.kms.v1.Crypto/GenerateRandom",
+	"POST /api/v1/kms/data-keys":                        "/quicbaas.kms.v1.Crypto/GenerateDataKey",
+	"POST /api/v1/kms/data-keys/wrapped":                "/quicbaas.kms.v1.Crypto/GenerateWrappedDataKey",
+	"POST /api/v1/kms/deks":                             "/quicbaas.kms.v1.DEKManagement/CreateDEK",
+	"GET /api/v1/kms/deks":                              "/quicbaas.kms.v1.DEKManagement/ListDEKs",
+	"GET /api/v1/kms/deks/{path:.+}/status":             "/quicbaas.kms.v1.DEKManagement/GetDEKStatus",
+	"POST /api/v1/kms/deks/{path:.+}/rotate":            "/quicbaas.kms.v1.DEKManagement/RotateDEK",
+	"GET /api/v1/kms/deks/{path:.+}":                    "/quicbaas.kms.v1.DEKManagement/GetDEK",
+	"DELETE /api/v1/kms/deks/{path:.+}":                 "/quicbaas.kms.v1.DEKManagement/DeleteDEK",
+	"POST /api/v1/kms/secrets":                          "/quicbaas.kms.v1.SecretsManagement/StoreSecret",
+	"GET /api/v1/kms/secrets":                           "/quicbaas.kms.v1.SecretsManagement/ListSecrets",
+	"GET /api/v1/kms/secrets/{name}/versions/{version}": "/quicbaas.kms.v1.SecretsManagement/GetSecretVersion",
+	"GET /api/v1/kms/secrets/{name}/versions":           "/quicbaas.kms.v1.SecretsManagement/ListSecretVersions",
+	"POST /api/v1/kms/secrets/{name}/rotate":            "/quicbaas.kms.v1.SecretsManagement/RotateSecret",
+	"POST /api/v1/kms/secrets/{name}/rollback":          "/quicbaas.kms.v1.SecretsManagement/RollbackSecret",
+	"PUT /api/v1/kms/secrets/{name}/status":             "/quicbaas.kms.v1.SecretsManagement/UpdateSecretStatus",
+	"PUT /api/v1/kms/secrets/{name}/policy":             "/quicbaas.kms.v1.SecretsManagement/SetRotationPolicy",
+	"GET /api/v1/kms/secrets/{name}/policy":             "/quicbaas.kms.v1.SecretsManagement/GetRotationPolicy",
+	"GET /api/v1/kms/secrets/{name}":                    "/quicbaas.kms.v1.SecretsManagement/GetSecret",
+	"DELETE /api/v1/kms/secrets/{name}":                 "/quicbaas.kms.v1.SecretsManagement/DeleteSecret",
 }
 
 // catalogRouteScope returns the scope the gRPC catalog gives the method a
@@ -225,6 +270,18 @@ func catalogRouteScope(method, route string) (string, error) {
 		return "", ErrRESTRouteUnscoped{Method: method, Route: route, Reason: "the gRPC catalog gives " + rpc + " no scope"}
 	}
 	return scope, nil
+}
+
+// tenantBoundCatalogAPI is catalogGuardedAPI for routers whose shared SDK
+// clients scope by the context tenant: it binds the verified caller's tenant
+// and refuses a caller without one.
+func (s *RESTServer) tenantBoundCatalogAPI(guard *restapi.ScopeGuard, routeGate func(callerTenantID, route string) error) *mux.Router {
+	api := s.router.PathPrefix(restBasePath).Subrouter()
+	auth := s.catalogAuthorization(guard)
+	auth.bindTenant = true
+	auth.routeGate = routeGate
+	api.Use(auth.authorize)
+	return api
 }
 
 // catalogGuardedAPI returns a restBasePath subrouter whose routes each run
@@ -263,6 +320,17 @@ type restScopeAuthorization struct {
 	// callerGate, when set, refuses an authenticated, scoped caller the
 	// router cannot serve (for example a tenant it cannot bind).
 	callerGate func(callerTenantID string) error
+	// routeGate, when set, refuses a caller's tenant a route it may not use
+	// (for example a route whose backing store ignores the tenant).
+	routeGate func(callerTenantID, route string) error
+	// bindTenant, when set, refuses a caller with no tenant and binds the
+	// caller's tenant into both tenant context keys: the SDK transport's
+	// (sdktransport.ContextWithTenant), which the router's shared SDK clients
+	// read, and go-quicbaas pkg/iam's (iam.ContextWithTenant), which the
+	// embedded services read in prepareTenantContext after the embedded
+	// transport forwards the context unchanged. An empty tenant in either is
+	// system-wide.
+	bindTenant bool
 }
 
 // authorize answers 401 for a missing or invalid credential and 403 for a
@@ -284,8 +352,22 @@ func (a restScopeAuthorization) authorize(next http.Handler) http.Handler {
 				return
 			}
 		}
+		if a.routeGate != nil {
+			if err := a.routeGate(caller.TenantID, restRouteTemplate(r)); err != nil {
+				a.respWriter.Error403(w, r, err, nil)
+				return
+			}
+		}
 		ctx := context.WithValue(r.Context(), restCallerKey{}, caller)
 		ctx = grpcapi.ContextWithAuthorizedContext(ctx, caller)
+		if a.bindTenant {
+			if caller.TenantID == "" {
+				a.respWriter.Error403(w, r, restapi.ErrRouteForbidden{Scope: scope, Reason: "caller has no tenant to bind"}, nil)
+				return
+			}
+			ctx = sdktransport.ContextWithTenant(ctx, caller.TenantID)
+			ctx = qbiam.ContextWithTenant(ctx, caller.TenantID)
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

@@ -51,6 +51,13 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return newHarnessWith(t, nil)
+}
+
+// newHarnessWith is newHarness with the service params adjusted by
+// mutate before the service is built.
+func newHarnessWith(t *testing.T, mutate func(*ServiceParams)) *harness {
+	t.Helper()
 	p := newPKI(t)
 	h := &harness{
 		pki: p,
@@ -68,7 +75,7 @@ func newHarness(t *testing.T) *harness {
 		issuer:  &fakeIssuer{token: "console-jwt"},
 		logs:    &logSink{},
 	}
-	svc, err := NewService(ServiceParams{
+	params := ServiceParams{
 		Logger:       logging.NewLogger(slog.LevelDebug, h.logs),
 		Ceremony:     h.ceremony,
 		Factors:      h.factors,
@@ -77,7 +84,11 @@ func newHarness(t *testing.T) *harness {
 		TrustAnchors: p.pool,
 		TenantID:     testTenantID,
 		AdminEmail:   testAdminEmail,
-	})
+	}
+	if mutate != nil {
+		mutate(&params)
+	}
+	svc, err := NewService(params)
 	require.NoError(t, err)
 	h.svc = svc
 	return h

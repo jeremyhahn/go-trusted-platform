@@ -14,6 +14,7 @@ package rest
 
 import (
 	"encoding/json"
+	"time"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -68,6 +69,10 @@ func init() {
 
 	restResponseDecoders[platformv1.KeyManagementService_GenerateKey_FullMethodName] =
 		wireDecoder(platformv1.KeyManagementService_GenerateKey_FullMethodName, decodeKMSGenerateKey)
+	restResponseDecoders[platformv1.KeyManagementService_GetKey_FullMethodName] =
+		wireDecoder(platformv1.KeyManagementService_GetKey_FullMethodName, decodeKMSGetKey)
+	restResponseDecoders[platformv1.KeyManagementService_ListKeys_FullMethodName] =
+		wireDecoder(platformv1.KeyManagementService_ListKeys_FullMethodName, decodeKMSListKeys)
 }
 
 // encodeKMSGenerateKey flattens the key spec onto the route's top-level
@@ -175,6 +180,103 @@ func decodeKMSGenerateKey(raw []byte) (*platformv1.GenerateKeyResponse, error) {
 			Exportable:         reply.Exportable,
 			DeletionProtection: reply.DeletionProtection,
 		},
+	}, nil
+}
+
+// kmsKeyInfoReply is the KMS router's GET /api/v1/kms/keys/{name} payload,
+// the webservice's KeyInfoResponse: a flat key record, not the
+// {key, metadata} shape of GetKeyResponse.
+type kmsKeyInfoReply struct {
+	KeyID     string    `json:"key_id"`
+	Name      string    `json:"name"`
+	Algorithm string    `json:"algorithm"`
+	Version   uint64    `json:"version"`
+	Usage     []string  `json:"usage"`
+	CreatedAt time.Time `json:"created_at"`
+	RotatedAt time.Time `json:"rotated_at"`
+}
+
+// kmsKeyUsagesByName is kmsKeyUsageNames inverted.
+var kmsKeyUsagesByName = func() map[string]platformv1.KeyUsage {
+	out := make(map[string]platformv1.KeyUsage, len(kmsKeyUsageNames))
+	for usage, name := range kmsKeyUsageNames {
+		out[name] = usage
+	}
+	return out
+}()
+
+// kmsUnixSeconds is t in unix seconds, 0 for the zero time.
+func kmsUnixSeconds(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
+// decodeKMSGetKey fills GetKeyResponse's key handle and metadata from the
+// router's flat key record; the last rotation is the metadata's update time.
+func decodeKMSGetKey(raw []byte) (*platformv1.GetKeyResponse, error) {
+	var reply kmsKeyInfoReply
+	if err := json.Unmarshal(raw, &reply); err != nil {
+		return nil, ErrUnmarshalFailed{Err: err}
+	}
+	algorithm := kmsKeyAlgorithmsByName[reply.Algorithm]
+	created := kmsUnixSeconds(reply.CreatedAt)
+	usage := make([]platformv1.KeyUsage, 0, len(reply.Usage))
+	for _, name := range reply.Usage {
+		if u, ok := kmsKeyUsagesByName[name]; ok {
+			usage = append(usage, u)
+		}
+	}
+	return &platformv1.GetKeyResponse{
+		Key: &platformv1.KMSKeyHandle{
+			KeyId:     reply.KeyID,
+			Version:   reply.Version,
+			Algorithm: algorithm,
+			CreatedAt: created,
+		},
+		Metadata: &platformv1.KMSKeyMetadata{
+			KeyId:     reply.KeyID,
+			Name:      reply.Name,
+			Algorithm: algorithm,
+			Usage:     usage,
+			Version:   reply.Version,
+			CreatedAt: created,
+			UpdatedAt: kmsUnixSeconds(reply.RotatedAt),
+		},
+	}, nil
+}
+
+// kmsListKeysReply is the KMS router's ListKeys reply: each key as the flat
+// key-info object GetKey answers, plus the pagination fields.
+type kmsListKeysReply struct {
+	Keys       []kmsKeyInfoReply `json:"keys"`
+	NextCursor string            `json:"next_cursor"`
+	HasMore    bool              `json:"has_more"`
+	TotalCount int32             `json:"total_count"`
+}
+
+// decodeKMSListKeys maps the router's ListKeys reply, whose algorithm is a
+// name and created_at an RFC 3339 time, onto ListKeysResponse.
+func decodeKMSListKeys(raw []byte) (*platformv1.ListKeysResponse, error) {
+	var reply kmsListKeysReply
+	if err := json.Unmarshal(raw, &reply); err != nil {
+		return nil, ErrUnmarshalFailed{Err: err}
+	}
+	keys := make([]*platformv1.KMSKeyHandle, 0, len(reply.Keys))
+	for _, k := range reply.Keys {
+		keys = append(keys, &platformv1.KMSKeyHandle{
+			KeyId:     k.KeyID,
+			Version:   k.Version,
+			Algorithm: kmsKeyAlgorithmsByName[k.Algorithm],
+			CreatedAt: kmsUnixSeconds(k.CreatedAt),
+		})
+	}
+	return &platformv1.ListKeysResponse{
+		Keys:       keys,
+		NextCursor: reply.NextCursor,
+		HasMore:    reply.HasMore,
+		TotalCount: reply.TotalCount,
 	}, nil
 }
 

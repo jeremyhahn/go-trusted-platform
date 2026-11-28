@@ -1480,6 +1480,22 @@ func testIAMCheckPermission(t *testing.T, ctx context.Context, adapter ProtocolA
 	result, err := cmd.CheckPermission(ctx, iam.CheckPermissionOptions{
 		TenantID: helpers.HarnessTenantID, SubjectID: "test-user", Action: "read", Resource: "certificates",
 	})
+	// Checked before surfaceMissing, which may see the stub's status code
+	// as a missing surface.
+	if err != nil && strings.Contains(err.Error(), "service not configured: IAM.PEP") {
+		if gerr := helpers.GapEmbeddedIAMPEPCheck.CheckDefect("Check", true, "service not configured", err.Error()); gerr != nil {
+			t.Fatal(gerr)
+		}
+		return
+	}
+	// The pinned SDK's other answer to the same call: its embedded handler
+	// refuses the client's request type.
+	if err != nil && strings.Contains(err.Error(), "invalid request type for quicbaas.IAM.PEP/Check") {
+		if gerr := helpers.GapEmbeddedIAMPEPCheck.CheckDefect("Check", true, "invalid request type", err.Error()); gerr != nil {
+			t.Fatal(gerr)
+		}
+		return
+	}
 	if missing := surfaceMissing(adapter, "IAM", "CheckPermission", err); missing != nil {
 		t.Fatal(missing)
 	}

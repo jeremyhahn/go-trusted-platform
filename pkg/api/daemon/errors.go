@@ -1187,6 +1187,18 @@ func (e ErrIAMTenantForbidden) Error() string {
 	return fmt.Sprintf("IAM request names tenant %q: caller may not act on another tenant", e.Requested)
 }
 
+// ErrUnboundCaller is returned when an IAM or tenant request comes from a
+// caller with no tenant-bound identity that is not the kernel-verified
+// Unix-socket operator. Target names the method or tenant the request was
+// for.
+type ErrUnboundCaller struct {
+	Target string
+}
+
+func (e ErrUnboundCaller) Error() string {
+	return fmt.Sprintf("request for %q refused: caller has no tenant-bound identity and is not the Unix-socket operator", e.Target)
+}
+
 // ErrIAMRESTUnavailable is returned when the IAM REST routes cannot be
 // mounted on the daemon REST plane because a dependency is missing.
 type ErrIAMRESTUnavailable struct {

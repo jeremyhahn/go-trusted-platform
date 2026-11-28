@@ -20,6 +20,8 @@ import (
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	baaserrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
 
 // IsNotFound reports whether err is the refusal a go-quicbaas KV read
@@ -39,6 +41,12 @@ type ErrNotFound struct {
 
 func (e ErrNotFound) Error() string {
 	return fmt.Sprintf("entity not found: type=%s, id=%d", e.EntityType, e.ID)
+}
+
+// Is reports a DAO miss as a datastore.ErrRecordNotFound, so callers that
+// test for the shared sentinel read a missing record as a miss.
+func (e ErrNotFound) Is(target error) bool {
+	return target == datastore.ErrRecordNotFound
 }
 
 // ErrNotFoundByIndex is returned when an entity is not found by index lookup.

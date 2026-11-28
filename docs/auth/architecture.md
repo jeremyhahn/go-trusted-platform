@@ -269,8 +269,8 @@ two stores converge (phase 3 of #644):
 
 | Site | Backbone-issued session |
 |------|-------------------------|
-| `/login/refresh` — `jwt.RestHandler.RefreshToken` | `401 ErrInvalidToken`; the user store is not consulted. A refresh mints from the *current* authorization, and copying the old token's roles and tenant forward would roll a revoked privilege forward, so the client renews by running the login ceremony again. Test: `TestHandlerRefreshToken_RefusesABackboneSession` |
-| Session creation — `jwt.RestHandler.CreateSession` | `400 ErrInvalidUserClaim`, no session. Test: `TestCreateSession_RefusesABackboneSession` |
+| `/login/refresh` — `jwt.RestHandler.RefreshToken` | Refreshed from IAM, never the platform user store: the principal is re-read in the session's IAM tenant (`rest/iam.WorkspaceRoleResolver.Principal`) and a new backbone session carries the roles IAM holds now, so a revocation since login is picked up. `401 ErrInvalidToken` when the tenant no longer holds the principal, IAM cannot be read, or no IAM client is wired. Tests: `TestHandlerRefreshToken_RefreshesABackboneSessionFromIAM`, `TestHandlerRefreshToken_BackboneSessionPicksUpAnIAMRevocation`, `TestHandlerRefreshToken_BackboneSessionFailsClosed` |
+| Session creation — `jwt.RestHandler.CreateSession` | Still resolves the subject in the platform user store by email (#642) and refuses a user outside the session's tenant (`400`); it moves to IAM with the rest of phase 3. Test: `TestCreateSession_BackboneSessionRefusesAnotherTenantsUser` |
 | `POST /api/v1/invitations` — `rest/invitation` `resolveUserID` | Resolves no inviter (0) when the body names none; `InvitationService.Create` refuses it (`ErrInvalidInvitation`, "inviter ID is required") rather than recording an invitation from nobody. The tenant is the session's, which is now the workspace |
 | Tenant middleware — `middleware/tenant` `ExtractTenantContext` | `401 ErrMissingUserClaim`. Nothing constructs it (`NewMiddleware`) outside its tests today |
 | Legacy invitation handler — `webservice/v1/invitation` | `401` "missing user context". Nothing outside its tests imports the package today |
@@ -651,13 +651,21 @@ identity and signature checks before it touches the SDK.
   asymmetry with the bullet above is deliberate. The four conditions there
   mean the node cannot *verify* a certificate, so publishing the ceremony
   would be publishing an unverifiable admin surface. A clustered node
-  verifies perfectly well; what it cannot guarantee is *one-time-ness*, since
-  the ceremony's challenge and claim-token state is process-local and SDK
-  factor enrolment is not conditional (#170). So the four MUTATING paths —
-  `Challenge`, `Prove`, `BeginPasskey`, `FinishPasskey` — refuse with
-  `ErrMultiInstanceUnsupported`, answered as **501 Not Implemented** carrying
-  the reason and the issue that would lift it. It is not a 500: the refusal
-  is what this build implements, not a fault handling the request.
+  verifies perfectly well; what it needs is *one-time-ness* across
+  instances. On a multi-instance deployment the four MUTATING paths —
+  `Challenge`, `Prove`, `BeginPasskey`, `FinishPasskey` — **always** refuse
+  with `ErrMultiInstanceUnsupported`, answered as **501 Not Implemented**
+  carrying the reason and the issue, **whatever the transactions probe
+  (`adminclaim.ProbeTransactions`) answers**: `NewService` sets the refusal
+  from `MultiInstance` alone. The store-wide completion lease below (#172)
+  serialises the completion step, but it cannot fence a delayed enrolment —
+  a holder whose lease expired mid-write can still land its factor — so a
+  working transaction backend does not lift the refusal. Clustered claims
+  stay refused until the enrolment itself is fenced by the lease (a
+  write conditioned on the lease's revision); that is the prerequisite, not
+  the probe. It is not a 500: the refusal is what this build implements,
+  not a fault handling the request. (At the pinned SDK the embedded
+  transport does not carry transactions either, go-quicbaas #1319.)
 - **Status stays readable on a clustered node.** It mutates nothing, and the
   console has to be able to distinguish a deployment that will not run the
   ceremony from one that is simply broken. Refusing it would remove that
@@ -680,13 +688,19 @@ identity and signature checks before it touches the SDK.
   otherwise both observe an unclaimed identity and both enrol, letting a
   copied bootstrap key race the legitimate operator. A process-local lock
   makes the loser observe the winner's enrolment and get `ErrAlreadyClaimed`.
-  *Residual, and it is a real one:* several `platformd` instances sharing one
-  qrdb could still both complete, because the lock is process-local. Closing
-  it needs a **conditional** factor enrolment from the SDK — `Factors().Add`
-  and the WebAuthn write-through are both unconditional — so it cannot be
-  fixed from this side without inventing a distributed lease, which is a
-  larger design than this change carries. Tracked upstream as **#170**;
-  until then, run the ceremony against a single active instance.
+  Across several `platformd` instances sharing one store, a
+  **compare-and-swap lease** on that store does the same job
+  (`adminclaim/completion.go`, #172): taken after the claim token is
+  redeemed (an unproved caller never writes to the store) and before the
+  factor history is read, so only its holder can observe an unclaimed
+  identity and enrol. Another instance is refused with
+  `ErrClaimInProgress` (**409**); a store that cannot run the transaction
+  fails the claim closed (**503**). The lease expires after two minutes and
+  its holder's work is bounded to one, so a live holder is never taken
+  over; it is released whatever the outcome, because the factor history,
+  not the lease, keeps a claimed identity closed. Challenges and claim
+  tokens stay process-local: a token proved on one instance is refused by
+  another, so the ceremony runs against one instance.
 - **Nothing that can fail runs after the enrolment.** The SDK enrolment is
   the irreversible step — once the factor exists the ceremony is closed
   forever — so the platform-local admin record is written *before* it. A
@@ -1222,6 +1236,50 @@ belongs to the second REST server tracked on #232.
 Tracked on #165 (the seven routes) and #420 (the audit's reach) — do not read
 this section as a claim that the platform is fully gated.
 
+### What row #646 still owes after its interim landing (owner ruling 1234)
+
+The owner ruled (2026-11-23) that the row PR lands as an interim step: the
+SPEC row `auth` stays open on #646. What the landing does close is sub-row
+#2006: an IAM or tenant gRPC call from a caller with no tenant-bound
+identity is refused with `PermissionDenied`, unless its context carries the
+kernel-verified peer credentials the Unix-socket server attaches
+(`admitUnbound`, `pkg/api/daemon/iam_tenant_authz.go`). A daemon run with
+`SkipIAMValidation` is no longer an admitted caller. What the row still
+owes, each with the place that shows the gap today:
+
+- **Platform permission vocabulary (F28, F19, F24; upstream).** The mTLS
+  principal's PEP asks over a catalog this repo derives itself:
+  `concretePermissionCatalog` (`pkg/api/daemon/mtls_principal.go:71-95`)
+  crosses every scope resource with the REST method actions, which yields
+  permissions such as `device:read` that the pinned IAM vocabulary does not
+  define. The vocabulary belongs to go-qrdb, re-exported through the
+  go-quicbaas SDK; it needs their release and a tagged bump.
+- **User lookup past the first page (F5; upstream).** The pinned embedded
+  transport's `User/List` drops the page size, so the fallback lookup sees
+  one page of 100 users and fails closed with `ErrTruncated` rather than
+  report "no such user" (`pkg/auth/iamuser/iamuser.go:56-65`). It needs the
+  go-quicbaas embedded transport to page.
+- **Test fixture behind an SDK seam (F8; upstream).** `iamusertest` builds
+  its embedded IAM from go-quicbaas internals, `pkg/iam` and `pkg/service`
+  (`pkg/auth/iamuser/iamusertest/embedded.go:23-24`). It needs a public
+  go-quicbaas SDK seam for an in-process IAM.
+- **Tenant-bound policy evaluation through the SDK (F23; upstream).** The
+  PEP imports go-qrdb's SDK and go-quicbaas `pkg/iam` directly
+  (`pkg/api/daemon/iam_policy_engine_pep.go:21-22`) instead of evaluating
+  through the go-quicbaas SDK.
+- **A per-request PEP decision (F10; this repo, later on the row).** The PEP
+  decides once per authentication, over the fixed catalog
+  (`pkg/api/daemon/mtls_principal.go:181-222`), not per request at each
+  transport enforcement point (the REST `ScopeGuard`, QUIC and MCP). It
+  follows the vocabulary above.
+- **Invitation roles against `ListRoles` (#1992; upstream).** An invitation's
+  role is checked against the fixed `ValidRoles` set
+  (`pkg/webservice/v1/invitation/types.go:106-117`), not against the
+  tenant's IAM roles from `ListRoles`.
+
+This list is the row's remaining work. Do not read the interim landing as
+the row closed.
+
 ## 6d. Second authorization models (audit, #926)
 
 The owner ruled on 2026-10-15 that IAM and RBAC form one model for every
@@ -1240,7 +1298,7 @@ been fixed.
 
 | # | Where (file:line) | What it decides | Replaced by |
 |---|---|---|---|
-| A1 | `pkg/api/daemon/transport_auth.go:237`, `:259` (`mtlsOperatorScope`, `mtlsPeerAuthenticator.AuthenticatePeer`) | Every caller with a verified client certificate gets `*:*` on QUIC, REST and MCP | `IAMPEPClient.Check` (`sdk/go`, alias of `client/iam.PEPClient`) for the certificate's principal |
+| A1 | `pkg/api/daemon/transport_auth.go` (`mtlsPeerAuthenticator.AuthenticatePeer`), `mtls_principal.go` | **Fixed (#1107).** A verified client certificate no longer gets `*:*` on QUIC, REST and MCP: it acts as the IAM user it names in its tenant, with the permissions of that user's roles, and is refused when IAM holds no active principal for it | `IAMPEPClient.Check` (`sdk/go`, alias of `client/iam.PEPClient`) per operation, once the transports take a decision point |
 | A2 | `pkg/api/daemon/mtls_interceptor.go:75`, `:101` | The gRPC mTLS interceptors authenticate the caller and then call the handler, with no per-method check | `IAMPEPClient.Check` per method |
 | A3 | `pkg/api/quic/auth.go:281-304` (`AuthorizeRequest`) | Allows an operation whose scope is empty (`:288-289`), and every request when no checker is wired (`:303-304`) | `IAMPEPClient.Check`. Deny when no decision point is wired |
 | A4 | `pkg/api/grpc/method_permissions.go:54` (`preAuthMethods`), `:113` (`buildGRPCMethodPermissions`) | The platform's own gRPC method → `resource:action` catalogue | No SDK surface yet: per-method declarations in an API module, like `ModuleMCPToolPermissions` (`ModuleGRPCPublicMethods` lists only the public methods) |

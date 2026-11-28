@@ -105,6 +105,8 @@ func PlatformCertIssuer(ca quicbaasca.CACertificateAuthority, client quicbaassdk
 // names the system tenant as well.
 func AdminCertificateRequest() *certclient.IssueCertificateRequest {
 	return &certclient.IssueCertificateRequest{
+		// The mTLS authenticator reads the tenant from the subject OU
+		// only (#2020), so the admin certificate must carry it there.
 		CommonName:         common.AdminUsername,
 		Organization:       app.SystemTenantID,
 		OrganizationalUnit: app.SystemTenantID,
@@ -253,6 +255,7 @@ func (i *localCACertIssuer) issue(ctx context.Context, req *certclient.IssueCert
 		DNSNames:    req.DNSNames,
 		IPAddresses: ips,
 	}
+	// mTLS takes the tenant from the subject OU only; never write an empty OU.
 	if req.OrganizationalUnit != "" {
 		csrTpl.Subject.OrganizationalUnit = []string{req.OrganizationalUnit}
 	}

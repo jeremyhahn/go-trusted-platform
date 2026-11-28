@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getCookie } from "./cookie";
-import { clearSession, storeSession } from "./session";
+import { getCookie, setCookie } from "./cookie";
+import { clearSession, revokeSession, storeSession } from "./session";
 import type { Session } from "@/types/session";
 
 // The cookies a session is made of. Every one of them must be gone after
@@ -114,5 +114,84 @@ describe("clearSession", () => {
     for (const name of SESSION_COOKIES) {
       expect(getCookie(name)).toBeNull();
     }
+  });
+});
+
+// #215: signing out must revoke the bearer on the server, not only drop
+// the browser's copy of it.
+describe("revokeSession", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    wipe();
+    fetchMock = vi.fn(() => Promise.resolve(new Response(null, { status: 200 })));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    wipe();
+  });
+
+  function respond(status: number): void {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response(null, { status })));
+  }
+
+  it("posts the bearer to the logout endpoint and reports it revoked on 200", async () => {
+    setCookie("jwt", "the-bearer", { secure: true, sameSite: "Strict" });
+
+    await expect(revokeSession()).resolves.toBe("revoked");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toMatch(/\/api\/v1\/logout$/);
+    expect(init.method).toBe("POST");
+    expect(init.keepalive).toBe(true);
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer the-bearer",
+    );
+  });
+
+  it("sends the bearer it read even when the cookies are cleared right after", async () => {
+    setCookie("jwt", "the-bearer", { secure: true, sameSite: "Strict" });
+
+    const outcome = revokeSession();
+    clearSession();
+    await outcome;
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer the-bearer",
+    );
+  });
+
+  it("reports none and sends nothing when there is no session", async () => {
+    await expect(revokeSession()).resolves.toBe("none");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // #646: a bearer the server already refuses has nothing left to revoke.
+  it("reports rejected on 401", async () => {
+    setCookie("jwt", "the-bearer", { secure: true, sameSite: "Strict" });
+    respond(401);
+
+    await expect(revokeSession()).resolves.toBe("rejected");
+  });
+
+  // #646: the server could not record the revocation, so the session may
+  // still be valid there, and the caller must not call it signed out.
+  it("reports failed on 503", async () => {
+    setCookie("jwt", "the-bearer", { secure: true, sameSite: "Strict" });
+    respond(503);
+
+    await expect(revokeSession()).resolves.toBe("failed");
+  });
+
+  it("reports failed when the request itself fails", async () => {
+    setCookie("jwt", "the-bearer", { secure: true, sameSite: "Strict" });
+    fetchMock.mockImplementation(() => Promise.reject(new Error("offline")));
+
+    await expect(revokeSession()).resolves.toBe("failed");
   });
 });

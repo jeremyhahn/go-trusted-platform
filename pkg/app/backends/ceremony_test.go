@@ -16,6 +16,7 @@ package backends
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -122,6 +123,40 @@ func TestCeremonyBackend_Initialize_IssuerFailureLeavesCeremonyUntouched(t *test
 	}
 	if len(calls) != 1 || calls[0] != "admin" {
 		t.Fatalf("ceremony must not run after an issuing failure; calls = %v", calls)
+	}
+}
+
+// Without a local CA the admin issuer falls back to the SDK certificate
+// service, which cannot carry the tenant OU: the ceremony must fail closed
+// with an error that says a local CA is required, issue no certificate and
+// never start the ceremony.
+func TestCeremonyBackend_Initialize_NoLocalCARequiresLocalCA(t *testing.T) {
+	var calls []string
+	ceremony := &fakeQRDBCeremony{
+		calls: &calls,
+		resp:  &quicbaassdk.QRDBCeremonyInitializeResponse{SPKIPin: "pin", State: "in_progress"},
+	}
+	cert := &countingCertService{}
+	admin := NewAdminBundleIssuer(PlatformCertIssuer(nil, &certCountingClient{cert: cert}), testAdminIdentity)
+	b := NewCeremonyBackend(logging.DefaultLogger(), &fakeQuicbaasClient{ceremony: ceremony}, admin)
+
+	_, err := b.Initialize(context.Background(), &daemon.CeremonyInitRequest{})
+	var localErr *ErrCeremonyLocalCARequired
+	if !errors.As(err, &localErr) {
+		t.Fatalf("err = %v, want *ErrCeremonyLocalCARequired", err)
+	}
+	var ouErr *ErrCertOUUnsupported
+	if !errors.As(err, &ouErr) {
+		t.Fatalf("err = %v, want it to wrap *ErrCertOUUnsupported", err)
+	}
+	if !strings.Contains(err.Error(), "local CA") {
+		t.Errorf("err = %q, want it to name the local CA requirement", err)
+	}
+	if cert.calls != 0 {
+		t.Errorf("SDK IssueCertificate calls = %d, want 0", cert.calls)
+	}
+	if len(calls) != 0 {
+		t.Errorf("ceremony must not run without a local CA; calls = %v", calls)
 	}
 }
 

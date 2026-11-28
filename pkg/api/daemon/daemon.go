@@ -23,6 +23,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
+	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	"sync/atomic"
 	"time"
 
@@ -351,6 +354,24 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	var iamPEP iamsdk.PEPClient
 	if iamService != nil {
 		iamPEP = iamService.PEP()
+	}
+	// A client certificate acts as its IAM principal, with the permissions
+	// of that principal the IAM PEP allows, on QUIC, REST and MCP (#1107;
+	// SPEC 107-108: IAMPEPClient.Check decides every request).
+	if config.MTLSPrincipals == nil && iamService != nil {
+		if client := iamService.Client(); client != nil {
+			// The pinned embedded transport answers every IAM.PEP check
+			// "not configured": ask the app's policy engine when it has one.
+			certPEP, usesEngine := certificatePrincipalPEP(context.Background(), config.App.QuicBaaSService(), iamPEP)
+			if !usesEngine {
+				logger.Info("mTLS certificate principals use the IAM SDK PEP: no app policy engine available")
+			}
+			principals, principalsErr := newIAMCertificatePrincipals(client.User(), client.Role(), certPEP)
+			if principalsErr != nil {
+				return nil, principalsErr
+			}
+			config.MTLSPrincipals = principals
+		}
 	}
 
 	// Build the shared broker platform-token validator once when configured. It
@@ -1596,6 +1617,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// the same CA instance as the gRPC, QUIC, MCP and Unix-socket adapters
 	// so all transports return identical results.
 	if daemon.concreteRestServer != nil && config.CAService != nil {
+		// The auth-factor issuance route asks the IAM PEP; with IAM off
+		// the PEP stays nil and the route refuses.
+		if iamService != nil {
+			if pep := iamService.PEP(); pep != nil {
+				daemon.concreteRestServer.SetAuthFactorPEP(pep)
+			}
+		}
 		daemon.concreteRestServer.SetCAHandlers(config.CAService, restGuard)
 	}
 
@@ -1612,6 +1640,20 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// the same QuicBaaS SDK clients as the gRPC and embedded transports so
 	// all transports return identical results.
 	if daemon.concreteRestServer != nil && kmsPlatformBackend != nil {
+		// The docs/kms/api.md routes (key name in the path, /deks,
+		// /secrets) the SDK REST transport calls go first; the legacy
+		// bare-path handlers serve what that router does not (#646).
+		var dekSDK dekclient.Client
+		var secretsSDK secretsclient.Client
+		if config.App != nil {
+			if sdk := config.App.QuicBaaSSDKClient(); sdk != nil {
+				if security := sdk.Security(); security != nil {
+					dekSDK = security.DEK()
+					secretsSDK = security.Secrets()
+				}
+			}
+		}
+		daemon.concreteRestServer.SetKMSRouter(kmsPlatformBackend.kmsClient, kmsPlatformBackend.cryptoClient, dekSDK, secretsSDK, restGuard)
 		daemon.concreteRestServer.SetKMSHandlers(NewPlatformKMSRESTFacade(kmsPlatformBackend))
 	}
 

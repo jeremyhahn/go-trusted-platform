@@ -86,6 +86,14 @@ var (
 //     is the email. Inventing a metadata key no hydrator in this stack
 //     writes would be worse than saying that plainly.
 func (service *Service) IssueSession(identity *quicbaas.Identity) (string, time.Time, error) {
+	return service.IssueSessionIn(identity, "")
+}
+
+// IssueSessionIn mints a backbone session token in the login session
+// sessionID: a refresh passes the presented token's session id so a
+// logout revokes the whole chain (#1906). An empty sessionID starts a
+// new session (a login).
+func (service *Service) IssueSessionIn(identity *quicbaas.Identity, sessionID string) (string, time.Time, error) {
 	if service == nil {
 		return "", time.Time{}, ErrSignerUnavailable
 	}
@@ -102,13 +110,18 @@ func (service *Service) IssueSession(identity *quicbaas.Identity) (string, time.
 	now := time.Now()
 	expiresAt := now.Add(time.Minute * time.Duration(service.params.Expiration))
 	roles := append([]string(nil), identity.Roles...)
+	if sessionID == "" {
+		sessionID = newTokenID()
+	}
 
 	token := jwt.NewWithClaims(service.signingMethod, TokenClaims{
 		UserIDStr: identity.Subject,
 		Email:     identity.Subject,
 		TenantID:  identity.TenantID,
 		Roles:     roles,
+		SessionID: sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        newTokenID(),
 			Subject:   identity.Subject,
 			Audience:  jwt.ClaimStrings{service.params.Audience},
 			Issuer:    service.params.Issuer,

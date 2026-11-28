@@ -36,6 +36,8 @@ func TestNewMCPPeerAuthenticator_MTLS_AdmitsTheOperatorCertificate(t *testing.T)
 	config := failClosedConfig()
 	config.EnableMTLS = true
 	config.MTLSClientCAPool = trusted.CAPool
+	principals := operatorPrincipals()
+	config.MTLSPrincipals = principals
 
 	peers, err := newMCPPeerAuthenticator(config, logging.DefaultLogger())
 	require.NoError(t, err)
@@ -45,8 +47,9 @@ func TestNewMCPPeerAuthenticator_MTLS_AdmitsTheOperatorCertificate(t *testing.T)
 	authCtx, err := peers.AuthenticatePeer(context.Background(), []*x509.Certificate{leaf, trusted.CACert})
 	require.NoError(t, err)
 	require.NotEmpty(t, leaf.Subject.Organization)
-	assert.Equal(t, leaf.Subject.Organization[0], authCtx.TenantID, "the tenant is the certificate's")
-	assert.Equal(t, []string{mtlsOperatorScope}, authCtx.Scopes)
+	require.Len(t, principals.asked, 1)
+	assert.Equal(t, leaf.Subject.Organization[0], principals.asked[0].TenantID, "the tenant is the certificate's")
+	assert.Equal(t, []string{"*:*"}, authCtx.Scopes, "the operator principal's role permissions, not a default grant")
 
 	_, err = peers.AuthenticatePeer(context.Background(), []*x509.Certificate{leafOf(t, foreign.ClientCert)})
 	assert.Error(t, err, "a certificate from another CA is not the operator")

@@ -24,6 +24,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -33,6 +34,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -279,7 +282,7 @@ func TestMTLSProbe_WithCert_NoCA_Returns204(t *testing.T) {
 
 func TestIssueCert_ValidCSR_ReturnsCert(t *testing.T) {
 	testCA := newAuthTestCA(t)
-	router := registerRoutes(newHandlerWithCA(testCA))
+	router := newPEPIssueRouter(testCA, &fakeAuthFactorPEP{allowed: true})
 
 	csrPEM := generateAuthTestCSRPEM(t)
 	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: csrPEM})
@@ -287,6 +290,7 @@ func TestIssueCert_ValidCSR_ReturnsCert(t *testing.T) {
 		"/api/v1/users/user-abc/factors/mtls/issue-cert",
 		bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer alice-token")
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -299,13 +303,14 @@ func TestIssueCert_ValidCSR_ReturnsCert(t *testing.T) {
 
 func TestIssueCert_InvalidCSR_Returns400(t *testing.T) {
 	testCA := newAuthTestCA(t)
-	router := registerRoutes(newHandlerWithCA(testCA))
+	router := newPEPIssueRouter(testCA, &fakeAuthFactorPEP{allowed: true})
 
 	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: "not-a-valid-pem"})
 	req := httptest.NewRequest(http.MethodPost,
 		"/api/v1/users/user-abc/factors/mtls/issue-cert",
 		bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer alice-token")
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -314,13 +319,14 @@ func TestIssueCert_InvalidCSR_Returns400(t *testing.T) {
 
 func TestIssueCert_MissingCSRPEM_Returns400(t *testing.T) {
 	testCA := newAuthTestCA(t)
-	router := registerRoutes(newHandlerWithCA(testCA))
+	router := newPEPIssueRouter(testCA, &fakeAuthFactorPEP{allowed: true})
 
 	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: ""})
 	req := httptest.NewRequest(http.MethodPost,
 		"/api/v1/users/user-abc/factors/mtls/issue-cert",
 		bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer alice-token")
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -342,44 +348,130 @@ func TestIssueCert_NoCAService_Returns503(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
-func TestIssueCert_NonAdminOtherUser_Returns403(t *testing.T) {
-	testCA := newAuthTestCA(t)
-	router := registerRoutes(newHandlerWithCA(testCA))
+// aliceTokens is a TokenAuthorizer that authorizes the bearer "alice-token"
+// as the member alice of tenant-a and refuses any other token.
+type aliceTokens struct{}
 
-	csrPEM := generateAuthTestCSRPEM(t)
-	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: csrPEM})
-	req := httptest.NewRequest(http.MethodPost,
-		"/api/v1/users/other-user/factors/mtls/issue-cert",
-		bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	// Present a client cert whose CN is "regular-user" (not "other-user" and not "admin").
-	leafCert := selfSignedClientCert(t, "regular-user")
-	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{leafCert}}
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-
-	assert.Equal(t, http.StatusForbidden, rr.Code)
+func (aliceTokens) AuthorizeToken(_ context.Context, token, _, _, _, _ string) (*platformtoken.AuthorizedContext, error) {
+	if token != "alice-token" {
+		return nil, errors.New("unknown token")
+	}
+	return &platformtoken.AuthorizedContext{Subject: "alice", TenantID: "tenant-a", Roles: []string{"member"}}, nil
 }
 
-func TestIssueCert_SameUserAsCaller_Succeeds(t *testing.T) {
-	testCA := newAuthTestCA(t)
-	router := registerRoutes(newHandlerWithCA(testCA))
+// fakeAuthFactorPEP records every Check request and answers allowed/err.
+type fakeAuthFactorPEP struct {
+	allowed bool
+	err     error
+	asked   []*sdkiam.CheckRequest
+}
 
-	csrPEM := generateAuthTestCSRPEM(t)
-	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: csrPEM})
-	req := httptest.NewRequest(http.MethodPost,
-		"/api/v1/users/alice/factors/mtls/issue-cert",
-		bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+func (p *fakeAuthFactorPEP) Check(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+	p.asked = append(p.asked, req)
+	if p.err != nil {
+		return nil, p.err
+	}
+	return &sdkiam.CheckResponse{Allowed: p.allowed}, nil
+}
 
-	// Client cert CN matches the URL {id}.
-	leafCert := selfSignedClientCert(t, "alice")
-	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{leafCert}}
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
+// countingCA counts SignCSR calls on the wrapped CA.
+type countingCA struct {
+	authCA
+	signed int
+}
 
-	assert.Equal(t, http.StatusCreated, rr.Code)
+func (c *countingCA) SignCSR(ctx context.Context, csrPEM []byte, opts *quicbaasca.SignOptions) (*x509.Certificate, error) {
+	c.signed++
+	return c.authCA.SignCSR(ctx, csrPEM, opts)
+}
+
+// newPEPIssueRouter builds the auth-factor routes with the alice token guard
+// and the given PEP.
+func newPEPIssueRouter(ca authCA, pep AuthFactorPEP) *mux.Router {
+	return registerRoutes(newHandlerWithCA(ca).WithAuthorization(NewScopeGuard(aliceTokens{}, nil, nil), pep))
+}
+
+// adminCertificateTLS is a TLS state presenting a client certificate whose
+// CN and OU are both "admin": the bypass the CN/OU checks used to grant.
+func adminCertificateTLS(t *testing.T) *tls.ConnectionState {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: "admin", OrganizationalUnit: []string{"admin"}},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	return &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{cert},
+		VerifiedChains:   [][]*x509.Certificate{{cert}},
+	}
+}
+
+func TestIssueCert_DecidedByPEP(t *testing.T) {
+	tests := []struct {
+		name       string
+		pep        *fakeAuthFactorPEP
+		noGuard    bool
+		bearer     string
+		tls        func(t *testing.T) *tls.ConnectionState
+		wantStatus int
+		wantAsked  bool
+	}{
+		{name: "pep allows", pep: &fakeAuthFactorPEP{allowed: true}, bearer: "alice-token", wantStatus: http.StatusCreated, wantAsked: true},
+		{name: "pep denies", pep: &fakeAuthFactorPEP{}, bearer: "alice-token", wantStatus: http.StatusForbidden, wantAsked: true},
+		{name: "pep errors", pep: &fakeAuthFactorPEP{err: errors.New("iam unavailable")}, bearer: "alice-token", wantStatus: http.StatusForbidden, wantAsked: true},
+		{name: "certificate CN/OU admin only", pep: &fakeAuthFactorPEP{allowed: true}, tls: adminCertificateTLS, wantStatus: http.StatusForbidden},
+		{name: "no principal no tls", pep: &fakeAuthFactorPEP{allowed: true}, wantStatus: http.StatusForbidden},
+		{name: "no authorization configured", pep: &fakeAuthFactorPEP{allowed: true}, noGuard: true, bearer: "alice-token", wantStatus: http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ca := &countingCA{authCA: newAuthTestCA(t)}
+			router := newPEPIssueRouter(ca, tt.pep)
+			if tt.noGuard {
+				router = registerRoutes(newHandlerWithCA(ca))
+			}
+
+			body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: generateAuthTestCSRPEM(t)})
+			req := httptest.NewRequest(http.MethodPost,
+				"/api/v1/users/alice/factors/mtls/issue-cert",
+				bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			if tt.bearer != "" {
+				req.Header.Set("Authorization", "Bearer "+tt.bearer)
+			}
+			if tt.tls != nil {
+				req.TLS = tt.tls(t)
+			}
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, req)
+
+			assert.Equal(t, tt.wantStatus, rr.Code)
+			if tt.wantStatus == http.StatusCreated {
+				assert.Equal(t, 1, ca.signed)
+			} else {
+				assert.Equal(t, 0, ca.signed, "nothing is signed when refused")
+				assert.Contains(t, rr.Body.String(), ErrForbiddenUserID{}.Error())
+			}
+			if !tt.wantAsked {
+				assert.Empty(t, tt.pep.asked, "the PEP is not asked without a principal")
+				return
+			}
+			require.Len(t, tt.pep.asked, 1)
+			got := tt.pep.asked[0]
+			assert.Equal(t, "alice", got.Subject.ID)
+			assert.Equal(t, "tenant-a", got.Subject.TenantID)
+			assert.Equal(t, []string{"member"}, got.Subject.Roles)
+			assert.Equal(t, "user_authfactors", got.Resource)
+			assert.Equal(t, "add", got.Action)
+		})
+	}
 }
 
 // =============================================================================

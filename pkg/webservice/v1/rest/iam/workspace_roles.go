@@ -15,10 +15,14 @@ package iam
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/google/uuid"
 	qberrors "github.com/jeremyhahn/go-quicbaas/pkg/errors"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth/iamuser"
 )
 
 // WorkspaceRoleResolver answers which roles a principal holds in a tenant
@@ -27,10 +31,11 @@ import (
 // roles, never the operating tenant's (#662).
 //
 // The principal is named by email, as the backbone names it and as the
-// user mirror writes it. IAM stores a user's roles as role IDs (the SDK's
-// CreateUserRequest.Roles carries IDs, see role_ids.go), while the session
-// guards check role names such as "admin", so the resolver names them from
-// the tenant's roles.
+// user mirror writes it. IAM stores the user's roles as canonical role IDs
+// (built-in roles carry tenant-specific UUIDs), while the session guards
+// check role names ("admin" for a workspace owner), so the resolver maps
+// every stored reference to its role name through the tenant's role listing
+// and refuses one the listing does not hold.
 type WorkspaceRoleResolver struct {
 	client IAMClient
 }
@@ -48,26 +53,19 @@ func NewWorkspaceRoleResolver(client IAMClient) (*WorkspaceRoleResolver, error) 
 //
 // A principal the IAM tenant does not hold has no roles there: that is an
 // empty answer, not an error, because an invited member is mirrored only by
-// the startup reconcile and must still be able to sign in as a member. Any
-// other failure is returned, so the caller refuses rather than guesses.
+// the startup reconcile and must still be able to sign in as a member. A
+// principal the tenant holds but not as an active account is refused with
+// ErrInactiveAccount, as Principal refuses it at refresh (#646). Any other
+// failure is returned, so the caller refuses rather than guesses.
 //
-// Each of the user's role references is named, in order, with GetRole:
-// a role GetRole finds gives its name, and a reference it does not find is
-// kept unchanged (a role stored by name, or one since deleted). The embedded
-// transport routes GetRole and answers a missing role with the server's own
-// not-found error, which is kept like any other not-found. A transport that
-// does not route GetRole answers the first call with an unknown-method error;
-// the references are then named from the tenant's role list instead. Any
-// other GetRole failure is returned.
+// Each stored role ID is named with GetRole (see roleNames); a transport
+// that does not route GetRole is named from the tenant's role list instead.
 //
 // An account whose lifecycle is suspended, locked, disabled or deleting is
 // refused with ErrWorkspaceAccountInactive before any role is named; an
 // active, pending (invited) or unreported ("") lifecycle is admitted.
 func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject string) ([]string, error) {
-	user, err := r.client.GetUserByEmail(ctx, tenantID, subject)
-	if sdkerrors.IsNotFound(err) {
-		return nil, nil
-	}
+	user, active, err := r.activeUser(ctx, tenantID, subject)
 	if err != nil {
 		return nil, err
 	}
@@ -80,23 +78,107 @@ func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject str
 	if len(user.Roles) == 0 {
 		return nil, nil
 	}
-	roles := make([]string, 0, len(user.Roles))
-	for i, ref := range user.Roles {
+	if !active {
+		return nil, ErrInactiveAccount{TenantID: tenantID, Subject: subject}
+	}
+	return r.roleNames(ctx, tenantID, user.Roles)
+}
+
+// roleNames maps the role references IAM stores on a user to the role
+// names the session guards check. It looks each stored role ID (a UUID) up
+// with GetRole, since the role listing answers only its first page, keeps a
+// reference that is already a role name, and returns an error for an ID the
+// tenant does not hold, never a guessed name. A user with no roles costs no
+// lookup. A transport that does not route GetRole answers with an
+// unknown-method error; the references are then named from the tenant's
+// role list, with the same refusal of an ID the list does not hold.
+func (r *WorkspaceRoleResolver) roleNames(ctx context.Context, tenantID string, refs []string) ([]string, error) {
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		// Role IDs are UUIDs; any other reference is already a role name.
+		if uuid.Validate(ref) != nil {
+			out = append(out, ref)
+			continue
+		}
 		role, err := r.client.GetRole(ctx, tenantID, ref)
 		switch {
-		case err == nil:
-			if role != nil && role.Name != "" {
-				ref = role.Name
-			}
-		case isRoleNotFound(err):
-		case i == 0 && isUnknownMethod(err):
-			return r.namesFromRoleList(ctx, tenantID, user.Roles)
-		default:
+		case isRoleNotFound(err) || (err == nil && role == nil):
+			return nil, fmt.Errorf("iam: tenant %q holds no role %q", tenantID, ref)
+		case err != nil && isUnknownMethod(err):
+			return r.namesFromRoleList(ctx, tenantID, refs)
+		case err != nil:
 			return nil, err
 		}
-		roles = append(roles, ref)
+		out = append(out, role.Name)
 	}
-	return roles, nil
+	return out, nil
+}
+
+// Principal returns the roles subject holds in tenantID's IAM tenant, and
+// whether that tenant holds subject as an active account. Unlike Roles it
+// tells a user IAM no longer admits from one with no roles, so a session
+// refresh fails closed on the first (#646): a user IAM no longer holds, or
+// holds as suspended, locked, disabled, pending or being deleted, is not
+// found.
+func (r *WorkspaceRoleResolver) Principal(ctx context.Context, tenantID, subject string) ([]string, bool, error) {
+	user, active, err := r.activeUser(ctx, tenantID, subject)
+	if err != nil {
+		return nil, false, err
+	}
+	if !active {
+		return nil, false, nil
+	}
+	roles, err := r.roleNames(ctx, tenantID, user.Roles)
+	if err != nil {
+		return nil, false, err
+	}
+	return roles, true, nil
+}
+
+// activeUser reads subject's user in tenantID and whether IAM holds it as
+// an active account (iamuser.Active). It is the one lifecycle check Roles
+// and Principal share, so login and refresh cannot disagree on who is
+// admitted. A user the tenant does not hold is a nil user, not an error;
+// any other lookup failure is returned.
+func (r *WorkspaceRoleResolver) activeUser(ctx context.Context, tenantID, subject string) (*iamsdk.User, bool, error) {
+	user, err := r.userByEmail(ctx, tenantID, subject)
+	if sdkerrors.IsNotFound(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if user == nil {
+		return nil, false, nil
+	}
+	return user, iamuser.Active(user), nil
+}
+
+// ErrInactiveAccount is Roles' refusal of a principal the workspace holds
+// as suspended, locked, disabled, pending or being deleted. The login
+// driver wraps it and aborts the login, so such an account gets no
+// workspace session even when its operating-tenant credential is valid.
+type ErrInactiveAccount struct {
+	TenantID string
+	Subject  string
+}
+
+func (e ErrInactiveAccount) Error() string {
+	return "iam: account " + e.Subject + " is not active in tenant " + e.TenantID
+}
+
+// userByEmail reads the tenant's user named by email. The pinned SDK's
+// embedded transport has no User/GetByEmail, so on it the lookup falls back
+// to the tenant's user listing (see iamuser.Find).
+func (r *WorkspaceRoleResolver) userByEmail(ctx context.Context, tenantID, email string) (*iamsdk.User, error) {
+	return iamuser.Find(ctx,
+		func(ctx context.Context) (*iamsdk.User, error) {
+			return r.client.GetUserByEmail(ctx, tenantID, email)
+		},
+		func(ctx context.Context, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+			return r.client.ListUsers(ctx, tenantID, req)
+		},
+		iamuser.ByEmail(email))
 }
 
 // isRoleNotFound reports whether a GetRole error means the role does not
@@ -117,21 +199,27 @@ func isInactiveLifecycle(lifecycle string) bool {
 	return false
 }
 
-// namesFromRoleList names refs from the tenant's role list, keeping a
-// reference no role ID matches; it serves a transport without GetRole.
+// namesFromRoleList names refs from the tenant's role list for a transport
+// without GetRole. A reference that is not a UUID is already a role name; a
+// role ID the list does not hold is refused, as roleNames refuses it.
 func (r *WorkspaceRoleResolver) namesFromRoleList(ctx context.Context, tenantID string, refs []string) ([]string, error) {
 	namesByID, err := r.roleNamesByID(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
-	roles := make([]string, 0, len(refs))
+	out := make([]string, 0, len(refs))
 	for _, ref := range refs {
-		if name, ok := namesByID[ref]; ok {
-			ref = name
+		if uuid.Validate(ref) != nil {
+			out = append(out, ref)
+			continue
 		}
-		roles = append(roles, ref)
+		name, ok := namesByID[ref]
+		if !ok {
+			return nil, fmt.Errorf("iam: tenant %q holds no role %q", tenantID, ref)
+		}
+		out = append(out, name)
 	}
-	return roles, nil
+	return out, nil
 }
 
 // roleNamesByID reads every role tenantID holds, system roles included, and

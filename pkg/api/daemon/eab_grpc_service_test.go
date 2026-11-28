@@ -54,7 +54,7 @@ func TestNewEABGRPCService_NilLoggerDefaults(t *testing.T) {
 // Unavailable status — never Unimplemented, never a panic.
 func TestEABGRPCService_NilServiceReturnsUnavailable(t *testing.T) {
 	service := NewEABGRPCService(logging.DefaultLogger(), nil, nil)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	calls := []struct {
 		name string
@@ -129,7 +129,7 @@ func TestEABGRPCService_NilDeliveryReturnsUnavailable(t *testing.T) {
 	svc := newFakeEABService()
 	cred, _ := svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 	service := NewEABGRPCService(logging.DefaultLogger(), svc, nil)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	if _, err := service.GetCredentialQRCode(ctx, &platformv1.GetEABCredentialQRCodeRequest{
 		CredentialId: cred.ID,
@@ -145,7 +145,7 @@ func TestEABGRPCService_NilDeliveryReturnsUnavailable(t *testing.T) {
 
 func TestEABGRPCService_CreateCredential(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	resp, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
 		ProfileId:        7,
@@ -183,7 +183,7 @@ func TestEABGRPCService_CreateCredential(t *testing.T) {
 
 func TestEABGRPCService_CreateCredential_Errors(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	// Negative expiry rejected up front.
 	if _, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
@@ -213,7 +213,7 @@ func TestEABGRPCService_CreateCredential_Errors(t *testing.T) {
 
 func TestEABGRPCService_GetCredential(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 
 	resp, err := service.GetCredential(ctx, &platformv1.GetEABCredentialRequest{CredentialId: cred.ID})
@@ -230,7 +230,7 @@ func TestEABGRPCService_GetCredential(t *testing.T) {
 
 func TestEABGRPCService_GetCredential_NotFound(t *testing.T) {
 	service, _, _ := newEABGRPCFixture()
-	if _, err := service.GetCredential(context.Background(),
+	if _, err := service.GetCredential(unixOperatorContext(),
 		&platformv1.GetEABCredentialRequest{CredentialId: 999}); status.Code(err) != codes.NotFound {
 		t.Errorf("expected NotFound, got %v", err)
 	}
@@ -238,7 +238,7 @@ func TestEABGRPCService_GetCredential_NotFound(t *testing.T) {
 
 func TestEABGRPCService_GetCredentialByKeyID(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 
 	resp, err := service.GetCredentialByKeyID(ctx,
@@ -258,7 +258,7 @@ func TestEABGRPCService_GetCredentialByKeyID(t *testing.T) {
 
 func TestEABGRPCService_ListCredentials_FilterCascade(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t2"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 2, TenantID: "t1"})
@@ -302,7 +302,7 @@ func TestEABGRPCService_ListCredentials_FilterCascade(t *testing.T) {
 
 func TestEABGRPCService_ListCredentials_StatusAndActiveFilters(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	c1, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	_ = svc.Revoke(ctx, c1.ID)
@@ -332,7 +332,7 @@ func TestEABGRPCService_ListCredentials_StatusAndActiveFilters(t *testing.T) {
 
 func TestEABGRPCService_ListCredentials_Pagination(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	for i := 0; i < 5; i++ {
 		_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	}
@@ -374,7 +374,7 @@ func TestEABGRPCService_ListCredentials_Pagination(t *testing.T) {
 
 func TestEABGRPCService_ListCredentials_SortOptions(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	for i := 0; i < 3; i++ {
 		_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
 	}
@@ -415,7 +415,7 @@ func TestEABGRPCService_ListCredentials_SortOptions(t *testing.T) {
 
 func TestEABGRPCService_ListCredentials_PropagatesErrors(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	svc.errListByTenant = eab.ErrInvalidTenantID{TenantID: "x"}
 	if _, err := service.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{
@@ -434,7 +434,7 @@ func TestEABGRPCService_ListCredentials_PropagatesErrors(t *testing.T) {
 
 func TestEABGRPCService_RevokeCredential(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 
 	resp, err := service.RevokeCredential(ctx, &platformv1.RevokeEABCredentialRequest{
@@ -460,7 +460,7 @@ func TestEABGRPCService_RevokeCredential(t *testing.T) {
 
 func TestEABGRPCService_ValidateCredential(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 
 	resp, err := service.ValidateCredential(ctx, &platformv1.ValidateEABCredentialRequest{
@@ -483,7 +483,7 @@ func TestEABGRPCService_ValidateCredential(t *testing.T) {
 
 func TestEABGRPCService_ValidateCredential_Failures(t *testing.T) {
 	service, _, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	// Malformed base64: transport-level InvalidArgument.
 	if _, err := service.ValidateCredential(ctx, &platformv1.ValidateEABCredentialRequest{
@@ -511,7 +511,7 @@ func TestEABGRPCService_ValidateCredential_Failures(t *testing.T) {
 
 func TestEABGRPCService_DeleteCredential(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 
 	resp, err := service.DeleteCredential(ctx, &platformv1.DeleteEABCredentialRequest{
@@ -533,7 +533,7 @@ func TestEABGRPCService_DeleteCredential(t *testing.T) {
 
 func TestEABGRPCService_GetCredentialQRCode(t *testing.T) {
 	service, svc, del := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 
 	resp, err := service.GetCredentialQRCode(ctx, &platformv1.GetEABCredentialQRCodeRequest{
@@ -556,7 +556,7 @@ func TestEABGRPCService_GetCredentialQRCode(t *testing.T) {
 
 func TestEABGRPCService_GetCredentialQRCode_Errors(t *testing.T) {
 	service, svc, del := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 
 	if _, err := service.GetCredentialQRCode(ctx, &platformv1.GetEABCredentialQRCodeRequest{
@@ -582,7 +582,7 @@ func TestEABGRPCService_GetCredentialQRCode_Errors(t *testing.T) {
 
 func TestEABGRPCService_GetEnrollmentURL(t *testing.T) {
 	service, svc, del := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 
 	resp, err := service.GetEnrollmentURL(ctx, &platformv1.GetEABEnrollmentURLRequest{
@@ -609,7 +609,7 @@ func TestEABGRPCService_GetEnrollmentURL(t *testing.T) {
 
 func TestEABGRPCService_GetEnrollmentURL_Errors(t *testing.T) {
 	service, svc, del := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 
 	if _, err := service.GetEnrollmentURL(ctx, &platformv1.GetEABEnrollmentURLRequest{
@@ -628,7 +628,7 @@ func TestEABGRPCService_GetEnrollmentURL_Errors(t *testing.T) {
 
 func TestEABGRPCService_MarkCredentialUsed(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 
 	resp, err := service.MarkCredentialUsed(ctx, &platformv1.MarkEABCredentialUsedRequest{
@@ -653,7 +653,7 @@ func TestEABGRPCService_MarkCredentialUsed(t *testing.T) {
 
 func TestEABGRPCService_CleanupExpiredCredentials(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	svc.cleanupCount = 4
 
 	// Global cleanup delegates to CleanupExpired.
@@ -688,7 +688,7 @@ func TestEABGRPCService_CleanupExpiredCredentials(t *testing.T) {
 
 func TestEABGRPCService_CleanupExpiredCredentials_Errors(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	svc.errCleanupExpired = context.DeadlineExceeded
 	if _, err := service.CleanupExpiredCredentials(ctx,
@@ -784,4 +784,151 @@ func TestEABErrorMatchers(t *testing.T) {
 			t.Errorf("%T -> %v, want %v", tc.err, got, tc.code)
 		}
 	}
+}
+
+// TestEABGRPCService_CallerTenantIsEnforced pins #2008: a tenant-bound
+// caller cannot create, list, clean up or act on another tenant's EAB
+// credentials (and so cannot over QUIC, which serves the same service),
+// while its own tenant works and the unbound local operator keeps
+// today's behaviour.
+func TestEABGRPCService_CallerTenantIsEnforced(t *testing.T) {
+	tenantA := tokenCallerContext("tenant-a")
+	denied := func(t *testing.T, what string, err error) {
+		t.Helper()
+		if status.Code(err) != codes.PermissionDenied {
+			t.Errorf("%s: code = %v, want PermissionDenied (err %v)", what, status.Code(err), err)
+		}
+	}
+
+	t.Run("create, list and cleanup naming another tenant", func(t *testing.T) {
+		service, svc, _ := newEABGRPCFixture()
+		before := len(svc.byID)
+		_, err := service.CreateCredential(tenantA, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "tenant-b"})
+		denied(t, "CreateCredential tenant-b", err)
+		if len(svc.byID) != before {
+			t.Error("CreateCredential for another tenant reached Generate")
+		}
+
+		_, err = service.ListCredentials(tenantA, &platformv1.ListEABCredentialsRequest{TenantId: "tenant-b"})
+		denied(t, "ListCredentials tenant-b", err)
+		_, err = service.ListCredentials(tenantA, &platformv1.ListEABCredentialsRequest{ProfileId: 1})
+		denied(t, "ListCredentials profile without tenant", err)
+
+		expired, _ := svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "tenant-b"})
+		expired.ExpiresAt = time.Now().Add(-time.Hour)
+		svc.cleanupCount = 3
+		_, err = service.CleanupExpiredCredentials(tenantA, &platformv1.CleanupExpiredEABCredentialsRequest{TenantId: "tenant-b"})
+		denied(t, "CleanupExpiredCredentials tenant-b", err)
+		_, err = service.CleanupExpiredCredentials(tenantA, &platformv1.CleanupExpiredEABCredentialsRequest{})
+		denied(t, "CleanupExpiredCredentials empty tenant", err)
+		if _, getErr := svc.Get(context.Background(), expired.ID); getErr != nil {
+			t.Error("a refused cleanup deleted another tenant's credential")
+		}
+	})
+
+	t.Run("credential-ID calls on another tenant's credential", func(t *testing.T) {
+		service, svc, _ := newEABGRPCFixture()
+		other, _ := svc.Generate(context.Background(), eab.GenerateParams{ProfileID: 1, TenantID: "tenant-b"})
+
+		_, err := service.GetCredential(tenantA, &platformv1.GetEABCredentialRequest{CredentialId: other.ID})
+		denied(t, "GetCredential", err)
+		_, err = service.GetCredentialByKeyID(tenantA, &platformv1.GetEABCredentialByKeyIDRequest{KeyId: other.KeyID})
+		denied(t, "GetCredentialByKeyID", err)
+		_, err = service.GetCredentialQRCode(tenantA, &platformv1.GetEABCredentialQRCodeRequest{CredentialId: other.ID})
+		denied(t, "GetCredentialQRCode", err)
+		_, err = service.GetEnrollmentURL(tenantA, &platformv1.GetEABEnrollmentURLRequest{CredentialId: other.ID})
+		denied(t, "GetEnrollmentURL", err)
+		_, err = service.RevokeCredential(tenantA, &platformv1.RevokeEABCredentialRequest{CredentialId: other.ID})
+		denied(t, "RevokeCredential", err)
+		_, err = service.MarkCredentialUsed(tenantA, &platformv1.MarkEABCredentialUsedRequest{CredentialId: other.ID})
+		denied(t, "MarkCredentialUsed", err)
+		if other.Status != eab.StatusActive {
+			t.Errorf("refused calls changed the credential status to %v", other.Status)
+		}
+		_, err = service.DeleteCredential(tenantA, &platformv1.DeleteEABCredentialRequest{CredentialId: other.ID})
+		denied(t, "DeleteCredential", err)
+		if _, getErr := svc.Get(context.Background(), other.ID); getErr != nil {
+			t.Error("a refused DeleteCredential removed another tenant's credential")
+		}
+	})
+
+	t.Run("own tenant succeeds", func(t *testing.T) {
+		service, svc, _ := newEABGRPCFixture()
+		created, err := service.CreateCredential(tenantA, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "tenant-a"})
+		if err != nil {
+			t.Fatalf("CreateCredential tenant-a: %v", err)
+		}
+		id := created.GetCredential().GetId()
+		if _, err := service.ListCredentials(tenantA, &platformv1.ListEABCredentialsRequest{TenantId: "tenant-a"}); err != nil {
+			t.Errorf("ListCredentials tenant-a: %v", err)
+		}
+		if _, err := service.ListCredentials(tenantA, &platformv1.ListEABCredentialsRequest{ProfileId: 1, TenantId: "tenant-a"}); err != nil {
+			t.Errorf("ListCredentials profile+tenant-a: %v", err)
+		}
+		if _, err := service.GetCredential(tenantA, &platformv1.GetEABCredentialRequest{CredentialId: id}); err != nil {
+			t.Errorf("GetCredential: %v", err)
+		}
+		if _, err := service.GetCredentialByKeyID(tenantA, &platformv1.GetEABCredentialByKeyIDRequest{KeyId: created.GetCredential().GetKeyId()}); err != nil {
+			t.Errorf("GetCredentialByKeyID: %v", err)
+		}
+		if _, err := service.GetCredentialQRCode(tenantA, &platformv1.GetEABCredentialQRCodeRequest{CredentialId: id}); err != nil {
+			t.Errorf("GetCredentialQRCode: %v", err)
+		}
+		if _, err := service.GetEnrollmentURL(tenantA, &platformv1.GetEABEnrollmentURLRequest{CredentialId: id}); err != nil {
+			t.Errorf("GetEnrollmentURL: %v", err)
+		}
+		if _, err := service.MarkCredentialUsed(tenantA, &platformv1.MarkEABCredentialUsedRequest{CredentialId: id}); err != nil {
+			t.Errorf("MarkCredentialUsed: %v", err)
+		}
+		if _, err := service.RevokeCredential(tenantA, &platformv1.RevokeEABCredentialRequest{CredentialId: id}); err != nil {
+			t.Errorf("RevokeCredential: %v", err)
+		}
+		if _, err := service.CleanupExpiredCredentials(tenantA, &platformv1.CleanupExpiredEABCredentialsRequest{TenantId: "tenant-a"}); err != nil {
+			t.Errorf("CleanupExpiredCredentials tenant-a: %v", err)
+		}
+		if _, err := service.DeleteCredential(tenantA, &platformv1.DeleteEABCredentialRequest{CredentialId: id}); err != nil {
+			t.Errorf("DeleteCredential: %v", err)
+		}
+		if _, getErr := svc.Get(context.Background(), id); getErr == nil {
+			t.Error("DeleteCredential on the caller's own credential left it in place")
+		}
+	})
+
+	t.Run("Unix-socket operator is unchanged", func(t *testing.T) {
+		service, svc, _ := newEABGRPCFixture()
+		ctx := unixOperatorContext()
+		other, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "tenant-b"})
+		svc.cleanupCount = 2
+		if _, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "tenant-b"}); err != nil {
+			t.Errorf("CreateCredential: %v", err)
+		}
+		if _, err := service.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{ProfileId: 1}); err != nil {
+			t.Errorf("ListCredentials: %v", err)
+		}
+		if _, err := service.GetCredential(ctx, &platformv1.GetEABCredentialRequest{CredentialId: other.ID}); err != nil {
+			t.Errorf("GetCredential: %v", err)
+		}
+		if _, err := service.GetCredentialByKeyID(ctx, &platformv1.GetEABCredentialByKeyIDRequest{KeyId: other.KeyID}); err != nil {
+			t.Errorf("GetCredentialByKeyID: %v", err)
+		}
+		if _, err := service.GetCredentialQRCode(ctx, &platformv1.GetEABCredentialQRCodeRequest{CredentialId: other.ID}); err != nil {
+			t.Errorf("GetCredentialQRCode: %v", err)
+		}
+		if _, err := service.GetEnrollmentURL(ctx, &platformv1.GetEABEnrollmentURLRequest{CredentialId: other.ID}); err != nil {
+			t.Errorf("GetEnrollmentURL: %v", err)
+		}
+		if _, err := service.MarkCredentialUsed(ctx, &platformv1.MarkEABCredentialUsedRequest{CredentialId: other.ID}); err != nil {
+			t.Errorf("MarkCredentialUsed: %v", err)
+		}
+		if _, err := service.RevokeCredential(ctx, &platformv1.RevokeEABCredentialRequest{CredentialId: other.ID}); err != nil {
+			t.Errorf("RevokeCredential: %v", err)
+		}
+		resp, err := service.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{})
+		if err != nil || resp.GetDeletedCount() != 2 {
+			t.Errorf("store-wide CleanupExpiredCredentials = %d, %v; want 2, nil", resp.GetDeletedCount(), err)
+		}
+		if _, err := service.DeleteCredential(ctx, &platformv1.DeleteEABCredentialRequest{CredentialId: other.ID}); err != nil {
+			t.Errorf("DeleteCredential: %v", err)
+		}
+	})
 }

@@ -20,7 +20,6 @@
 package daemon
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,7 +33,7 @@ import (
 
 func TestVPNGRPCService_SetPosturePolicyWithoutOPAIsUnavailable(t *testing.T) {
 	server, _ := newVPNTestServer(t)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	_, err := server.SetPosturePolicy(ctx, &platformv1.SetVPNPosturePolicyRequest{
 		Policy: &platformv1.VPNPosturePolicy{TenantId: "acme", Name: "corp", Module: vpnTestPolicy},
@@ -54,7 +53,7 @@ func TestMCPProvidersSetPosturePolicyWithoutOPAIsUnavailable(t *testing.T) {
 
 	for name, provider := range vpnProviders(server) {
 		t.Run(name, func(t *testing.T) {
-			_, err := provider.VPNPosturePolicySet(context.Background(), "acme", "corp", vpnTestPolicy)
+			_, err := provider.VPNPosturePolicySet(unixOperatorContext(), "acme", "corp", vpnTestPolicy)
 			assert.Equal(t, codes.Unavailable, status.Code(err), "got %v", err)
 		})
 	}
@@ -63,7 +62,7 @@ func TestMCPProvidersSetPosturePolicyWithoutOPAIsUnavailable(t *testing.T) {
 func TestQUICVPNCategorySetPosturePolicyWithoutOPAIsUnavailable(t *testing.T) {
 	handler, _ := newVPNQUICHandler(t)
 
-	resp := handler.HandleRequest(context.Background(), vpnCategoryRequest(t, quicwire.VPNSubSetPosturePolicy,
+	resp := handler.HandleRequest(unixOperatorContext(), vpnCategoryRequest(t, quicwire.VPNSubSetPosturePolicy,
 		&platformv1.SetVPNPosturePolicyRequest{Policy: &platformv1.VPNPosturePolicy{TenantId: "acme", Name: "corp", Module: vpnTestPolicy}}))
 	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }

@@ -35,8 +35,9 @@ import (
 //     rule the REST by-name guard calls too), so the name-keyed CLI works for
 //     a tenant acting on itself.
 //
-// A caller with no tenant-bound identity (the Unix-socket operator, and a
-// daemon run with SkipIAMValidation) is admitted, as callerTenant documents.
+// Of the callers with no tenant-bound identity only the kernel-verified
+// Unix-socket operator is admitted (admitUnbound); every other one, a daemon
+// run with SkipIAMValidation included, is refused with codes.PermissionDenied.
 // An unset system tenant admits no tenant-bound caller as the system tenant,
 // the same fail-closed reading the REST guards give an empty tenant.
 
@@ -56,7 +57,7 @@ func (s *TenantGRPCServer) isSystemTenant(tenantID string) bool {
 func (s *TenantGRPCServer) authorizeTenant(ctx context.Context, requested string) error {
 	caller, bound := callerTenant(ctx)
 	if !bound {
-		return nil
+		return admitUnbound(ctx, requested)
 	}
 	if err := tenant.AuthorizeTenantAccess(caller, s.isSystemTenant(caller), requested); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
@@ -79,7 +80,7 @@ func (s *TenantGRPCServer) authorizeSystemTenant(ctx context.Context, method str
 func (s *TenantGRPCServer) authorizeTenantName(ctx context.Context, resolvedID string) error {
 	caller, bound := callerTenant(ctx)
 	if !bound {
-		return nil
+		return admitUnbound(ctx, resolvedID)
 	}
 	if err := tenant.AuthorizeNameLookup(caller, s.isSystemTenant(caller), resolvedID); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())

@@ -287,7 +287,7 @@ func newTenantParityHarness(t *testing.T) *tenantParityHarness {
 	h.server = NewTenantGRPCServer(WithTenantLogger(quiet))
 	h.server.SetManager(manager)
 	for label, name := range parityTenantNames {
-		resp, err := h.server.CreateTenant(context.Background(), &platformv1.CreateTenantRequest{Name: name})
+		resp, err := h.server.CreateTenant(unixOperatorContext(), &platformv1.CreateTenantRequest{Name: name})
 		require.NoError(t, err)
 		h.ids[label] = resp.GetTenant().GetId()
 	}
@@ -1010,12 +1010,19 @@ func TestTenantBarrierInitRefusesShamir(t *testing.T) {
 // (the Unix-socket operator) reaches any tenant and the cross-tenant methods.
 func TestTenantServerAdmitsUnboundCaller(t *testing.T) {
 	h := newTenantParityHarness(t)
-	ctx := context.Background()
 
+	// The Unix-socket operator, the only unbound caller admitted.
+	ctx := unixOperatorContext()
 	_, err := h.server.GetTenant(ctx, &platformv1.GetTenantRequest{TenantId: h.id(parityTenantB)})
 	require.NoError(t, err)
 	_, err = h.server.ListTenants(ctx, &platformv1.ListTenantsRequest{})
 	require.NoError(t, err)
+
+	// Any other caller with no tenant-bound identity is refused.
+	_, err = h.server.GetTenant(context.Background(), &platformv1.GetTenantRequest{TenantId: h.id(parityTenantB)})
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
+	_, err = h.server.ListTenants(context.Background(), &platformv1.ListTenantsRequest{})
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
 }
 
 // TestTenantServerWithoutSystemTenant: with no system tenant configured, no

@@ -14,11 +14,52 @@
 package commands
 
 import (
+	"context"
+	"errors"
 	"testing"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	platformquicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/stretchr/testify/assert"
 )
+
+// probeTxn answers every transaction with err, counting the calls.
+type probeTxn struct {
+	err   error
+	calls int
+}
+
+func (p *probeTxn) Execute(context.Context, *quicbaassdk.TxnRequest) (*quicbaassdk.TxnResponse, error) {
+	p.calls++
+	if p.err != nil {
+		return nil, p.err
+	}
+	return &quicbaassdk.TxnResponse{Succeeded: true}, nil
+}
+
+// TestAdminClaimTransactions: the admin-claim completion lease (#172) is
+// wired only on a multi-instance deployment whose store answers the
+// compare-and-swap probe; anything else leaves the ceremony as it was —
+// refused on a multi-instance deployment.
+func TestAdminClaimTransactions(t *testing.T) {
+	ctx := context.Background()
+
+	answering := &probeTxn{}
+	assert.Same(t, answering, adminClaimTransactions(ctx, true, answering, "tenant-a", nil),
+		"a multi-instance store that answers carries the lease")
+	assert.Equal(t, 1, answering.calls)
+
+	single := &probeTxn{}
+	assert.Nil(t, adminClaimTransactions(ctx, false, single, "tenant-a", nil),
+		"a single instance needs no store-wide lease")
+	assert.Zero(t, single.calls, "and is not probed")
+
+	mistyped := &probeTxn{err: errors.New("embedded: invalid request type")}
+	assert.Nil(t, adminClaimTransactions(ctx, true, mistyped, "tenant-a", nil),
+		"a store that cannot run the transaction keeps the ceremony refused")
+
+	assert.Nil(t, adminClaimTransactions(ctx, true, nil, "tenant-a", nil))
+}
 
 // TestIsMultiInstanceDeployment covers the two shapes the review named:
 // the DEFAULT single-node configuration (which carries a loopback raft

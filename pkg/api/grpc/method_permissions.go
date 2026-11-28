@@ -13,6 +13,8 @@
 
 package grpc
 
+import "slices"
+
 // =============================================================================
 // gRPC Method -> Scope Permission Catalog
 // =============================================================================
@@ -104,6 +106,19 @@ func ScopeForMethod(fullMethod string) string {
 func isPreAuthMethod(fullMethod string) bool {
 	_, ok := preAuthMethods[fullMethod]
 	return ok
+}
+
+// Scopes returns the concrete scope vocabulary of the gRPC catalog: the
+// sorted, distinct, non-empty scopes grpcMethodPermissions names.
+func Scopes() []string {
+	scopes := make([]string, 0, len(grpcMethodPermissions))
+	for _, scope := range grpcMethodPermissions {
+		if scope != "" {
+			scopes = append(scopes, scope)
+		}
+	}
+	slices.Sort(scopes)
+	return slices.Compact(scopes)
 }
 
 // buildGRPCMethodPermissions constructs the FullMethod -> scope catalog. The

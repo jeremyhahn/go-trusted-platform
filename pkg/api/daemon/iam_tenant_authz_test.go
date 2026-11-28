@@ -11,6 +11,7 @@ import (
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
@@ -126,8 +127,15 @@ func TestAuthorizeIAMTenant(t *testing.T) {
 		}
 	})
 
-	t.Run("unbound caller is allowed", func(t *testing.T) {
-		if err := authorizeIAMTenant(context.Background(), "tenant-a"); err != nil {
+	t.Run("unbound caller is refused", func(t *testing.T) {
+		err := authorizeIAMTenant(context.Background(), "tenant-a")
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("Unix-socket operator is allowed", func(t *testing.T) {
+		if err := authorizeIAMTenant(unixOperatorContext(), "tenant-a"); err != nil {
 			t.Fatalf("authorizeIAMTenant() = %v, want nil", err)
 		}
 	})
@@ -147,6 +155,59 @@ func TestAuthorizeIAMTenant(t *testing.T) {
 		err := authorizeIAMTenant(tokenCallerContext(""), "tenant-b")
 		if status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+		}
+	})
+}
+
+// unixOperatorContext is the context the Unix-socket gRPC server gives a
+// request: no tenant-bound identity, and the kernel-verified peer
+// credentials its interceptor attaches.
+func unixOperatorContext() context.Context {
+	return peercred.ContextWithUnixCredentials(context.Background(), peercred.UnixCredentials{PID: 1, UID: 0, GID: 0})
+}
+
+func TestAuthorizeSystemCaller_UnboundCaller(t *testing.T) {
+	t.Run("unbound caller is refused", func(t *testing.T) {
+		err := authorizeSystemCaller(context.Background(), "system", "CreateTenant")
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("Unix-socket operator is allowed", func(t *testing.T) {
+		if err := authorizeSystemCaller(unixOperatorContext(), "system", "CreateTenant"); err != nil {
+			t.Fatalf("authorizeSystemCaller() = %v, want nil", err)
+		}
+	})
+}
+
+func TestTenantGRPCServer_UnboundCaller(t *testing.T) {
+	s := &TenantGRPCServer{}
+	s.SetSystemTenant("system")
+
+	t.Run("unbound caller is refused by authorizeTenant", func(t *testing.T) {
+		err := s.authorizeTenant(context.Background(), "tenant-a")
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("unbound caller is refused by authorizeTenantName", func(t *testing.T) {
+		err := s.authorizeTenantName(context.Background(), "tenant-a")
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("Unix-socket operator is allowed by authorizeTenant", func(t *testing.T) {
+		if err := s.authorizeTenant(unixOperatorContext(), "tenant-a"); err != nil {
+			t.Fatalf("authorizeTenant() = %v, want nil", err)
+		}
+	})
+
+	t.Run("Unix-socket operator is allowed by authorizeTenantName", func(t *testing.T) {
+		if err := s.authorizeTenantName(unixOperatorContext(), "tenant-a"); err != nil {
+			t.Fatalf("authorizeTenantName() = %v, want nil", err)
 		}
 	})
 }
@@ -214,7 +275,8 @@ func TestIAMGRPCService_CrossTenantRPCsAreSystemOnly(t *testing.T) {
 		wantCode     codes.Code
 	}{
 		{name: "system tenant", systemTenant: "system", ctx: tokenCallerContext("system"), wantCode: codes.OK},
-		{name: "unbound local caller", systemTenant: "system", ctx: context.Background(), wantCode: codes.OK},
+		{name: "Unix-socket operator", systemTenant: "system", ctx: unixOperatorContext(), wantCode: codes.OK},
+		{name: "unbound caller", systemTenant: "system", ctx: context.Background(), wantCode: codes.PermissionDenied},
 		{name: "other tenant", systemTenant: "system", ctx: tokenCallerContext("tenant-a"), wantCode: codes.PermissionDenied},
 		{name: "unset system tenant", systemTenant: "", ctx: tokenCallerContext("system"), wantCode: codes.PermissionDenied},
 	}
@@ -233,9 +295,9 @@ func TestIAMGRPCService_CrossTenantRPCsAreSystemOnly(t *testing.T) {
 				t.Fatalf("ListTenants code = %v, want %v (err %v)", status.Code(err), tc.wantCode, err)
 			}
 
-			listed, err := svc.ListTenants(context.Background(), &platformv1.ListIAMTenantsRequest{})
+			listed, err := svc.ListTenants(unixOperatorContext(), &platformv1.ListIAMTenantsRequest{})
 			if err != nil {
-				t.Fatalf("ListTenants as the local caller: %v", err)
+				t.Fatalf("ListTenants as the Unix-socket operator: %v", err)
 			}
 			wantTenants := 0
 			if tc.wantCode == codes.OK {

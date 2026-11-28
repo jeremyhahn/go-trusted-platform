@@ -30,7 +30,11 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
+	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
+	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
+	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
@@ -47,6 +51,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
+	restkms "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	switchapi "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/switch"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -100,6 +105,8 @@ type RESTServer struct {
 	gatewayHandlers       *restapi.GatewayHandlers
 	gatewayService        *gatewayRESTService
 	idevidService         *IDevIDGRPCService
+	// authFactorPEP decides user_authfactors:add on certificate issuance.
+	authFactorPEP restapi.AuthFactorPEP
 	// registryMaxPushBytes overrides the image push body cap when non-zero.
 	registryMaxPushBytes int64
 }
@@ -470,6 +477,54 @@ func (s *RESTServer) SetKMSHandlers(service restapi.KMSService) {
 	s.logger.Info("KMS REST routes registered")
 }
 
+// SetKMSRouter mounts the KMS routes of docs/kms/api.md, the contract the SDK
+// REST transport and the integration REST adapter speak: the key name in the
+// path of the crypto routes (POST /api/v1/kms/sign/{name}), the stored DEKs
+// under /deks and the secrets under /secrets. It is the webservice listener's
+// KMS router, so both REST listeners answer one contract. Call it before
+// SetKMSHandlers: a path this router does not serve (the bare-path crypto
+// routes, export, batch, rewrap, status) falls through to those handlers. A
+// nil client answers its routes 503, never 404.
+//
+// Every route runs behind guard and needs the scope the gRPC catalog gives
+// the method it serves (catalogRouteRPCs): with no credential it answers 401,
+// without the scope 403, and a route with no mapping fails closed.
+func (s *RESTServer) SetKMSRouter(kms kmsclient.Client, crypto cryptoclient.Client, dek dekclient.Client, secrets secretsclient.Client, guard *restapi.ScopeGuard) {
+	logger := logging.NewFromSlog(s.logger)
+	restkms.NewKMSRouter(logger, kms, crypto, dek, secrets, response.NewResponseWriter(logger, nil)).
+		RegisterRoutes(s.tenantBoundCatalogAPI(guard, s.kmsDEKPlatformTenantGate))
+	s.logger.Info("KMS REST routes registered (docs/kms/api.md contract)")
+}
+
+// kmsPlatformTenantOnlyRoutes are the KMS key routes the tenant-bound router
+// serves to the platform tenant only: the pinned upstream GetKeyMetadata,
+// UpdateKeyMetadata and SetKeyPolicy look the key up by ID without tenant
+// scoping, so binding the caller's tenant does not stop a tenant from reading
+// or changing another tenant's key policy and metadata.
+var kmsPlatformTenantOnlyRoutes = map[string]bool{
+	restBasePath + "/kms/keys/{name}/policy":   true,
+	restBasePath + "/kms/keys/{name}/metadata": true,
+}
+
+// kmsDEKPlatformTenantGate refuses the DEK routes and the key policy and
+// metadata routes to every tenant but the platform's. The embedded go-quicbaas
+// DEK store is keyed by path alone and ignores the tenant, so binding the
+// caller's tenant does not isolate DEKs; the key policy and metadata routes
+// are refused for the reason kmsPlatformTenantOnlyRoutes gives.
+func (s *RESTServer) kmsDEKPlatformTenantGate(callerTenantID, route string) error {
+	dek := strings.HasPrefix(route, restBasePath+"/kms/deks")
+	if !dek && !kmsPlatformTenantOnlyRoutes[route] {
+		return nil
+	}
+	if s.config != nil && callerTenantID == s.config.PlatformTenantID {
+		return nil
+	}
+	if !dek {
+		return restapi.ErrRouteForbidden{Scope: route, Reason: "the key policy and metadata routes serve the platform tenant only until the KMS service scopes them by tenant"}
+	}
+	return restapi.ErrRouteForbidden{Scope: route, Reason: "the DEK routes serve the platform tenant only until the DEK store enforces tenant ownership"}
+}
+
 // SetComputeHandlers wires the compute (VM and container) REST handlers onto
 // the daemon's REST router. Every /api/v1/compute/* route runs the same
 // ComputeService RPC gRPC serves, over protobuf JSON, behind the scope that
@@ -546,6 +601,13 @@ func (s *RESTServer) SetOverlayHandlers(svc restapi.OverlayServiceInterface, gua
 // guard authorizes POST /api/v1/ca/sign-csr, which needs a platform token
 // granting ca:sign-csr (a client certificate alone is refused); when it is
 // nil, sign-csr refuses every request.
+// SetAuthFactorPEP sets the IAM PEP that decides user_authfactors:add on the
+// auth-factor certificate issuance route. Call it before SetCAHandlers; with
+// no PEP the route refuses every caller.
+func (s *RESTServer) SetAuthFactorPEP(pep restapi.AuthFactorPEP) {
+	s.authFactorPEP = pep
+}
+
 func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *restapi.ScopeGuard) {
 	if ca == nil {
 		return
@@ -569,7 +631,9 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *
 	// Wire auth factor endpoints (AAGUID lookup, mTLS probe, cert issuance,
 	// MFA policy). These share the same CA instance as the CA handlers so
 	// certificate issuance goes through the live platform CA.
-	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger)
+	// Issuance is decided by the IAM PEP for the principal the guard
+	// authenticates; a nil PEP (IAM off) refuses it.
+	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger).WithAuthorization(guard, s.authFactorPEP)
 	authFactorHandlers.RegisterRoutes(s.router)
 	s.logger.Info("Auth factor REST routes registered")
 }

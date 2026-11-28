@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"reflect"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -206,6 +207,43 @@ func TestKMSGenerateKey_ReplyFillsHandleAndMetadata(t *testing.T) {
 	}
 }
 
+func TestKMSGetKey_FlatReplyFillsHandleAndMetadata(t *testing.T) {
+	a, _ := kmsAdapter(t, `{"key_id":"k1","name":"one","algorithm":"ECDSA-P256","version":3,"usage":["SIGN"],"created_at":"2026-11-01T00:00:00Z","rotated_at":"2026-11-02T00:00:00Z"}`)
+	resp := &platformv1.GetKeyResponse{}
+	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_GetKey_FullMethodName,
+		&platformv1.GetKeyRequest{KeyId: "k1"}, resp)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	created := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC).Unix()
+	rotated := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC).Unix()
+	key := resp.GetKey()
+	if key.GetKeyId() != "k1" || key.GetVersion() != 3 ||
+		key.GetAlgorithm() != platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256 ||
+		key.GetCreatedAt() != created {
+		t.Fatalf("key = %v", key)
+	}
+	meta := resp.GetMetadata()
+	if meta.GetKeyId() != "k1" || meta.GetName() != "one" || meta.GetVersion() != 3 ||
+		meta.GetAlgorithm() != platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256 ||
+		len(meta.GetUsage()) != 1 || meta.GetUsage()[0] != platformv1.KeyUsage_KEY_USAGE_SIGN ||
+		meta.GetCreatedAt() != created || meta.GetUpdatedAt() != rotated {
+		t.Fatalf("metadata = %v", meta)
+	}
+}
+
+func TestKMSGetKey_BadReplyIsAnUnmarshalError(t *testing.T) {
+	a, _ := kmsAdapter(t, `"not json"`)
+	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_GetKey_FullMethodName,
+		&platformv1.GetKeyRequest{KeyId: "k1"}, &platformv1.GetKeyResponse{})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("Invoke err = %v, want Internal", err)
+	}
+	if _, err := decodeKMSGetKey([]byte(`not json`)); !errors.As(err, new(ErrUnmarshalFailed)) {
+		t.Fatalf("decode err = %v, want ErrUnmarshalFailed", err)
+	}
+}
+
 // TestKMSGenerateKey_UnknownAlgorithmNameAndMalformedReply: an algorithm name
 // the SDK does not know decodes as UNSPECIFIED; a reply that is not JSON is an
 // error, not an empty key.
@@ -222,5 +260,32 @@ func TestKMSGenerateKey_UnknownAlgorithmNameAndMalformedReply(t *testing.T) {
 	var unmarshal ErrUnmarshalFailed
 	if !errors.As(err, &unmarshal) {
 		t.Fatalf("err = %v, want ErrUnmarshalFailed", err)
+	}
+}
+
+// TestKMSListKeys_PopulatedRouterReplyDecodes pins that the KMS router's
+// ListKeys reply, with a string algorithm and an RFC 3339 created_at, decodes
+// into ListKeysResponse with its pagination fields.
+func TestKMSListKeys_PopulatedRouterReplyDecodes(t *testing.T) {
+	a, _ := kmsAdapter(t, `{"keys":[{"key_id":"k1","version":2,"algorithm":"ECDSA-P256","created_at":"2026-01-02T03:04:05Z"}],"next_cursor":"c2","has_more":true,"total_count":3}`)
+	resp := &platformv1.ListKeysResponse{}
+	err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_ListKeys_FullMethodName,
+		&platformv1.ListKeysRequest{}, resp)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	keys := resp.GetKeys()
+	if len(keys) != 1 {
+		t.Fatalf("keys = %v", keys)
+	}
+	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).Unix()
+	key := keys[0]
+	if key.GetKeyId() != "k1" || key.GetVersion() != 2 ||
+		key.GetAlgorithm() != platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256 ||
+		key.GetCreatedAt() != created {
+		t.Fatalf("key = %v", key)
+	}
+	if resp.GetNextCursor() != "c2" || !resp.GetHasMore() || resp.GetTotalCount() != 3 {
+		t.Fatalf("pagination = %q %v %d", resp.GetNextCursor(), resp.GetHasMore(), resp.GetTotalCount())
 	}
 }

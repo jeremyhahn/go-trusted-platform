@@ -95,21 +95,48 @@ func (e ErrClaimTokenInvalid) Error() string {
 
 // ErrMultiInstanceUnsupported is returned when the claim ceremony is
 // invoked on a deployment that runs more than one platformd instance
-// against one store. The ceremony's one-time state (challenges, claim
-// tokens) and its completion lock are process-local, and the SDK
-// factor enrolment is not conditional, so two instances could both
-// observe an unclaimed identity and each enrol a different
-// authenticator — letting a copied bootstrap key retain admin access
-// alongside the legitimate operator. Rather than serve a ceremony that
-// is silently unsafe there, the route refuses. Lifting this requires
-// the upstream conditional-enrollment primitive tracked in #170.
+// against one store. The process-local completion lock serialises one
+// instance only, and the SDK factor enrolment is not conditional, so two
+// instances could both enrol a different authenticator, letting a copied
+// bootstrap key retain admin access alongside the legitimate operator.
+// The store-wide completion lease (ServiceParams.Transactions, #172) does
+// not lift this: it does not fence a timed-out enrolment, which may still
+// commit after the lease is released (#1906). The refusal stays until the
+// enrolment checks lease ownership.
 type ErrMultiInstanceUnsupported struct{}
 
 // Error implements the error interface.
 func (e ErrMultiInstanceUnsupported) Error() string {
-	return "admin claim: the claim ceremony is only supported on a single-instance deployment; " +
-		"its one-time state is process-local and factor enrolment is not yet atomic across instances (see #170)"
+	return "admin claim: the claim ceremony is not served on a multi-instance deployment: " +
+		"its completion is not yet fenced across instances (see #172)"
 }
+
+// ErrClaimInProgress is returned when another instance holds the claim's
+// store-wide completion lease: a claim is completing elsewhere right now.
+type ErrClaimInProgress struct{}
+
+// Error implements the error interface.
+func (e ErrClaimInProgress) Error() string {
+	return "admin claim: another claim is completing; retry once it has finished"
+}
+
+// ErrCompletionLockUnavailable is returned when the store could not run
+// the completion lease's transaction. The claim fails closed: no
+// enrolment happens without the lease.
+type ErrCompletionLockUnavailable struct {
+	Err error
+}
+
+// Error implements the error interface.
+func (e ErrCompletionLockUnavailable) Error() string {
+	if e.Err == nil {
+		return "admin claim: the completion lease is unavailable"
+	}
+	return "admin claim: the completion lease is unavailable: " + e.Err.Error()
+}
+
+// Unwrap returns the store error.
+func (e ErrCompletionLockUnavailable) Unwrap() error { return e.Err }
 
 // ErrAlreadyClaimed is returned when the admin identity already carries an
 // operator-enrolled authenticator. Re-claiming would let anyone holding a
