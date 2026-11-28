@@ -315,6 +315,53 @@ func TestDeleteTenant_ProceedsWithBarrierClient(t *testing.T) {
 	}
 }
 
+// TestDeleteTenant_LeavesTheBarrierOpenForIAMDeprovisioning models the
+// upstream delete order: go-quicbaas deprovisions the tenant's users through
+// the routed QRDB user service, which refuses a sealed tenant, and only then
+// destroys the barrier. The platform must not seal the barrier first.
+func TestDeleteTenant_LeavesTheBarrierOpenForIAMDeprovisioning(t *testing.T) {
+	m, iamClient, bc := newTestManagerWithBarrier(t)
+	ctx := context.Background()
+
+	entity, err := m.CreateTenant(ctx, &CreateTenantRequest{Name: "delete-open-barrier"})
+	if err != nil {
+		t.Fatalf("CreateTenant failed: %v", err)
+	}
+	id := entity.ID
+	if err := m.InitTenantBarrier(ctx, id, []byte("operator-pass")); err != nil {
+		t.Fatalf("InitTenantBarrier: %v", err)
+	}
+	if err := m.UnsealTenantBarrier(ctx, id, []byte("operator-pass")); err != nil {
+		t.Fatalf("UnsealTenantBarrier: %v", err)
+	}
+
+	sawUnsealed := false
+	deleteRan := false
+	iamClient.onDelete = func(tenantID string) error {
+		bc.mu.Lock()
+		defer bc.mu.Unlock()
+		deleteRan = true
+		sawUnsealed = bc.barriers[tenantID]
+		if !sawUnsealed {
+			return errors.New("deprovision users: tenant " + tenantID + " is sealed")
+		}
+		return nil
+	}
+
+	if err := m.DeleteTenant(ctx, id); err != nil {
+		t.Fatalf("DeleteTenant should succeed with the barrier open for deprovisioning: %v", err)
+	}
+	if !deleteRan {
+		t.Fatal("IAM Delete was not called")
+	}
+	if !sawUnsealed {
+		t.Error("the barrier was sealed before IAM deprovisioning ran")
+	}
+	if _, err := m.GetTenant(ctx, id); err == nil {
+		t.Error("GetTenant should fail after DeleteTenant")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // InitTenantBarrier
 // ---------------------------------------------------------------------------

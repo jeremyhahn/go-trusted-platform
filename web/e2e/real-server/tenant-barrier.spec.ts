@@ -2,10 +2,13 @@
  * Real-server spec for the tenant barrier page, /tenant/barrier (#2067,
  * UI epic #1665). It runs against the real-server harness: no page.route
  * mocks. Every expectation is checked against what the server answered:
- * the barrier status read and the capabilities listing. The spec does not
- * seal the fixture tenant, because the server refuses an empty unseal key
- * (pkg/tenant/manager.go:1033-1035) and the harness holds no tenant barrier
- * key to unseal it again.
+ * the barrier status read and the capabilities listing. It covers both
+ * tenant kinds: a tenant with no barrier (the registration fixture's default
+ * prefix tenant), where the card shows "Not applicable" and disables its key
+ * input and Unseal, and a barrier, volume or raft tenant, where it shows the
+ * sealed and initialized state. The spec does not seal the fixture tenant,
+ * because the server refuses an empty unseal key and the harness holds no
+ * tenant barrier key to unseal it again.
  */
 import type { Page, Response } from '@playwright/test';
 import { expect, test } from './fixtures';
@@ -28,6 +31,13 @@ interface BarrierStatus {
   initialized?: boolean;
   strategy?: string;
   hardwareBacked?: boolean;
+  isolation?: string;
+}
+
+// hasNoBarrier follows the card's rule (tenant-barrier-card.tsx): a status
+// naming an isolation other than barrier, volume or raft has no barrier.
+function hasNoBarrier(status: BarrierStatus | undefined): boolean {
+  return !!status?.isolation && !['barrier', 'volume', 'raft'].includes(status.isolation);
 }
 
 async function listCapabilities(sdk: {
@@ -102,6 +112,16 @@ test.describe('Tenant barrier (real server)', () => {
     expect(res.ok()).toBeTruthy();
     const { barrierStatus } = unwrapPayload<{ barrierStatus?: BarrierStatus }>(await res.json());
     expect(barrierStatus).toBeDefined();
+    if (hasNoBarrier(barrierStatus)) {
+      await expect(card.getByTestId('tenant-barrier-not-applicable')).toContainText(
+        `Not applicable: ${barrierStatus?.isolation} isolation`,
+      );
+      await expect(card).not.toContainText('Sealed');
+      await expect(card).not.toContainText('Unsealed');
+      await expect(card).not.toContainText('Initialized');
+      await expect(card).not.toContainText('Not initialized');
+      return;
+    }
     await expect(card).toContainText(barrierStatus?.sealed ? 'Sealed' : 'Unsealed');
     await expect(card).toContainText(barrierStatus?.initialized ? 'Initialized' : 'Not initialized');
   });
@@ -155,10 +175,16 @@ test.describe('Tenant barrier (real server)', () => {
     const unseal = adminPage.getByRole('button', { name: 'Unseal', exact: true });
     await expect(key).toHaveValue('');
     await expect(unseal).toBeDisabled();
-    await key.fill('a2V5');
-    await expect(unseal).toBeEnabled();
-    await key.fill('');
-    await expect(unseal).toBeDisabled();
+    if (hasNoBarrier(before)) {
+      // A tenant with no barrier: the card disables the key input and
+      // Unseal outright, so there is nothing to type into.
+      await expect(key).toBeDisabled();
+    } else {
+      await key.fill('a2V5');
+      await expect(unseal).toBeEnabled();
+      await key.fill('');
+      await expect(unseal).toBeDisabled();
+    }
     expect(posts).toEqual([]);
 
     const after = await readStatus(adminPage, tenant.id);
