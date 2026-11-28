@@ -1320,7 +1320,8 @@ func TestSetUserPassword_FailedSetSendsNoEnable(t *testing.T) {
 // password field, so a NUL byte would store a truncated or blank secret; the
 // reset refuses it before any write (Codex #2199 round 23).
 func TestSetUserPassword_RefusesNULPasswordWritesNothing(t *testing.T) {
-	for _, p := range []string{"\x00", "\x00\x00\x00\x00", "ab\x00cd", "abcd\x00"} {
+	nul := string([]byte{0})
+	for _, p := range []string{nul, strings.Repeat(nul, 4), "ab" + nul + "cd", "abcd" + nul} {
 		m := newMock()
 		um := newUM(m)
 		pwd := memguard.NewMemoryEnclave([]byte(p))
