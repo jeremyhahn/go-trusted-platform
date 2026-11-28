@@ -229,8 +229,6 @@ func TestUpdateConfigSection_RouteIsRegisteredPUTOnly(t *testing.T) {
 	router := NewPlatformRouter(logger, respWriter)
 	fake := okUpdater("configuration section applied")
 	router.SetConfigUpdater(fake)
-	// Pass-through system-tenant guard: this test covers the handler.
-	router.SetSystemTenantGuard(func(h http.Handler) http.Handler { return h })
 	root, apiRouter := newTestRouter()
 	router.RegisterRoutes(apiRouter)
 

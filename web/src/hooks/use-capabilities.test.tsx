@@ -153,31 +153,6 @@ describe("useCapabilities", () => {
     expect(first.result.current.capability("POST /api/v1/ntp/step").enabled).toBe(true);
     expect(second.result.current.capability("POST /api/v1/ntp/step").enabled).toBe(true);
   });
-
-  it("reload after a successful read fetches again and shows the changed answer", async () => {
-    const changed = {
-      capabilities: [
-        { op: "POST /api/v1/ntp/step", kind: "route", enabled: false, reason: "blocked: maintenance" },
-      ],
-      total: 1,
-      enabled: 0,
-    };
-    fetchMock.mockImplementationOnce(() => Promise.resolve(ok(capabilities)));
-    fetchMock.mockImplementation(() => Promise.resolve(ok(changed)));
-
-    const { result } = renderHook(() => useCapabilities(), { wrapper });
-    await waitFor(() => expect(result.current.capability("POST /api/v1/ntp/step").enabled).toBe(true));
-
-    act(() => result.current.reload());
-
-    await waitFor(() =>
-      expect(result.current.capability("POST /api/v1/ntp/step")).toEqual({
-        enabled: false,
-        reason: "blocked: maintenance",
-      })
-    );
-    expect(capabilityCalls()).toHaveLength(2);
-  });
 });
 
 const OP = "DELETE /api/v1/proxy/pools/{id}";

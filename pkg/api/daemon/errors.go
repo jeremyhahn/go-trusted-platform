@@ -242,17 +242,6 @@ func (e ErrDatabaseNotAvailable) Error() string {
 	return fmt.Sprintf("database not available: %s", e.Reason)
 }
 
-// ErrIncompleteEntityWalk is returned when a walk over a remote datastore's
-// entities cannot be completed, because the transport does not page.
-type ErrIncompleteEntityWalk struct {
-	EntityType string
-	Reason     string
-}
-
-func (e ErrIncompleteEntityWalk) Error() string {
-	return fmt.Sprintf("entity walk of %s is incomplete: %s", e.EntityType, e.Reason)
-}
-
 // ErrUnsupportedRecordType is returned when an unsupported DNS record type is specified
 type ErrUnsupportedRecordType struct{}
 

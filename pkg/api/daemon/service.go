@@ -23,7 +23,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
@@ -967,19 +966,23 @@ func (s *Service) ListEntityTypes(ctx context.Context, req *platformv1.ListEntit
 		count := uint64(0)
 		typeStatus := "empty"
 
-		// Count entities of this type; on a list error carry on with the
-		// other entity types.
-		walkErr := walkEntities(ctx, client, entityType, func(*service.Entity) error {
-			count++
-			return nil
-		})
-		// A failed or incomplete walk has no known count, so the type
-		// reports none.
-		switch {
-		case walkErr != nil:
-			typeStatus = "error"
-			count = 0
-		case count > 0:
+		// Count entities of this type using pagination
+		pageToken := ""
+		for {
+			entities, nextToken, listErr := client.List(ctx, entityType, 100, pageToken, 0)
+			if listErr != nil {
+				// Log the error but continue with other entity types
+				typeStatus = "error"
+				break
+			}
+			count += uint64(len(entities))
+			if nextToken == "" {
+				break
+			}
+			pageToken = nextToken
+		}
+
+		if count > 0 {
 			typeStatus = "active"
 			activeTypes++
 		}
@@ -1025,108 +1028,33 @@ func (s *Service) DumpEntityType(req *platformv1.DumpEntityTypeRequest, stream p
 	}
 
 	for _, entityType := range entityTypes {
-		// List all entities of this type. A list error skips the type and
-		// carries on with the others; an incomplete remote walk or a send
-		// error ends the dump.
-		var sendErr error
-		walkErr := walkEntities(ctx, client, entityType, func(entity *service.Entity) error {
-			resp := &platformv1.DumpEntityTypeResponse{
-				EntityType: entityType,
-				EntityId:   entity.ID,
-				Data:       entity.Data,
+		// List all entities of this type
+		pageToken := ""
+		for {
+			entities, nextToken, listErr := client.List(ctx, entityType, 100, pageToken, 0)
+			if listErr != nil {
+				// Skip entity type on error but continue with others
+				break
 			}
-			if err := stream.Send(resp); err != nil {
-				sendErr = err
-				return err
-			}
-			return nil
-		})
-		if sendErr != nil {
-			return sendErr
-		}
-		var incomplete ErrIncompleteEntityWalk
-		if errors.As(walkErr, &incomplete) {
-			return status.Error(codes.Internal, walkErr.Error())
-		}
-	}
 
-	return nil
-}
-
-// entityWalkPageSize is the page size walkEntities asks List for.
-const entityWalkPageSize = 100
-
-// walkEntities calls fn once for each entity of entityType. The pinned
-// go-quicbaas v0.12.0-alpha embedded transport ignores the page token: it
-// returns every record in one response but keeps the first batch's next
-// token. So, for an embedded client only, as PXEDeviceStore.List does, the
-// walk stops on an empty next token, a page larger than the page size or a
-// next token already sent, and skips an entity ID already seen.
-//
-// A remote client's List does not page either: it returns only the first
-// batch, ignores the cursor and leaves every Entity.ID 0, so neither the
-// dedupe nor the silent stops can make its walk complete. A remote walk that
-// sees a page larger than the page size or a repeated next token returns
-// ErrIncompleteEntityWalk before it hands that page to fn (#2081 Codex
-// round 5); a remote page with an empty next token ends the walk.
-//
-// It returns the first List, fn or incomplete-walk error.
-func walkEntities(ctx context.Context, client quicbaas.ClientInterface, entityType string, fn func(*service.Entity) error) error {
-	seenIDs := make(map[uint64]struct{})
-	sentTokens := make(map[string]struct{})
-	pageToken := ""
-	embedded := client.IsEmbedded()
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		sentTokens[pageToken] = struct{}{}
-		entities, nextToken, err := client.List(ctx, entityType, entityWalkPageSize, pageToken, 0)
-		if err != nil {
-			return err
-		}
-		if !embedded {
-			if err := incompleteRemotePage(entityType, entities, nextToken, sentTokens); err != nil {
-				return err
-			}
-		}
-		for _, entity := range entities {
-			if entity == nil {
-				continue
-			}
-			if embedded && entity.ID != 0 {
-				if _, dup := seenIDs[entity.ID]; dup {
-					continue
+			for _, entity := range entities {
+				resp := &platformv1.DumpEntityTypeResponse{
+					EntityType: entityType,
+					EntityId:   entity.ID,
+					Data:       entity.Data,
 				}
-				seenIDs[entity.ID] = struct{}{}
+				if err := stream.Send(resp); err != nil {
+					return err
+				}
 			}
-			if err := fn(entity); err != nil {
-				return err
-			}
-		}
-		if nextToken == "" || len(entities) > entityWalkPageSize {
-			return nil
-		}
-		if _, sent := sentTokens[nextToken]; sent {
-			return nil
-		}
-		pageToken = nextToken
-	}
-}
 
-// incompleteRemotePage reports whether a page a remote client's List
-// returned shows that the transport does not page: a page larger than the
-// page size, or a non-empty next token that was already sent. It returns an
-// ErrIncompleteEntityWalk for such a page and nil otherwise.
-func incompleteRemotePage(entityType string, entities []*service.Entity, nextToken string, sentTokens map[string]struct{}) error {
-	if len(entities) > entityWalkPageSize {
-		return ErrIncompleteEntityWalk{EntityType: entityType, Reason: "the remote transport returned a page larger than the page size"}
-	}
-	if nextToken != "" {
-		if _, sent := sentTokens[nextToken]; sent {
-			return ErrIncompleteEntityWalk{EntityType: entityType, Reason: "the remote transport repeated a page token; its List does not page"}
+			if nextToken == "" {
+				break
+			}
+			pageToken = nextToken
 		}
 	}
+
 	return nil
 }
 
