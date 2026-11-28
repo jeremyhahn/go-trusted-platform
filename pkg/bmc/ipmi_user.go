@@ -19,6 +19,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
 )
@@ -245,6 +246,16 @@ func (m *ipmiUserManager) CreateUser(ctx context.Context, u User, password *memg
 	}
 	if err := validateUsername(u.Username); err != nil {
 		return err
+	}
+	// getUserName decodes an empty or NUL-led name as an empty slot, so such
+	// an account would be hidden from ListUsers and open to a later create.
+	// Refuse both here, before the first write; DeleteUser still writes an
+	// empty name through validateUsername.
+	if u.Username == "" {
+		return ErrInvalidConfig{Field: "username", Reason: "a username may not be empty"}
+	}
+	if strings.IndexByte(u.Username, 0) >= 0 {
+		return ErrInvalidConfig{Field: "username", Reason: "a username may not contain a NUL byte"}
 	}
 	if !u.Privilege.IsValid() {
 		return ErrInvalidConfig{Field: "privilege", Reason: "unrecognized privilege level"}
