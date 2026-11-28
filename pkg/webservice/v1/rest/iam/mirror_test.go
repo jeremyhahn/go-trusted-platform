@@ -102,9 +102,9 @@ func TestMirrorUser_UsernameHeldByAnotherEmailIsAnError(t *testing.T) {
 
 // TestMirrorUser_ExistingIdentityGetsTheRequestedRoles: a mirror conflict for
 // the same tenant and email assigns the requested roles the user lacks.
-func TestMirrorUser_ExistingIdentityGetsTheRequestedRoles(t *testing.T) {
+func TestMirrorUser_ExistingIdentityLackingARoleIsRefused(t *testing.T) {
 	t.Parallel()
-	var assigns [][3]string
+	assigns := 0
 	m := NewQuicBaaSUserMirror(&mockIAMClient{
 		createUserFn: func(context.Context, string, *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
 			return nil, errors.New("iam.user: already exists")
@@ -118,13 +118,16 @@ func TestMirrorUser_ExistingIdentityGetsTheRequestedRoles(t *testing.T) {
 				{ID: "role-admin", Name: "admin"},
 			}}, nil
 		},
-		assignRoleFn: func(_ context.Context, tenantID, userID, roleID string) error {
-			assigns = append(assigns, [3]string{tenantID, userID, roleID})
+		assignRoleFn: func(context.Context, string, string, string) error {
+			assigns++
 			return nil
 		},
 	})
-	require.NoError(t, m.MirrorUser(context.Background(), "t1", "ann@example.com", "", []string{"viewer", "admin"}))
-	assert.Equal(t, [][3]string{{"t1", "u-ann", "admin"}}, assigns)
+	err := m.MirrorUser(context.Background(), "t1", "ann@example.com", "", []string{"viewer", "admin"})
+	var notHeld ErrMirrorRoleNotHeld
+	require.ErrorAs(t, err, &notHeld)
+	assert.Equal(t, "admin", notHeld.Role)
+	assert.Zero(t, assigns)
 }
 
 func TestMirroredEmails_ReadsEveryPage(t *testing.T) {
@@ -258,12 +261,9 @@ func TestMirrorInvitedUser_UsernameIgnoresTheDisplayName(t *testing.T) {
 // TestMirrorInvitedUser_PartialAssignRollbackOutlivesACanceledRequest: a
 // request canceled mid-assignment must still revoke the roles this call
 // already granted (#2362).
-func TestMirrorInvitedUser_PartialAssignRollbackOutlivesACanceledRequest(t *testing.T) {
+func TestMirrorInvitedUser_ExistingIdentityMissingARoleIsRefused(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	var revoked []string
-	var revokeCtxErrs []error
+	assigns := 0
 	m := NewQuicBaaSUserMirror(&mockIAMClient{
 		createUserFn: func(context.Context, string, *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
 			return nil, errors.New("iam.user: already exists")
@@ -274,25 +274,44 @@ func TestMirrorInvitedUser_PartialAssignRollbackOutlivesACanceledRequest(t *test
 		listRolesFn: func(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
 			return &iamsdk.ListRolesResponse{}, nil
 		},
-		assignRoleFn: func(_ context.Context, _, _, roleID string) error {
-			if roleID == "admin" {
-				cancel()
-				return context.Canceled
-			}
-			return nil
-		},
-		revokeRoleFn: func(rctx context.Context, _, _, roleID string) error {
-			revoked = append(revoked, roleID)
-			revokeCtxErrs = append(revokeCtxErrs, rctx.Err())
+		assignRoleFn: func(context.Context, string, string, string) error {
+			assigns++
 			return nil
 		},
 	})
 
-	undo, err := m.MirrorInvitedUser(ctx, "t1", "ann@example.com", "", []string{"viewer", "admin"})
+	undo, err := m.MirrorInvitedUser(context.Background(), "t1", "ann@example.com", "", []string{"viewer"})
 
-	require.ErrorIs(t, err, context.Canceled)
+	var notHeld ErrMirrorRoleNotHeld
+	require.ErrorAs(t, err, &notHeld)
+	assert.Equal(t, ErrMirrorRoleNotHeld{TenantID: "t1", Email: "ann@example.com", Role: "viewer"}, notHeld)
 	assert.Nil(t, undo)
-	assert.Equal(t, []string{"viewer"}, revoked)
-	assert.Equal(t, []error{nil}, revokeCtxErrs,
-		"the partial assignment is revoked on a context the request's cancel does not reach")
+	assert.Zero(t, assigns, "the embedded IAM dispatches no User/AssignRole")
+}
+
+func TestMirrorInvitedUser_ExistingIdentityHoldingEveryRoleSucceeds(t *testing.T) {
+	t.Parallel()
+	assigns := 0
+	m := NewQuicBaaSUserMirror(&mockIAMClient{
+		createUserFn: func(context.Context, string, *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
+			return nil, errors.New("iam.user: already exists")
+		},
+		getByEmailFn: func(context.Context, string, string) (*iamsdk.User, error) {
+			return &iamsdk.User{ID: "u-ann", Email: "ann@example.com", Roles: []string{"role-viewer"}}, nil
+		},
+		listRolesFn: func(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+			return &iamsdk.ListRolesResponse{Roles: []iamsdk.Role{{ID: "role-viewer", Name: "viewer"}}}, nil
+		},
+		assignRoleFn: func(context.Context, string, string, string) error {
+			assigns++
+			return nil
+		},
+	})
+
+	undo, err := m.MirrorInvitedUser(context.Background(), "t1", "ann@example.com", "", []string{"viewer"})
+
+	require.NoError(t, err)
+	require.NotNil(t, undo)
+	require.NoError(t, undo(context.Background()))
+	assert.Zero(t, assigns)
 }
