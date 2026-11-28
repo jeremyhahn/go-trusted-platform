@@ -3348,13 +3348,6 @@ func (d *Daemon) VPNGRPCServiceServer() *VPNGRPCService {
 	return d.vpnGRPCService
 }
 
-// ClusterGRPCService returns the Cluster gRPC server the daemon REST
-// listener serves under /cluster, so the console listener can serve the
-// same routes. Returns nil if not configured.
-func (d *Daemon) ClusterGRPCService() platformv1.ClusterServiceServer {
-	return d.clusterGRPCService
-}
-
 // BMCRestHandler returns the BMC REST handler backing /api/v1/bmc, or nil
 // when the daemon has no BMC service.
 func (d *Daemon) BMCRestHandler() bmcwebsvc.RestHandler {

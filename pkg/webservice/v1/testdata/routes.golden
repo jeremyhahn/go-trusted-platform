@@ -123,8 +123,6 @@ GET /api/v1/cache/config
 GET /api/v1/cache/stats
 GET /api/v1/capabilities
 GET /api/v1/certificate
-GET /api/v1/cluster/nodes
-GET /api/v1/cluster/status
 GET /api/v1/compute
 GET /api/v1/compute/containers
 GET /api/v1/compute/containers/{id}
@@ -408,9 +406,6 @@ POST /api/v1/ca/certificates
 POST /api/v1/ca/certificates/verify
 POST /api/v1/ca/certificates/{serial}/renew
 POST /api/v1/ca/sign-csr
-POST /api/v1/cluster/bootstrap
-POST /api/v1/cluster/join
-POST /api/v1/cluster/leave
 POST /api/v1/compute/containers
 POST /api/v1/compute/containers/{id}/attest
 POST /api/v1/compute/containers/{id}/exec

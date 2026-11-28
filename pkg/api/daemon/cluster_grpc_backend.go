@@ -107,10 +107,9 @@ func (b *clusterGRPCBackend) Bootstrap(
 	if err != nil {
 		return nil, err
 	}
-	node, leader := membershipView(ctx, svc, req.NodeName)
 	return &grpcapi.ClusterBootstrapResponse{
-		Cluster: clusterInfoToGRPC(req.ClusterName, st, leader),
-		Node:    node,
+		Cluster: clusterInfoToGRPC(req.ClusterName, st, nil),
+		Node:    localClusterNode(svc, req.NodeName),
 	}, nil
 }
 
@@ -130,10 +129,9 @@ func (b *clusterGRPCBackend) Join(
 	if err != nil {
 		return nil, err
 	}
-	node, leader := membershipView(ctx, svc, req.NodeName)
 	return &grpcapi.ClusterJoinResponse{
-		Cluster: clusterInfoToGRPC("", st, leader),
-		Node:    node,
+		Cluster: clusterInfoToGRPC("", st, nil),
+		Node:    localClusterNode(svc, req.NodeName),
 	}, nil
 }
 
@@ -398,23 +396,6 @@ func localClusterNode(svc ClusterServicer, name string) *grpcapi.ClusterNodeInfo
 		Role:  role,
 		State: grpcapi.NodeStateActive,
 	}
-}
-
-// membershipView reads the member list after a membership change: the local node as the cluster lists it (named name) and the leader. A failed or empty read falls back to localClusterNode and no leader, since the change itself succeeded.
-func membershipView(ctx context.Context, svc ClusterServicer, name string) (*grpcapi.ClusterNodeInfo, *ClusterNodeInfo) {
-	local := localClusterNode(svc, name)
-	nodes, err := svc.Nodes(ctx)
-	if err != nil || nodes == nil {
-		return local, nil
-	}
-	for _, n := range nodes.Nodes {
-		if n.ID == svc.NodeID() {
-			local = clusterNodeToGRPC(n)
-			local.Name = name
-			break
-		}
-	}
-	return local, nodes.Leader
 }
 
 // memberLocalNode returns the member record of node id from membership,

@@ -7,9 +7,7 @@ package daemon
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
-	"strconv"
 
 	"github.com/gorilla/mux"
 
@@ -34,8 +32,8 @@ func newClusterRESTHandlers(svc platformv1.ClusterServiceServer) *clusterRESTHan
 //
 // Routes mirror the gRPC method set:
 //
-//	GET  /cluster/status   ?include_nodes=<bool>
-//	GET  /cluster/nodes    ?role=<n>&state=<n> (each repeatable), ?page=<n>&page_size=<n>
+//	GET  /cluster/status
+//	GET  /cluster/nodes
 //	POST /cluster/bootstrap
 //	POST /cluster/join
 //	POST /cluster/leave
@@ -84,16 +82,7 @@ func (h *clusterRESTHandlers) status(w http.ResponseWriter, r *http.Request) {
 		writeRESTJSON(w, http.StatusServiceUnavailable, map[string]string{"error": ErrClusterNotConfigured{}.Error()})
 		return
 	}
-	req := &platformv1.GetClusterStatusRequest{}
-	if v := r.URL.Query().Get("include_nodes"); v != "" {
-		include, err := strconv.ParseBool(v)
-		if err != nil {
-			writeRESTJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid include_nodes: " + err.Error()})
-			return
-		}
-		req.IncludeNodes = include
-	}
-	resp, err := h.service.GetStatus(r.Context(), req)
+	resp, err := h.service.GetStatus(r.Context(), &platformv1.GetClusterStatusRequest{})
 	if err != nil {
 		writeRESTJSON(w, clusterErrorToHTTP(err), map[string]string{"error": err.Error()})
 		return
@@ -106,12 +95,7 @@ func (h *clusterRESTHandlers) nodes(w http.ResponseWriter, r *http.Request) {
 		writeRESTJSON(w, http.StatusServiceUnavailable, map[string]string{"error": ErrClusterNotConfigured{}.Error()})
 		return
 	}
-	req, err := clusterNodesQuery(r)
-	if err != nil {
-		writeRESTJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	resp, err := h.service.ListNodes(r.Context(), req)
+	resp, err := h.service.ListNodes(r.Context(), &platformv1.ListClusterNodesRequest{})
 	if err != nil {
 		writeRESTJSON(w, clusterErrorToHTTP(err), map[string]string{"error": err.Error()})
 		return
@@ -171,50 +155,4 @@ func (h *clusterRESTHandlers) leave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeRESTJSON(w, http.StatusOK, resp)
-}
-
-// clusterNodesQuery builds the ListNodes request from the GET /cluster/nodes
-// query: every role and state value (the numeric NodeRole and NodeState
-// enums) filters, and page or page_size sets the 1-based pagination.
-func clusterNodesQuery(r *http.Request) (*platformv1.ListClusterNodesRequest, error) {
-	q := r.URL.Query()
-	req := &platformv1.ListClusterNodesRequest{}
-	for _, v := range q["role"] {
-		n, err := strconv.ParseInt(v, 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("invalid role %q: %w", v, err)
-		}
-		req.Roles = append(req.Roles, platformv1.NodeRole(n))
-	}
-	for _, v := range q["state"] {
-		n, err := strconv.ParseInt(v, 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("invalid state %q: %w", v, err)
-		}
-		req.States = append(req.States, platformv1.NodeState(n))
-	}
-	if q.Has("page") || q.Has("page_size") {
-		page, err := parseClusterUint32(q.Get("page"))
-		if err != nil {
-			return nil, fmt.Errorf("invalid page: %w", err)
-		}
-		size, err := parseClusterUint32(q.Get("page_size"))
-		if err != nil {
-			return nil, fmt.Errorf("invalid page_size: %w", err)
-		}
-		req.Pagination = &platformv1.PaginationRequest{Page: page, PageSize: size}
-	}
-	return req, nil
-}
-
-// parseClusterUint32 parses a decimal uint32 query value; empty is 0.
-func parseClusterUint32(v string) (uint32, error) {
-	if v == "" {
-		return 0, nil
-	}
-	n, err := strconv.ParseUint(v, 10, 32)
-	if err != nil {
-		return 0, err
-	}
-	return uint32(n), nil
 }

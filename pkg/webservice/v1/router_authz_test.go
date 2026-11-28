@@ -157,10 +157,6 @@ type stubVPNServer struct {
 	platformv1.UnimplementedVPNServiceServer
 }
 
-type stubClusterServer struct {
-	platformv1.UnimplementedClusterServiceServer
-}
-
 type stubProxyServer struct {
 	platformv1.UnimplementedProxyServiceServer
 }
@@ -327,9 +323,6 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.ntpService = &stubNTPServer{}
 	registry.vpnService = &stubVPNServer{}
 	registry.proxyService = &stubProxyServer{}
-	if registry.clusterService == nil {
-		registry.clusterService = &stubClusterServer{}
-	}
 	if registry.bmcHandler == nil && !registry.withoutBMC {
 		registry.bmcHandler = &countingBMCHandler{}
 	}
