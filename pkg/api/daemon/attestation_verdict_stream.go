@@ -225,15 +225,16 @@ func (s *AttestationServiceServer) PollDeviceVerdictsFor(
 func deviceVerdictEvent(recorded verdict.RecordedDeviceVerdict) *platformv1.DeviceVerdictEvent {
 	v := recorded.Verdict
 	return &platformv1.DeviceVerdictEvent{
-		EventId:       recorded.EventID,
-		RecordedAt:    timestamppb.New(recorded.RecordedAt),
-		DeviceId:      v.DeviceID,
-		TenantId:      v.TenantID,
-		HostId:        v.HostID,
-		Serial:        v.Serial,
-		Passed:        v.Passed,
-		Cryptographic: v.Cryptographic,
-		Reason:        v.Reason,
+		EventId:        recorded.EventID,
+		RecordedAt:     timestamppb.New(recorded.RecordedAt),
+		DeviceId:       v.DeviceID,
+		TenantId:       v.TenantID,
+		HostId:         v.HostID,
+		Serial:         v.Serial,
+		Passed:         v.Passed,
+		Cryptographic:  v.Cryptographic,
+		Reason:         v.Reason,
+		BaselineSource: v.BaselineSource,
 	}
 }
 

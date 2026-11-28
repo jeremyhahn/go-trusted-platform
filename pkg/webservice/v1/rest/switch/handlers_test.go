@@ -443,3 +443,120 @@ func TestPortMutators_PortNotFound(t *testing.T) {
 		}
 	}
 }
+
+// TestPortOperations_InvalidInputIs400 checks that a manager's invalid-config
+// and invalid-port-range errors, bare or wrapped in an SSH command failure,
+// answer 400 on every port route rather than 500.
+func TestPortOperations_InvalidInputIs400(t *testing.T) {
+	invalidConfig := switchmgmt.ErrInvalidConfig{Field: "vlan", Reason: "out of range"}
+	invalidRange := switchmgmt.ErrInvalidPortRange{Port: "Eth1/1-x", Reason: "malformed"}
+	wrap := func(cause error) error {
+		return switchmgmt.ErrSSHCommandFailed{Command: "interface Eth1/3", Cause: cause}
+	}
+	for _, invalid := range []struct {
+		name string
+		err  error
+	}{
+		{"invalid-config", invalidConfig},
+		{"invalid-port-range", invalidRange},
+		{"wrapped-invalid-config", wrap(invalidConfig)},
+		{"wrapped-invalid-port-range", wrap(invalidRange)},
+	} {
+		mgr := &mockManager{
+			getPortStatusFunc: func(_ context.Context, _ string) (*switchwire.PortStatus, error) {
+				return nil, invalid.err
+			},
+			setPortVLANFunc: func(_ context.Context, _ string, _ uint16) error { return invalid.err },
+			enablePortFunc:  func(_ context.Context, _ string) error { return invalid.err },
+			disablePortFunc: func(_ context.Context, _ string) error { return invalid.err },
+		}
+		router := newTestRouter(newTestHandlers(&mockSwitchService{managers: map[string]switchmgmt.Manager{"core-01": mgr}}))
+
+		for _, route := range []struct {
+			method string
+			suffix string
+		}{
+			{http.MethodGet, ""},
+			{http.MethodPost, "/vlan"},
+			{http.MethodPost, "/enable"},
+			{http.MethodPost, "/disable"},
+		} {
+			t.Run(invalid.name+"/"+route.method+route.suffix, func(t *testing.T) {
+				var body *bytes.Reader
+				if route.method == http.MethodPost {
+					body = bytes.NewReader([]byte(`{"vlan_id":200}`))
+				} else {
+					body = bytes.NewReader(nil)
+				}
+				req := httptest.NewRequest(route.method, "/api/v1/switches/core-01/ports/Eth1%2F3"+route.suffix, body)
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, req)
+
+				assert.Equal(t, http.StatusBadRequest, rec.Code)
+			})
+		}
+	}
+}
+
+func TestHandlers_RejectUnsafePortName(t *testing.T) {
+	var called []string
+	mgr := &mockManager{
+		getPortStatusFunc: func(ctx context.Context, port string) (*switchwire.PortStatus, error) {
+			called = append(called, port)
+			return &switchwire.PortStatus{Port: port}, nil
+		},
+		setPortVLANFunc: func(ctx context.Context, port string, vlanID uint16) error {
+			called = append(called, port)
+			return nil
+		},
+		enablePortFunc: func(ctx context.Context, port string) error {
+			called = append(called, port)
+			return nil
+		},
+		disablePortFunc: func(ctx context.Context, port string) error {
+			called = append(called, port)
+			return nil
+		},
+	}
+	svc := &mockSwitchService{managers: map[string]switchmgmt.Manager{"core-01": mgr}}
+	router := newTestRouter(newTestHandlers(svc))
+
+	routes := []struct {
+		method string
+		suffix string
+		body   []byte
+	}{
+		{http.MethodGet, "", nil},
+		{http.MethodPost, "/vlan", []byte(`{"vlan_id":200}`)},
+		{http.MethodPost, "/enable", nil},
+		{http.MethodPost, "/disable", nil},
+	}
+	serve := func(method, port, suffix string, body []byte) int {
+		req := httptest.NewRequest(method, "/api/v1/switches/core-01/ports/"+port+suffix, bytes.NewReader(body))
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	unsafe := []string{
+		"Eth1%2F3%3Bshow%20running-config",
+		"Eth1%2F3%0Ashow",
+		"Eth1%2F3%7Cinclude%20x",
+		"Eth1%2F3%60x%60",
+	}
+	for _, rt := range routes {
+		for _, port := range unsafe {
+			called = nil
+			code := serve(rt.method, port, rt.suffix, rt.body)
+			assert.Equal(t, http.StatusBadRequest, code, "%s %s%s", rt.method, port, rt.suffix)
+			assert.Empty(t, called, "%s %s%s reached the manager", rt.method, port, rt.suffix)
+		}
+		called = nil
+		code := serve(rt.method, "Eth1%2F3", rt.suffix, rt.body)
+		assert.Equal(t, http.StatusOK, code, "%s Eth1%%2F3%s", rt.method, rt.suffix)
+		assert.Equal(t, []string{"Eth1/3"}, called)
+	}
+}

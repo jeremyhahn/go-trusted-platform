@@ -1031,6 +1031,14 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 
 	wireGatewayControlPlane(logger, platformDaemon, gwControl)
 
+	switchSvc, err := newSwitchService(logger, App)
+	if err != nil {
+		logger.Error(err, "Failed to build the switch service")
+		cmd.PrintErrln(fmt.Sprintf("Failed to build the switch service: %v", err))
+		return ErrServeStartup{Phase: "switch service", Cause: err}
+	}
+	wireSwitchService(platformDaemon.SwitchService(), switchSvc)
+
 	// Plug snapshot store into the daemon Service so reload captures
 	// a pre-reload snapshot automatically and rollback is reachable
 	// from REST + gRPC.
@@ -1366,10 +1374,8 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		if daemonConfig.VTPMService != nil {
 			params.VTPMService = daemonConfig.VTPMService
 		}
-		// Physical switch service: not yet wired through *app.App in the
-		// production startup path; nothing to plumb here today. Adding the
-		// switch backend requires a separate App field and config block —
-		// tracked separately. The REST router already nil-guards.
+		// Physical switch service built from the switches config block; nil (dark) when none.
+		params.SwitchService = switchServiceProvider(switchSvc)
 		params.ServicesManager = servicesManager
 		// Surface bound listener addresses so /api/v1/platform/protocols
 		// returns 200 instead of "daemon config not configured".
@@ -1541,10 +1547,20 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		}
 	}
 
+	var closeSwitches func() error
+	if switchSvc != nil {
+		closeSwitches = switchSvc.Close
+	}
+	var stopDaemon func(context.Context) error
 	if platformDaemon != nil {
-		if err := platformDaemon.Stop(ctx); err != nil {
-			logger.Warn("Error stopping platform daemon", "error", err)
-		}
+		stopDaemon = platformDaemon.Stop
+	}
+	closeErr, stopErr := stopWithSwitchesFirst(ctx, closeSwitches, stopDaemon)
+	if closeErr != nil {
+		logger.Warn("Error closing the switch service", "error", closeErr)
+	}
+	if stopErr != nil {
+		logger.Warn("Error stopping platform daemon", "error", stopErr)
 	}
 
 	logger.Info("Graceful shutdown complete")
@@ -1753,6 +1769,21 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	// place gatewayd can send its telemetry and lease reports.
 	wireGatewayControlPlane(logger, d, initGatewayControlPlane(logger, App))
 
+	switchSvc, err := newSwitchService(logger, App)
+	if err != nil {
+		logger.Error(err, "Failed to build the switch service")
+		cmd.PrintErrln(fmt.Sprintf("Failed to build the switch service: %v", err))
+		return ErrServeStartup{Phase: "switch service", Cause: err}
+	}
+	if err := wireDaemonOnlySwitchService(d, switchSvc); err != nil {
+		logger.Error(err, "Failed to wire the switch service")
+		cmd.PrintErrln(fmt.Sprintf("Failed to wire the switch service: %v", err))
+		if closeErr := switchSvc.Close(); closeErr != nil {
+			logger.Warn("Error closing the switch service", "error", closeErr)
+		}
+		return ErrServeStartup{Phase: "switch service", Cause: err}
+	}
+
 	if App != nil && App.TPM != nil {
 		logger.Info("TPM available for IDevID/IAK operations")
 
@@ -1789,8 +1820,16 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	logger.Info("Shutdown signal received")
 	cmd.Println("\nShutting down...")
 
-	if err := d.Stop(ctx); err != nil {
-		logger.Error(err, "Error during shutdown")
+	var closeSwitches func() error
+	if switchSvc != nil {
+		closeSwitches = switchSvc.Close
+	}
+	closeErr, stopErr := stopWithSwitchesFirst(ctx, closeSwitches, d.Stop)
+	if closeErr != nil {
+		logger.Warn("Error closing the switch service", "error", closeErr)
+	}
+	if stopErr != nil {
+		logger.Error(stopErr, "Error during shutdown")
 	}
 
 	logger.Info("Platform daemon stopped")

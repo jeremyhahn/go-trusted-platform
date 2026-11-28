@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"testing"
 
+	"github.com/google/go-tpm/tpm2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -50,6 +51,7 @@ func newIAKTPM(t *testing.T, withIAK bool) *iakTPM {
 		TPMAttributes: &xkmssdk.TPMAttributes{
 			Handle:         xkmssdk.TPMHandle(0x81010002),
 			PublicKeyBytes: []byte("iak-public"),
+			Name:           tpm2.TPM2BName{Buffer: []byte("iak-name")},
 		},
 	}}
 	if withIAK {
@@ -108,6 +110,12 @@ func TestTPMParity_IAK(t *testing.T) {
 		answer := got.(map[string]interface{})
 		assert.Equal(t, resp.GetHandle(), answer["handle"])
 		assert.Equal(t, base64.StdEncoding.EncodeToString(resp.GetPublicKey()), answer["public_key"])
+		// #2069: GetAK answers the AK's TPM name so the UI can show it.
+		if got := string(resp.GetName()); got != "iak-name" {
+			t.Fatalf("GetAK name = %q, want %q (#2069)", got, "iak-name")
+		}
+		assert.Equal(t, base64.StdEncoding.EncodeToString(resp.GetName()), answer["name"], "MCP TPMGetIAK answers the AK name (#2069)")
+		assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("iak-name")), answer["name"])
 	})
 
 	t.Run("absent", func(t *testing.T) {
