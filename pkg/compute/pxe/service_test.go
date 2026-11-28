@@ -2409,15 +2409,14 @@ func TestService_UpdateDeviceState_FailedVLANWriteKeepsState(t *testing.T) {
 	assert.Equal(t, provisioningVLAN, reloaded.CurrentVLAN)
 }
 
-// restoreFailingPort is a recordingPort whose flow installs fail after the
-// first failAfter installs, while deletes keep succeeding. It records each
+// restoreFailingPort is a recordingPort whose flow installs fail once fail
+// is set, while deletes keep succeeding. It records each
 // flow operation in order.
 type restoreFailingPort struct {
 	recordingPort
-	mu        sync.Mutex
-	installs  int
-	failAfter int
-	ops       []string
+	mu   sync.Mutex
+	fail bool
+	ops  []string
 }
 
 var errFlowInstall = errors.New("flow install failed")
@@ -2425,8 +2424,7 @@ var errFlowInstall = errors.New("flow install failed")
 func (p *restoreFailingPort) InstallFlows(string, []zoneflows.FlowRule) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.installs++
-	if p.failAfter > 0 && p.installs > p.failAfter {
+	if p.fail {
 		p.ops = append(p.ops, "install-failed")
 		return errFlowInstall
 	}
@@ -2455,17 +2453,26 @@ func TestService_UpdateDeviceState_QuarantineRestoreFailureDropsAll(t *testing.T
 	})
 	require.NoError(t, err)
 	svc.vlanManager = NewVLANIntegrationWrapper(WithFlowManager(zfm))
+	// The booting write fails, and from then on every flow install fails:
+	// the provisioning move succeeds, every quarantine restore does not.
 	setStoredDevice(t, svc, store, id, StateDiscovered, svc.config.QuarantineVLAN,
-		func(d *DeviceInfo) bool { return d.State == StateBooting })
+		func(d *DeviceInfo) bool {
+			if d.State != StateBooting {
+				return false
+			}
+			port.mu.Lock()
+			port.fail = true
+			port.mu.Unlock()
+			return true
+		})
 
 	port.mu.Lock()
-	port.installs = 0
 	port.ops = nil
-	port.failAfter = 1 // the provisioning install succeeds, every later install fails
 	port.mu.Unlock()
 
 	err = svc.UpdateDeviceState(context.Background(), id, StateBooting, "pxe boot")
 	require.Error(t, err)
+	assert.ErrorIs(t, err, errFlowInstall, "the failed restore is returned")
 
 	port.mu.Lock()
 	ops := append([]string(nil), port.ops...)

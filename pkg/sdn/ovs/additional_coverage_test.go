@@ -578,9 +578,9 @@ func TestParsePortTagTypes(t *testing.T) {
 			"tag":  []interface{}{"other", "value"},
 		}
 
-		port, err := parsePort(row)
-		require.NoError(t, err)
-		// Tag should be 0 since it's not a valid set format
-		assert.Equal(t, int64(0), port.Tag)
+		// A tag that is neither a scalar nor a set does not decode: it is
+		// an error, never "no tag" (#2081 Codex round 11).
+		_, err := parsePort(row)
+		require.Error(t, err)
 	})
 }
