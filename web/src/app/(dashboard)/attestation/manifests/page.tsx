@@ -24,6 +24,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { useApi, useAttestation, useToast } from "@/hooks";
+import { ManifestDeleteButton } from "@/components/features/attestation/manifest-delete-button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ManifestActionsCard } from "./manifest-actions-card";
 
@@ -52,7 +53,10 @@ const statusConfig: Record<
   archived: { label: "Archived", variant: "outline", icon: XCircle },
 };
 
-const columns: ColumnDef<AttestationManifest>[] = [
+// The table's columns; the last one carries the gated Delete manifest control,
+// which calls onDeleted after the server deleted the row's manifest (#2038).
+function manifestColumns(onDeleted: () => void): ColumnDef<AttestationManifest>[] {
+  return [
   {
     accessorKey: "name",
     header: ({ column }) => (
@@ -131,7 +135,19 @@ const columns: ColumnDef<AttestationManifest>[] = [
       <span className="text-muted-foreground">{row.getValue("createdBy")}</span>
     ),
   },
-];
+  {
+    id: "actions",
+    header: () => <span className="sr-only">Actions</span>,
+    cell: ({ row }) => (
+      <ManifestDeleteButton
+        id={row.original.id}
+        label={row.original.name ?? row.original.id}
+        onDeleted={onDeleted}
+      />
+    ),
+  },
+  ];
+}
 
 /**
  * Attestation Manifests Page
@@ -165,6 +181,8 @@ export default function ManifestsPage() {
       },
     }
   );
+
+  const columns = React.useMemo(() => manifestColumns(() => void refetch()), [refetch]);
 
   // One clock sample per mount: manifest age is judged against when the page
   // was opened, not re-evaluated on every render (Date.now() is impure).

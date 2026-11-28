@@ -26,6 +26,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { useApi, useAttestation, useToast } from "@/hooks";
+import { AttestationQuoteCard } from "@/components/features/attestation/attestation-quote-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { QuoteVerifyCard } from "./quote-verify-card";
 
@@ -313,7 +314,10 @@ export default function QuotesPage() {
         </Button>
       </div>
 
+      <AttestationQuoteCard />
+
       <QuoteVerifyCard />
+
       {/* Statistics Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>

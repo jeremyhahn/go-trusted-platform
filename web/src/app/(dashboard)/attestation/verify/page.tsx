@@ -23,11 +23,11 @@ import {
   Clock,
   Cpu,
   Play,
-  Eye,
   AlertTriangle,
   Loader2,
 } from "lucide-react";
 import { useApi, useAttestation, useToast } from "@/hooks";
+import { ManifestVerifyButton } from "@/components/features/attestation/manifest-verify-button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import type { VerifyManifestResponse } from "trusted-platform-sdk";
 
@@ -144,11 +144,7 @@ const columns: ColumnDef<Verification>[] = [
   },
   {
     id: "actions",
-    cell: ({ row }) => (
-      <Button variant="ghost" size="sm">
-        <Eye className="h-4 w-4" />
-      </Button>
-    ),
+    cell: ({ row }) => <ManifestVerifyButton manifestId={row.original.manifestId} />,
   },
 ];
 

@@ -1,17 +1,13 @@
 "use client";
 
-import * as React from "react";
-import { RefreshCw, Radio } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { RefreshCw } from "lucide-react";
+import type { DeviceVerdictEvent } from "trusted-platform-sdk";
 import { PageHeader } from "@/components/layout/page-header";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -20,201 +16,232 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useApi } from "@/hooks";
-import {
-  callerPolicySummary,
-  useAttestationFeed,
-  type DeviceVerdictEvent,
-} from "@/hooks/use-attestation-feed";
+import { useAttestation } from "@/hooks";
+import { useCapabilities } from "@/hooks/use-capabilities";
+import { Gated } from "@/components/features/capabilities/gated";
 
-interface VerdictsState {
-  cursor: string;
-  verdicts: DeviceVerdictEvent[];
-  error?: string;
-  loading: boolean;
+const OP = "GET /api/v1/attestation/verdicts";
+
+// baselineLabel names the provenance of the baseline a verdict was judged
+// against, so a TOFU pass never looks identical to a signed-manifest pass
+// (docs/attestation/architecture.md).
+function baselineLabel(source: string | undefined): string {
+  switch (source) {
+    case "signed":
+      return "Signed baseline";
+    case "tofu":
+      return "TOFU baseline";
+    default:
+      return "Baseline unknown";
+  }
 }
 
-function newestFirst(a: DeviceVerdictEvent, b: DeviceVerdictEvent): number {
-  return (b.recordedAt ?? "").localeCompare(a.recordedAt ?? "");
-}
+// DeviceVerdictsPage lists the device attestation verdicts the tenant may
+// see (AttestationService.PollDeviceVerdicts), polled only when the server
+// offers GET /api/v1/attestation/verdicts. Each further poll continues from
+// the cursor of the previous answer and appends what it returns. When the
+// server no longer holds the verdicts after that cursor (ErrMissedVerdicts,
+// HTTP 429), the page offers Resynchronize: a poll from the head cursor that
+// reports the gap and points to the device reports.
+export default function DeviceVerdictsPage() {
+  const attestation = useAttestation();
+  const { loading: capsLoading, capability } = useCapabilities();
+  const cap = capability(OP);
+  const enabled = !capsLoading && cap.enabled;
 
-/**
- * Device verdicts page: the caller policy of the attestation feed
- * (DescribeCallerPolicy) and the device verdicts recorded for the
- * session's tenant (PollDeviceVerdicts), polled from the kept cursor or
- * read again from the start.
- */
-export default function AttestationVerdictsPage() {
-  const feed = useAttestationFeed();
-  const callers = useApi(() => feed.describeCallers(), [feed]);
-  const [state, setState] = React.useState<VerdictsState>({
-    cursor: "",
-    verdicts: [],
-    loading: true,
-  });
+  const [verdicts, setVerdicts] = useState<DeviceVerdictEvent[]>([]);
+  const [cursor, setCursor] = useState<string | undefined>(undefined);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [missed, setMissed] = useState(false);
+  const [gap, setGap] = useState<string | null>(null);
 
-  const poll = React.useCallback(
-    async (reset: boolean) => {
-      setState((s) => ({ ...s, loading: true }));
-      const res = await feed.pollVerdicts({
-        cursor: reset ? undefined : state.cursor,
-        waitMs: 0,
-      });
-      setState((s) => {
-        if (!res.success || !res.data) {
-          return {
-            ...s,
-            loading: false,
-            error: res.error?.message ?? "Failed to poll verdicts",
-          };
-        }
-        const incoming = res.data.verdicts ?? [];
-        if (reset) {
-          return { cursor: res.data.cursor, verdicts: incoming, loading: false };
-        }
-        const shown = new Set(s.verdicts.map((v) => v.eventId));
-        const fresh = incoming.filter((v) => !shown.has(v.eventId));
-        return {
-          cursor: res.data.cursor,
-          verdicts: [...fresh, ...s.verdicts],
-          loading: false,
-        };
-      });
-    },
-    [feed, state.cursor],
-  );
+  const poll = useCallback(async () => {
+    setBusy(true);
+    try {
+      const res = await attestation.pollDeviceVerdicts({ cursor, waitMs: 0 });
+      if (res.success && res.data) {
+        const data = res.data;
+        setVerdicts((prev) => [...prev, ...(data.verdicts ?? [])]);
+        setCursor(data.cursor);
+        setError(null);
+      } else if (res.error?.status === 429 && /missed verdicts/i.test(res.error.message ?? "")) {
+        // feed.Poll refused the cursor with ErrMissedVerdicts: polling it again repeats the refusal.
+        setMissed(true);
+        setError(null);
+      } else {
+        setError(res.error?.message ?? "The verdict poll failed");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [attestation, cursor]);
 
-  React.useEffect(() => {
-    void poll(true);
-    // Poll once from the start on mount; later polls come from the buttons.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Resynchronize polls with no cursor: the zero cursor returns the head cursor at once.
+  const resync = useCallback(async () => {
+    setBusy(true);
+    try {
+      const res = await attestation.pollDeviceVerdicts({ waitMs: 0 });
+      if (res.success && res.data) {
+        const data = res.data;
+        setVerdicts((prev) => [...prev, ...(data.verdicts ?? [])]);
+        setCursor(data.cursor);
+        setMissed(false);
+        setError(null);
+        setGap(
+          `Resynchronized at ${new Date().toLocaleString()}: verdicts recorded before this point may be missing from this list.`,
+        );
+      } else {
+        setError(res.error?.message ?? "The verdict poll failed");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [attestation]);
 
-  const policy = callers.data;
-  const rows = [...state.verdicts].sort(newestFirst);
+  // The first poll, once the capabilities say the route is offered.
+  const started = useRef(false);
+  useEffect(() => {
+    if (enabled && !started.current) {
+      started.current = true;
+      void poll();
+    }
+  }, [enabled, poll]);
 
   return (
     <div className="container mx-auto py-6 space-y-6">
-      <PageHeader
-        title="Device verdicts"
-        description="Attestation verdicts recorded for this tenant's devices"
-      >
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            void callers.refetch();
-            void poll(true);
-          }}
-        >
-          <RefreshCw className="h-4 w-4 mr-2" />
-          Refresh
-        </Button>
-        <Button size="sm" onClick={() => void poll(false)} disabled={state.loading}>
-          <Radio className="h-4 w-4 mr-2" />
-          Poll for new verdicts
-        </Button>
+      <PageHeader title="Device verdicts" description="Attestation verdicts recorded for your devices">
+        <Gated op={OP}>
+          <Button variant="outline" size="sm" disabled={busy || missed} onClick={() => void poll()}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Check for new verdicts
+          </Button>
+        </Gated>
       </PageHeader>
 
-      <Card data-testid="caller-policy">
-        <CardHeader>
-          <CardTitle>Caller policy</CardTitle>
-          <CardDescription>Who may read the attestation feed</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {callers.error ? (
+      {!capsLoading && !cap.enabled ? (
+        <Card data-testid="verdicts-not-enabled">
+          <CardHeader>
+            <CardTitle>Device verdicts are not offered by this server</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{cap.reason}</p>
+          </CardContent>
+        </Card>
+      ) : error ? (
+        <Card data-testid="verdicts-error">
+          <CardHeader>
+            <CardTitle>Could not read the device verdicts</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
             <p role="alert" className="text-sm text-destructive">
-              {callers.error.message}
+              {error}
             </p>
-          ) : policy ? (
-            <>
-              <p className="text-sm font-medium">{callerPolicySummary(policy)}</p>
-              <dl className="grid grid-cols-2 gap-2 text-sm max-w-xl">
-                <dt className="text-muted-foreground">Strategy</dt>
-                <dd>{policy.strategy}</dd>
-                <dt className="text-muted-foreground">Identities</dt>
-                <dd className="flex flex-wrap gap-1">
-                  {policy.identities.length === 0
-                    ? "None"
-                    : policy.identities.map((id) => (
-                        <Badge key={id} variant="secondary" className="font-mono">
-                          {id}
-                        </Badge>
-                      ))}
-                </dd>
-                <dt className="text-muted-foreground">Identities source</dt>
-                <dd>{policy.identities_source || "-"}</dd>
-                <dt className="text-muted-foreground">Anchors configured</dt>
-                <dd>{policy.anchors_configured ? "Yes" : "No"}</dd>
-                <dt className="text-muted-foreground">Attested peers</dt>
-                <dd>{policy.attested_peers_available ? "Yes" : "No"}</dd>
-              </dl>
-              {policy.invalid_entries?.length ? (
-                <div className="text-sm">
-                  <p className="font-medium">Invalid entries</p>
-                  <ul className="list-disc pl-5">
-                    {policy.invalid_entries.map((e) => (
-                      <li key={e} className="font-mono">
-                        {e}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-            </>
-          ) : null}
-        </CardContent>
-      </Card>
-
-      <Card data-testid="device-verdicts">
-        <CardHeader>
-          <CardTitle>Verdicts</CardTitle>
-          <CardDescription>Cursor: {state.cursor || "-"}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {state.error ? (
-            <p role="alert" className="text-sm text-destructive">
-              {state.error}
-            </p>
-          ) : null}
-          {rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-8 text-center">
-              No verdicts yet.
-            </p>
-          ) : (
-            <Table>
+            {/* A failed resync keeps the way to resume (#2038). */}
+            {missed && (
+              <>
+                <p>
+                  <Link href="/devices" className="underline">
+                    Device reports
+                  </Link>
+                  : read each device&apos;s latest attestation report there to see what was missed.
+                </p>
+                <Gated op={OP}>
+                  <Button size="sm" disabled={busy} onClick={() => void resync()}>
+                    Resynchronize
+                  </Button>
+                </Gated>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+        {missed && (
+          <Card data-testid="verdicts-missed" role="alert">
+            <CardHeader>
+              <CardTitle>Verdicts were missed</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <p>
+                The server no longer holds the verdicts after the last cursor (the daemon restarted, or more than 256
+                newer verdicts were recorded), so verdicts were missed. Resynchronize to continue from the newest verdict.
+              </p>
+              <p>
+                <Link href="/devices" className="underline">
+                  Device reports
+                </Link>
+                : read each device&apos;s latest attestation report there to see what was missed.
+              </p>
+              <Gated op={OP}>
+                <Button size="sm" disabled={busy} onClick={() => void resync()}>
+                  Resynchronize
+                </Button>
+              </Gated>
+            </CardContent>
+          </Card>
+        )}
+        {gap && (
+          <p data-testid="verdicts-gap" role="status" className="text-sm text-muted-foreground">
+            {gap}{" "}
+            <Link href="/devices" className="underline">
+              Device reports
+            </Link>
+          </p>
+        )}
+        <Card>
+          <CardContent className="pt-6">
+            <Table data-testid="verdicts-table">
               <TableHeader>
                 <TableRow>
                   <TableHead>Recorded</TableHead>
                   <TableHead>Device</TableHead>
                   <TableHead>Serial</TableHead>
                   <TableHead>Host</TableHead>
-                  <TableHead>Result</TableHead>
-                  <TableHead>Check</TableHead>
+                  <TableHead>Verdict</TableHead>
+                  <TableHead>Baseline</TableHead>
                   <TableHead>Reason</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((v) => (
-                  <TableRow key={v.eventId}>
-                    <TableCell>{v.recordedAt || "-"}</TableCell>
-                    <TableCell className="font-mono">{v.deviceId}</TableCell>
-                    <TableCell>{v.serial}</TableCell>
-                    <TableCell>{v.hostId}</TableCell>
-                    <TableCell>
-                      <Badge variant={v.passed ? "default" : "destructive"}>
-                        {v.passed ? "Passed" : "Failed"}
-                      </Badge>
+                {verdicts.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center text-muted-foreground">
+                      No verdicts yet
                     </TableCell>
-                    <TableCell>{v.cryptographic ? "Cryptographic" : "Policy"}</TableCell>
-                    <TableCell>{v.reason || "-"}</TableCell>
                   </TableRow>
-                ))}
+                ) : (
+                  verdicts.map((v) => (
+                    <TableRow key={v.eventId} data-testid={`verdict-${v.eventId}`}>
+                      <TableCell className="font-mono text-xs">{v.recordedAt}</TableCell>
+                      <TableCell className="font-mono">{v.deviceId}</TableCell>
+                      <TableCell className="font-mono">{v.serial}</TableCell>
+                      <TableCell className="font-mono">{v.hostId}</TableCell>
+                      <TableCell>
+                        {v.passed ? (
+                          "Passed"
+                        ) : (
+                          <span className="flex items-center gap-2">
+                            Failed
+                            {v.cryptographic ? <Badge variant="destructive">Compromise</Badge> : null}
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell>{baselineLabel(v.baselineSource)}</TableCell>
+                      <TableCell>{v.reason || "-"}</TableCell>
+                    </TableRow>
+                  ))
+                )}
               </TableBody>
             </Table>
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+        </>
+      )}
     </div>
   );
 }

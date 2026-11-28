@@ -2,20 +2,19 @@
  * Pins the VM and container attestation response types to the body the REST
  * routes actually return.
  *
- * The routes are now served by the protojson AttestationServerRouter
- * (pkg/webservice/v1/rest/attestation/server_router.go). Its collect VM and
- * collect container handlers write the platform.v1
- * CollectVMAttestationResponse / CollectContainerAttestationResponse messages
- * as protojson: a `{ status, attestation }` envelope with lowerCamelCase
- * field names and enum values written by name. That envelope is pinned on the
- * server side by server_router_handlers_test.go ("collect vm" and
- * "collect container").
+ * These two routes have drifted from the server more than once. The first
+ * drift was the URL, pinned in services/__tests__/attestation-service.test.ts.
+ * The second was the response shape: the flat snake_case body of the removed
+ * pkg/api/rest/attestation_handlers.go. The routes are now served by
+ * AttestationServerRouter (pkg/webservice/v1/rest/attestation), which writes
+ * the protobuf response through protorest.WriteSuccess as protojson: the
+ * `{status, attestation}` envelope with lowerCamel field names and enum values
+ * by their proto name. Neither collect response carries a verdict: collecting
+ * evidence is not verifying it.
  *
- * The flat snake_case body these types used to describe came from a REST
- * handler that no longer exists, so every read of `data.verified` or
- * `data.vm_id` was undefined with the compiler calling it sound (#2038).
- * `satisfies` is what makes this a ratchet: if either type drifts back to a
- * shape the server does not send, these fixtures stop compiling.
+ * `satisfies` is what makes this a ratchet: if either type is changed back to
+ * a shape the server does not send, these fixtures stop compiling rather than
+ * silently passing.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -28,16 +27,16 @@ import type {
 const vmBody = {
   status: { success: true, message: 'ok' },
   attestation: {
-    vmId: 'vm-7',
+    vmId: 'vm-42',
     hostId: 'host-1',
     quoteData: 'cXVvdGU=',
     signature: 'c2ln',
     signatureAlgorithm: 'RSASSA_PSS',
     pcrs: [{ index: 0, value: 'AAA=', algorithm: 'ATTESTATION_HASH_ALGORITHM_SHA256' }],
     pcrDigest: 'ZGln',
-    nonce: 'AQID',
+    nonce: 'bm9uY2U=',
     timestamp: '2026-09-05T12:00:00Z',
-    aikPublicKey: 'YWlr',
+    aikPublicKey: 'YWs=',
     hashAlgorithm: 'ATTESTATION_HASH_ALGORITHM_SHA256',
   },
 } satisfies CollectVMAttestationResponse;
@@ -46,9 +45,9 @@ const vmBody = {
 const containerBody = {
   status: { success: true, message: 'ok' },
   attestation: {
-    containerId: 'c-9',
+    containerId: 'ctr-7',
     imageId: 'img-1',
-    imageDigest: 'sha256:abc',
+    imageDigest: 'sha256:00',
     digest: 'ZGlnZXN0',
     pcrValue: 'cGNy',
     timestamp: '2026-09-05T12:00:00Z',
@@ -56,40 +55,43 @@ const containerBody = {
 } satisfies CollectContainerAttestationResponse;
 
 describe('VM attestation response shape', () => {
-  it('exposes the status and attestation envelope the route sends', () => {
+  it('carries the status and attestation envelope the route sends', () => {
     const decoded: CollectVMAttestationResponse = JSON.parse(
       JSON.stringify(vmBody)
     ) as CollectVMAttestationResponse;
 
     expect(decoded.status.success).toBe(true);
-    expect(decoded.attestation?.vmId).toBe('vm-7');
+    expect(decoded.attestation?.vmId).toBe('vm-42');
+    expect(decoded.attestation?.hostId).toBe('host-1');
+    expect(decoded.attestation?.pcrs[0]?.index).toBe(0);
     expect(decoded.attestation?.hashAlgorithm).toBe('ATTESTATION_HASH_ALGORITHM_SHA256');
-    expect(decoded.attestation?.pcrs[0]?.algorithm).toBe('ATTESTATION_HASH_ALGORITHM_SHA256');
   });
 
-  it('does not carry the flat snake_case fields the type used to declare', () => {
+  it('has no verified field: neither collect response carries a verdict', () => {
     const raw = JSON.parse(JSON.stringify(vmBody)) as Record<string, unknown>;
-    expect(raw).not.toHaveProperty('vm_id');
-    expect(raw).not.toHaveProperty('container_id');
     expect(raw).not.toHaveProperty('verified');
+    expect(raw).not.toHaveProperty('vm_id');
+    expect(raw.attestation).not.toHaveProperty('verified');
   });
 });
 
 describe('container attestation response shape', () => {
-  it('exposes the status and attestation envelope the route sends', () => {
+  it('carries the status and attestation envelope the route sends', () => {
     const decoded: CollectContainerAttestationResponse = JSON.parse(
       JSON.stringify(containerBody)
     ) as CollectContainerAttestationResponse;
 
     expect(decoded.status.success).toBe(true);
-    expect(decoded.attestation?.containerId).toBe('c-9');
+    expect(decoded.attestation?.containerId).toBe('ctr-7');
+    expect(decoded.attestation?.imageDigest).toBe('sha256:00');
+    expect(decoded.attestation?.digest).toBe('ZGlnZXN0');
     expect(decoded.attestation?.pcrValue).toBe('cGNy');
   });
 
-  it('does not carry the flat snake_case fields the type used to declare', () => {
+  it('has no verified field: neither collect response carries a verdict', () => {
     const raw = JSON.parse(JSON.stringify(containerBody)) as Record<string, unknown>;
-    expect(raw).not.toHaveProperty('vm_id');
-    expect(raw).not.toHaveProperty('container_id');
     expect(raw).not.toHaveProperty('verified');
+    expect(raw).not.toHaveProperty('container_id');
+    expect(raw.attestation).not.toHaveProperty('verified');
   });
 });

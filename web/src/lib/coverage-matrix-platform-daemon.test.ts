@@ -81,7 +81,7 @@ describe('coverage matrix: PlatformDaemon', () => {
       `| PlatformDaemon | ${total} | ${covered} | ${partial} | ${missing} | ${notUI} | ${blocked} |`,
     ]);
     expect(
-      lines.filter((l) => l === '| **Total** | **529** | **273** | **31** | **143** | **51** | **31** |'),
+      lines.filter((l) => l === '| **Total** | **529** | **288** | **31** | **128** | **51** | **31** |'),
     ).toHaveLength(1);
   });
 });

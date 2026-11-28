@@ -37,7 +37,7 @@ import type {
   AttestationHashAlgorithmProtoName,
   AttestationPCRValue,
 } from '../types/attestation.js';
-import { ATTESTATION_HASH_ALGORITHM_PROTO_NAMES } from '../types/attestation.js';
+import { ATTESTATION_HASH_ALGORITHM_PROTO_NAMES, POLL_DEVICE_VERDICTS_MAX_WAIT_MS } from '../types/attestation.js';
 import { encodeEnum } from './wire-enum.js';
 
 /**
@@ -254,30 +254,30 @@ export class AttestationService extends BaseService {
     return this.client.get<CallerPolicyDescription>(this.buildUrl('/callers'));
   }
 
+
   /**
-   * Poll the tenant's device verdict feed.
-   *
-   * `GET /api/v1/attestation/verdicts` with the optional `cursor` (the value
-   * the previous page returned) and `wait_ms` (how long the server may hold
-   * the request open for a new verdict; the server caps it at 20000 ms). The
-   * response is protojson: lowerCamelCase field names, and the uint64 device
-   * id is a decimal string. A session that names no tenant is answered 403.
-   * An empty cursor and a negative or non-finite `waitMs` are left out.
+   * Polls the device verdicts the caller's tenant may see:
+   * `GET /api/v1/attestation/verdicts?cursor=&wait_ms=`. Pass the previous
+   * answer's cursor to continue; `waitMs` (clamped to 0..20000, the server's
+   * cap) lets the server hold the poll open for a new verdict. The server
+   * answers 503 when it has no verdict poller and 403 when the session has
+   * no tenant.
    */
   async pollDeviceVerdicts(
-    request?: PollDeviceVerdictsRequest
+    request: PollDeviceVerdictsRequest = {},
   ): Promise<ApiResponse<PollDeviceVerdictsResponse>> {
     const params = new URLSearchParams();
-    if (typeof request?.cursor === 'string' && request.cursor !== '') {
+    if (request.cursor) {
       params.set('cursor', request.cursor);
     }
-    const waitMs = request?.waitMs;
-    if (typeof waitMs === 'number' && Number.isFinite(waitMs) && waitMs >= 0) {
-      params.set('wait_ms', String(Math.floor(waitMs)));
+    if (typeof request.waitMs === 'number' && Number.isFinite(request.waitMs) && request.waitMs >= 0) {
+      params.set(
+        'wait_ms',
+        String(Math.min(Math.max(0, Math.floor(request.waitMs)), POLL_DEVICE_VERDICTS_MAX_WAIT_MS)),
+      );
     }
-    const query = params.toString();
-    const url = this.buildUrl('/verdicts');
-    return this.client.get<PollDeviceVerdictsResponse>(query ? `${url}?${query}` : url);
+    const qs = params.toString();
+    return this.client.get<PollDeviceVerdictsResponse>(this.buildUrl(qs ? '/verdicts?' + qs : '/verdicts'));
   }
 
   async collectHostAttestation(request: CollectHostAttestationRequest): Promise<ApiResponse<CollectHostAttestationResponse>> {

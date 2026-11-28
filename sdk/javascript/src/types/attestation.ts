@@ -539,38 +539,37 @@ export interface AttestationPCRValueWire {
 }
 
 /**
- * VMAttestation as protojson writes it on the wire: enum fields arrive by
- * their proto names, such as ATTESTATION_HASH_ALGORITHM_SHA256, not the
- * short AttestationHashAlgorithm union, so `hashAlgorithm` and each PCR's
- * `algorithm` are plain strings.
+ * VMAttestation as it arrives on the wire: protojson writes enum fields by
+ * their proto name (e.g. `ATTESTATION_HASH_ALGORITHM_SHA256`), not as numbers.
  */
 export type VMAttestationWire = Omit<VMAttestation, 'hashAlgorithm' | 'pcrs'> & {
+  /** Hash algorithm, by its proto enum name */
   hashAlgorithm: string;
+  /** PCR values */
   pcrs: AttestationPCRValueWire[];
 };
 
 /**
- * Collect VM attestation response: the platform.v1
- * CollectVMAttestationResponse message that POST /api/v1/attestation/vm/{id}
- * (AttestationServerRouter) writes as protojson.
+ * Body of POST /api/v1/attestation/vm/{id}: the CollectVMAttestationResponse
+ * protobuf message AttestationServerRouter writes as protojson. Collecting
+ * evidence is not verifying it, so there is no verdict field.
  */
 export interface CollectVMAttestationResponse {
   /** Operation status */
   status: AttestationStatus;
-  /** The collected VM attestation */
+  /** The collected VM evidence; absent when the collection failed */
   attestation?: VMAttestationWire;
 }
 
 /**
- * Collect container attestation response: the platform.v1
- * CollectContainerAttestationResponse message that
- * POST /api/v1/attestation/container/{id} (AttestationServerRouter) writes
- * as protojson.
+ * Body of POST /api/v1/attestation/container/{id}: the
+ * CollectContainerAttestationResponse protobuf message AttestationServerRouter
+ * writes as protojson. There is no verdict field.
  */
 export interface CollectContainerAttestationResponse {
   /** Operation status */
   status: AttestationStatus;
-  /** The collected container attestation */
+  /** The collected container measurement; absent when the collection failed */
   attestation?: ContainerAttestation;
 }
 
@@ -755,4 +754,53 @@ export function classifyDeviceReport(response: {
     status,
     message: response.error?.message ?? 'attestation report unavailable',
   };
+}
+
+/**
+ * The longest wait, in milliseconds, the server holds a verdicts poll open
+ * (GET /api/v1/attestation/verdicts caps wait_ms at this value).
+ */
+export const POLL_DEVICE_VERDICTS_MAX_WAIT_MS = 20000;
+
+/** The query of a device verdicts poll. */
+export interface PollDeviceVerdictsRequest {
+  /** Where the poll continues from: the cursor of the previous answer. Omit it to start at the current head: the first poll returns no historical verdicts, only those logged after it; read the device report for the state that already exists. */
+  cursor?: string;
+  /** How long the server may wait for a new verdict, in milliseconds; clamped to 0..20000. */
+  waitMs?: number;
+}
+
+/** One device verdict as platformd recorded it in the attestation event log. */
+export interface DeviceVerdictEvent {
+  /** The attestation event log entry that made the verdict durable. */
+  eventId: string;
+  /** When the verdict was logged (RFC 3339). */
+  recordedAt: string;
+  /** The device the verdict is about: a uint64 carried as a decimal string. */
+  deviceId: string;
+  /** The tenant the device belongs to. */
+  tenantId: string;
+  /** The host the device was attested on. */
+  hostId: string;
+  /** The device serial number. */
+  serial: string;
+  /** True when the device passed attestation. */
+  passed: boolean;
+  /** True when a failed verdict was evidence of compromise rather than an absence of evidence; meaningless when passed. */
+  cryptographic: boolean;
+  /** The failure detail; empty when passed. */
+  reason: string;
+  /**
+   * The provenance of the baseline the verdict was judged against when it
+   * was recorded: "signed" or "tofu"; absent or empty when unknown.
+   */
+  baselineSource?: string;
+}
+
+/** The answer to a device verdicts poll. */
+export interface PollDeviceVerdictsResponse {
+  /** Where the next poll continues from. */
+  cursor: string;
+  /** The verdicts recorded after the request's cursor that the caller may see, in recorded order. */
+  verdicts: DeviceVerdictEvent[];
 }
