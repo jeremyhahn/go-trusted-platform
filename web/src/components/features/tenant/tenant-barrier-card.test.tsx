@@ -205,6 +205,42 @@ describe('TenantBarrierCard', () => {
     expect(sent.some((r) => r.method === 'POST')).toBe(false);
   });
 
+  it('shows not applicable for a prefix tenant and disables every barrier control', async () => {
+    const sent = stubControlPlane({
+      'GET /api/v1/capabilities': caps(),
+      'GET /api/v1/tenants/t1/barrier': barrier({ isolation: 'prefix', sealed: false, initialized: false, strategy: '' }),
+    });
+    renderCard();
+
+    const na = await screen.findByTestId('tenant-barrier-not-applicable');
+    expect(na.textContent).toBe('Not applicable: prefix isolation');
+    const status = screen.getByTestId('tenant-barrier-status');
+    expect(status.textContent).not.toMatch(/sealed/i);
+    expect(status.textContent).not.toMatch(/initialized/i);
+
+    for (const name of ['Initialize', 'Unseal', 'Seal']) {
+      expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
+    }
+    expect((screen.getByTestId('tenant-barrier-init-passphrase') as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText('Unseal key') as HTMLInputElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Seal' }));
+    expect(sent.some((r) => r.method === 'POST')).toBe(false);
+  });
+
+  it('keeps the barrier card for a barrier-isolated tenant', async () => {
+    stubControlPlane({
+      'GET /api/v1/capabilities': caps(),
+      'GET /api/v1/tenants/t1/barrier': barrier({ isolation: 'barrier', sealed: true, initialized: true }),
+    });
+    renderCard();
+
+    const status = await screen.findByTestId('tenant-barrier-status');
+    await waitFor(() => expect(status.textContent).toMatch(/sealed/i));
+    expect(screen.queryByTestId('tenant-barrier-not-applicable')).toBeNull();
+    await enabledButton('Seal');
+  });
+
   it('does not read the status when the server does not offer it', async () => {
     const sent = stubControlPlane({
       'GET /api/v1/capabilities': caps([STATUS]),
