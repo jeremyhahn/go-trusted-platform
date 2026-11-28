@@ -762,4 +762,7 @@ message DeviceVerdictEvent {
   bool cryptographic = 8;
   // Reason is the failure detail; empty when passed.
   string reason = 9;
+  // BaselineSource is the provenance of the baseline the verdict was judged
+  // against when it was recorded: "signed" or "tofu"; empty when unknown.
+  string baseline_source = 10;
 }
