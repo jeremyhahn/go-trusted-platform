@@ -18,9 +18,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	sdktenant "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tenant"
@@ -51,8 +54,9 @@ explicit lifecycle control:
 
   - init     Explicitly initialize a tenant barrier (idempotent if already
              initialized; required only when DEK isolation is enabled but
-             auto-init was skipped). The barrier initializes with its
-             deterministic credential; Shamir sharing is refused.
+             auto-init was skipped). The barrier initializes with the
+             operator passphrase (prompted, or --passphrase-file); Shamir
+             sharing is refused.
   - unseal   Unseal a sealed barrier with the supplied key bytes. Empty key
              falls back to the deterministic init credential.
   - seal     Seal a previously initialized barrier. Subsequent reads/writes
@@ -62,6 +66,7 @@ explicit lifecycle control:
 Examples:
   # Initialize a tenant barrier (deterministic init)
   platformctl tenant barrier init my-tenant
+  platformctl tenant barrier init my-tenant --passphrase-file /path/to/passphrase
 
   # Unseal a sealed tenant barrier with a hex-encoded key
   platformctl tenant barrier unseal my-tenant --key-hex deadbeef...
@@ -87,25 +92,30 @@ Examples:
 
 func newBarrierInitCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	var threshold, shares int32
-	var passphrase string
+	var passphraseFile string
 
 	cmd := &cobra.Command{
 		Use:   "init <tenant-name>",
 		Short: "Initialize a per-tenant barrier",
 		Long: `Initialize a per-tenant cryptographic barrier.
 
-The barrier initializes with the operator passphrase given in --passphrase
-(required; the daemon refuses an empty one and never stores it), and the init
-returns no shares. Shamir sharing is not supported:
+The barrier initializes with the operator passphrase. It is prompted for
+without echo, or read from --passphrase-file (a path, or - for stdin); it is
+never accepted on the command line. The daemon refuses an empty one and never
+stores it, and the init returns no shares. Shamir sharing is not supported:
 --threshold and --shares must stay 0 (the default), and the daemon refuses any
 other value with InvalidArgument.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBarrierInit(getFlags(), args[0], passphrase, threshold, shares)
+			pp, err := barrierPassphrase(cmd, passphraseFile)
+			if err != nil {
+				return err
+			}
+			return runBarrierInit(getFlags(), args[0], pp, threshold, shares)
 		},
 	}
 
-	cmd.Flags().StringVar(&passphrase, "passphrase", "", "operator barrier passphrase (required)")
+	cmd.Flags().StringVar(&passphraseFile, "passphrase-file", "", "read the operator barrier passphrase from this file, or from stdin when \"-\"; without it the passphrase is prompted for without echo")
 	cmd.Flags().Int32Var(&threshold, "threshold", 0, "Shamir threshold; must be 0, any other value is refused")
 	cmd.Flags().Int32Var(&shares, "shares", 0, "Shamir total shares; must be 0, any other value is refused")
 
@@ -114,7 +124,7 @@ other value with InvalidArgument.`,
 
 func runBarrierInit(flags *cli.CommonFlags, tenantName, passphrase string, threshold, shares int32) error {
 	if passphrase == "" {
-		return ErrInvalidArguments{Reason: "--passphrase is required"}
+		return ErrInvalidArguments{Reason: "a barrier passphrase is required"}
 	}
 
 	base, err := cli.NewBaseCommand(flags)
@@ -161,6 +171,45 @@ type BarrierInitResponse struct {
 	Threshold  int32  `json:"threshold" yaml:"threshold"`
 	Shares     int32  `json:"shares" yaml:"shares"`
 	Success    bool   `json:"success" yaml:"success"`
+}
+
+// readBarrierPassphrase reads a line from the terminal without echo. Tests replace it to answer the prompt.
+var readBarrierPassphrase = term.ReadPassword
+
+// barrierPassphrase returns the operator barrier passphrase from
+// passphraseFile (a path, or "-" for stdin) or, when passphraseFile is
+// empty, from a no-echo terminal prompt. One trailing "\n" and then one
+// trailing "\r" are trimmed. An empty passphrase is refused. Errors name the
+// source and the OS error, never the content.
+func barrierPassphrase(cmd *cobra.Command, passphraseFile string) (string, error) {
+	var (
+		raw []byte
+		err error
+	)
+	switch passphraseFile {
+	case "":
+		fmt.Fprint(cmd.ErrOrStderr(), "Barrier passphrase: ")
+		raw, err = readBarrierPassphrase(int(os.Stdin.Fd()))
+		fmt.Fprintln(cmd.ErrOrStderr())
+		if err != nil {
+			return "", ErrInvalidArguments{Reason: fmt.Sprintf("cannot read the barrier passphrase from the terminal (use --passphrase-file for a non-interactive run): %v", err)}
+		}
+	case "-":
+		raw, err = io.ReadAll(cmd.InOrStdin())
+		if err != nil {
+			return "", ErrInvalidArguments{Reason: fmt.Sprintf("cannot read the barrier passphrase from stdin: %v", err)}
+		}
+	default:
+		raw, err = os.ReadFile(passphraseFile)
+		if err != nil {
+			return "", ErrInvalidArguments{Reason: fmt.Sprintf("cannot read the barrier passphrase file %q: %v", passphraseFile, err)}
+		}
+	}
+	pp := strings.TrimSuffix(strings.TrimSuffix(string(raw), "\n"), "\r")
+	if pp == "" {
+		return "", ErrInvalidArguments{Reason: "the barrier passphrase is empty"}
+	}
+	return pp, nil
 }
 
 // ---------------------------------------------------------------------------

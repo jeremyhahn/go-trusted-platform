@@ -331,17 +331,15 @@ func (a *CLIAdapter) SyncTenants(ctx context.Context) (*SyncTenantsResult, error
 // =============================================================================
 
 // InitTenantBarrier initializes a per-tenant barrier via
-// `platformctl tenant barrier init <name>`.
+// `platformctl tenant barrier init <name> --passphrase-file -`. The
+// passphrase goes on stdin, never in argv.
 func (a *CLIAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarrierOptions) (*InitTenantBarrierResult, error) {
 	name, err := a.nameForID(ctx, opts.TenantID)
 	if err != nil {
 		return nil, err
 	}
 
-	args := []string{"tenant", "barrier", "init", name}
-	if opts.Passphrase != "" {
-		args = append(args, "--passphrase", opts.Passphrase)
-	}
+	args := []string{"tenant", "barrier", "init", name, "--passphrase-file", "-"}
 	if opts.Threshold > 0 {
 		args = append(args, "--threshold", fmt.Sprintf("%d", opts.Threshold))
 	}
@@ -353,7 +351,7 @@ func (a *CLIAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarri
 		TenantName string `json:"tenant_name"`
 		Success    bool   `json:"success"`
 	}
-	if err := a.runJSON(ctx, "InitTenantBarrier", &resp, args...); err != nil {
+	if err := a.runJSONInput(ctx, "InitTenantBarrier", opts.Passphrase, &resp, args...); err != nil {
 		return nil, err
 	}
 	return &InitTenantBarrierResult{
