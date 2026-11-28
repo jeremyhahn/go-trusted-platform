@@ -255,9 +255,6 @@ type receiverRegistry struct {
 	cancel context.CancelFunc
 }
 
-// receiverMaxLifetime bounds how long a prepared receiver waits to be finalized.
-var receiverMaxLifetime = 3 * time.Hour
-
 // trackedReceiver pairs a launched receiver with the cleanup that releases its
 // TLS credential material.
 type trackedReceiver struct {
