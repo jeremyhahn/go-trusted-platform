@@ -1229,11 +1229,10 @@ func (s *SDNService) SetPortState(ctx context.Context, req *platformv1.SetPortSt
 // (one SDNService.AddFlow installed, say) is refused FailedPrecondition, and
 // a read that fails is Unavailable. The rollback's restore of the prior
 // record's rules attempts every prior flow and joins the errors.
-// The cookie carries only a 32-bit hash of the policy ID, so an enabled
-// apply records the full ID that holds the hash in each target bridge's
-// external_ids (policyCookieClaimKey) before it installs a flow: a claim
-// another ID holds is refused FailedPrecondition, and a claim that cannot
-// be read or written is Unavailable with nothing installed.
+// The cookie carries only a 32-bit hash of the policy ID: an enabled apply
+// whose hash another in-memory policy record holds is refused
+// FailedPrecondition. The claim lives in memory only, so a delete, a
+// disable or a clean rollback leaves no reservation.
 // The whole call runs under policyMu.
 func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolicyRequest) (*platformv1.ApplyPolicyResponse, error) {
 	if req.GetConfig() == nil {
@@ -1350,21 +1349,6 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 			return nil, status.Errorf(codes.FailedPrecondition,
 				"policy %q flow cookies collide with those of policy %q; apply it under another ID", policyID, owner)
 		}
-		// The bridge records the full ID that holds this cookie hash, so
-		// after a restart a surviving flow's owner is read, not inferred
-		// from its actions.
-		claimed := make(map[string]bool, len(bridgeNames))
-		for _, bridge := range bridgeNames {
-			holder, err := s.policyCookieClaim(ctx, client, bridge, policyID)
-			if err != nil {
-				return nil, status.Errorf(codes.Unavailable, "%v", err)
-			}
-			if holder != "" && holder != policyID {
-				return nil, status.Errorf(codes.FailedPrecondition,
-					"policy %q flow cookies collide with those of policy %q on bridge %s; apply it under another ID", policyID, holder, bridge)
-			}
-			claimed[bridge] = holder == policyID
-		}
 		if len(recorded) == 0 {
 			bridge, fl, err := s.survivingCookieCollision(ctx, client, policyID, flows)
 			if err != nil {
@@ -1393,7 +1377,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		// refuse an entry a flow with another cookie (SDNService.AddFlow,
 		// another owner) holds, before any write, so the policy never
 		// replaces, and its strict deletes never meet, a flow it does not own.
-		adopted, occupied, occupant, err := s.occupiedPolicyFlow(ctx, client, policyID, recorded, claimed, flows)
+		adopted, occupied, occupant, err := s.occupiedPolicyFlow(ctx, client, policyID, flows)
 		if err != nil {
 			return nil, status.Errorf(codes.Unavailable, "%v", err)
 		}
@@ -1401,17 +1385,6 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 			return nil, status.Errorf(codes.FailedPrecondition,
 				"a flow with cookie %s already holds bridge %s priority %d match %q",
 				occupant.Cookie, occupied.bridge, occupied.mod.Priority, occupied.mod.Match)
-		}
-		// The claim is written before any flow, so no flow of this policy
-		// is ever on the switch without it.
-		for _, bridge := range bridgeNames {
-			if claimed[bridge] {
-				continue
-			}
-			if err := client.SetBridgeExternalIDs(ctx, bridge, map[string]string{policyCookieClaimKey(policyID): policyID}); err != nil {
-				return nil, status.Errorf(codes.Unavailable, "record policy cookie claim on bridge %s: %v", bridge, err)
-			}
-			claimed[bridge] = true
 		}
 		attempted, err := s.installPolicyFlows(ctx, client, flows)
 		if err != nil {
@@ -1966,13 +1939,10 @@ func (s *SDNService) conflictingPolicyFlow(flows []policyFlow, others []policyRe
 // returned as adopted, for the rollback to restore. The stats filter is not
 // strict, so the flows it returns are keyed here.
 //
-// A flow under the policy's own cookie hash is the policy's own only at an
-// entry the policy's record installed or has pending (recorded), or when
-// its actions equal the new flow's and the bridge's claim names this
-// policy ID (claimed): the truncated hash cannot tell two policies apart, a
-// restart empties the policy map, and equal actions alone prove nothing,
-// because a colliding ID can install the same rule.
-func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientInterface, policyID string, recorded map[policyFlowKey]struct{}, claimed map[string]bool, flows []policyFlow) ([]policyFlow, policyFlow, *ovs.Flow, error) {
+// A flow under the policy's own cookie hash is the policy's own: the
+// in-memory records (policyCookieCollision) refuse a colliding ID, and a
+// surviving flow after a restart is adopted and replaced by the apply.
+func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientInterface, policyID string, flows []policyFlow) ([]policyFlow, policyFlow, *ovs.Flow, error) {
 	var adopted []policyFlow
 	for _, flow := range flows {
 		filter := fmt.Sprintf("table=%d", flow.mod.Table)
@@ -1984,19 +1954,15 @@ func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientIn
 			return nil, policyFlow{}, nil, fmt.Errorf("read installed flows on bridge %s: %v", flow.bridge, err)
 		}
 		want := flowKey(flow)
-		_, known := recorded[want]
 		for _, fl := range installed {
 			// The policy's own flow, of this or an earlier apply (whose
-			// rule order may differ): OFPFC_ADD replacing it is the apply.
-			// Without a recorded entry the hash is no proof of
-			// ownership, so only a flow the replace leaves unchanged, on
-			// a bridge whose claim names this policy ID, is taken as its
-			// own; any other is a foreign occupant.
+			// rule order may differ), or one surviving a restart:
+			// OFPFC_ADD replacing it is the apply.
 			if fl == nil {
 				continue
 			}
 			ownCookie := fl.Cookie == flow.mod.Cookie || samePolicyCookie(fl.Cookie, flow.mod.Cookie)
-			if ownCookie && (known || claimed[flow.bridge] && fl.Actions != "" && fl.Actions == flow.mod.Actions) {
+			if ownCookie {
 				continue
 			}
 			theirs := policyFlow{bridge: flow.bridge, mod: &ovs.FlowMod{Table: fl.Table, Priority: fl.Priority, Match: fl.Match}}
@@ -2025,24 +1991,6 @@ func (s *SDNService) occupiedPolicyFlow(ctx context.Context, client ovs.ClientIn
 		}
 	}
 	return adopted, policyFlow{}, nil, nil
-}
-
-// policyCookieClaimKey is the bridge external_ids key that records which
-// full policy ID holds a truncated cookie hash on that bridge. OVSDB keeps
-// it across a daemon restart, so a surviving flow's owner can be verified,
-// not inferred.
-func policyCookieClaimKey(policyID string) string {
-	return fmt.Sprintf("gtp-policy-cookie-%08x", policyFlowCookie(policyID, 0)>>16&(1<<32-1))
-}
-
-// policyCookieClaim returns the policy ID the bridge's claim on policyID's
-// cookie hash names; "" means unclaimed.
-func (s *SDNService) policyCookieClaim(ctx context.Context, client ovs.ClientInterface, bridge, policyID string) (string, error) {
-	ids, err := client.GetBridgeExternalIDs(ctx, bridge)
-	if err != nil {
-		return "", &WrappedError{Msg: "read policy cookie claim on bridge " + bridge, Err: err}
-	}
-	return ids[policyCookieClaimKey(policyID)], nil
 }
 
 // survivingCookieCollision returns the first flow installed on a target
