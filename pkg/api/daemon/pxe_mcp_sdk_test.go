@@ -32,8 +32,9 @@ func connectPXEMCP(t *testing.T, server platformv1.PXEServiceServer, scopes ...s
 	provider.SetPXEServer(server)
 	config := mcp.DefaultConfig()
 	config.AuthManager = tenantMCPTokens{tokenContexts{phase35MCPToken: &platformtoken.AuthorizedContext{
-		Subject: "operator",
-		Scopes:  scopes,
+		Subject:  "operator",
+		TenantID: pxeSDKSystemTenant,
+		Scopes:   scopes,
 	}}}
 	return serveMCPConfig(t, provider, config).Connection()
 }

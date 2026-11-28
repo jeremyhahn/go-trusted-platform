@@ -54,8 +54,11 @@ const (
 	prioEastWest     = 100            // intra-zone east-west (per doc: priority=100)
 	prioMatrixDeny   = 200            // inter-zone deny flows
 	prioMatrixAllow  = 100            // inter-zone allow flows
-	prioDefaultDrop  = prioBase - 100 // 900 — provisioning default drop
-	prioQDropDefault = prioBase + 100 // 1100 — quarantine default drop (per doc: priority=100 relative to base)
+	// prioMatrixServiceAllow is a service-scoped pair's permits: above
+	// the pair's destination deny at prioMatrixDeny (#1896).
+	prioMatrixServiceAllow = 210
+	prioDefaultDrop        = prioBase - 100 // 900 — provisioning default drop
+	prioQDropDefault       = prioBase + 100 // 1100 — quarantine default drop (per doc: priority=100 relative to base)
 )
 
 // GeneratorSet holds per-zone generators selected by map dispatch.
@@ -249,24 +252,32 @@ func compileMatrix(cfg MatrixRuleConfig, onlyFrom zone.Zone, ingress func(Networ
 					continue
 				}
 
+				deny := FlowRule{
+					Table:    0,
+					Priority: prioMatrixDeny,
+					Match:    fmt.Sprintf("%s,%s", in, f.ipMatch(f.toDst(toSubnet))),
+					Actions:  "drop",
+				}
 				if !verdict.Allowed {
 					// Emit a deny rule for this (from→to) pair.
-					flows = append(flows, FlowRule{
-						Table:    0,
-						Priority: prioMatrixDeny,
-						Match:    fmt.Sprintf("%s,%s", in, f.ipMatch(f.toDst(toSubnet))),
-						Actions:  "drop",
-					})
+					flows = append(flows, deny)
 					continue
 				}
 
-				// Allowed pair with a service scope: emit per-service permit
-				// rules. Pairs without a service scope (nil/empty Services)
-				// need no additional matrix rule — the template's normal
-				// action covers them.
-				for _, svc := range verdict.Services {
-					flows = append(flows, serviceFlowRules(f, in, toSubnet, svc, prioMatrixAllow)...)
+				// Allowed pair with a service scope: per-service permits
+				// above the matrix deny, then the destination deny, so
+				// only the listed services reach the destination and a
+				// template catch-all below 200 forwards nothing else
+				// (#1896). Pairs without a service scope (nil/empty
+				// Services) need no additional matrix rule — the
+				// template's normal action covers them.
+				if len(verdict.Services) == 0 {
+					continue
 				}
+				for _, svc := range verdict.Services {
+					flows = append(flows, serviceFlowRules(f, in, toSubnet, svc, prioMatrixServiceAllow)...)
+				}
+				flows = append(flows, deny)
 			}
 		}
 	}

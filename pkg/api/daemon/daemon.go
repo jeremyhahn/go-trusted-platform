@@ -1013,6 +1013,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
+	pxeGRPCService.SetSystemTenant(config.PlatformTenantID)
 	if grpcServer != nil {
 		platformv1.RegisterPXEServiceServer(grpcServer, pxeGRPCService)
 	}

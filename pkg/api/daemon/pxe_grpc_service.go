@@ -35,8 +35,14 @@ import (
 type PXEGRPCService struct {
 	platformv1.UnimplementedPXEServiceServer
 
-	logger     *logging.Logger
-	pxeService pxe.Service
+	logger         *logging.Logger
+	pxeService     pxe.Service
+	systemTenantID string
+}
+
+// SetSystemTenant sets the only tenant whose bound callers may use the PXE RPCs.
+func (s *PXEGRPCService) SetSystemTenant(id string) {
+	s.systemTenantID = id
 }
 
 // NewPXEGRPCService creates a new PXE gRPC service instance.
@@ -183,6 +189,9 @@ func (s *PXEGRPCService) PXEInstallInProgressForMAC(ctx context.Context, mac str
 
 // RegisterDevice registers a new device for PXE provisioning.
 func (s *PXEGRPCService) RegisterDevice(ctx context.Context, req *platformv1.RegisterPXEDeviceRequest) (*platformv1.RegisterPXEDeviceResponse, error) {
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "RegisterDevice"); err != nil {
+		return nil, err
+	}
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -216,6 +225,9 @@ func (s *PXEGRPCService) RegisterDevice(ctx context.Context, req *platformv1.Reg
 
 // GetDevice retrieves a device by its ID.
 func (s *PXEGRPCService) GetDevice(ctx context.Context, req *platformv1.GetPXEDeviceRequest) (*platformv1.GetPXEDeviceResponse, error) {
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "GetDevice"); err != nil {
+		return nil, err
+	}
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -237,6 +249,9 @@ func (s *PXEGRPCService) GetDevice(ctx context.Context, req *platformv1.GetPXEDe
 
 // GetDeviceByMAC retrieves a device by its MAC address.
 func (s *PXEGRPCService) GetDeviceByMAC(ctx context.Context, req *platformv1.GetPXEDeviceByMACRequest) (*platformv1.GetPXEDeviceByMACResponse, error) {
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "GetDeviceByMAC"); err != nil {
+		return nil, err
+	}
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -261,6 +276,9 @@ func (s *PXEGRPCService) GetDeviceByMAC(ctx context.Context, req *platformv1.Get
 // status rather than an empty list, so a dashboard renders the
 // gateway-role state instead of an indistinguishable "no devices".
 func (s *PXEGRPCService) ListDevices(ctx context.Context, req *platformv1.ListPXEDevicesRequest) (*platformv1.ListPXEDevicesResponse, error) {
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "ListDevices"); err != nil {
+		return nil, err
+	}
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -286,6 +304,9 @@ func (s *PXEGRPCService) ListDevices(ctx context.Context, req *platformv1.ListPX
 
 // RemoveDevice removes a device from the PXE service.
 func (s *PXEGRPCService) RemoveDevice(ctx context.Context, req *platformv1.RemovePXEDeviceRequest) (*platformv1.RemovePXEDeviceResponse, error) {
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "RemoveDevice"); err != nil {
+		return nil, err
+	}
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -316,6 +337,9 @@ func (s *PXEGRPCService) RemoveDevice(ctx context.Context, req *platformv1.Remov
 
 // UpdateState transitions a device to a new provisioning state.
 func (s *PXEGRPCService) UpdateState(ctx context.Context, req *platformv1.UpdatePXEStateRequest) (*platformv1.UpdatePXEStateResponse, error) {
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "UpdateState"); err != nil {
+		return nil, err
+	}
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -351,6 +375,9 @@ func (s *PXEGRPCService) UpdateState(ctx context.Context, req *platformv1.Update
 
 // SetDeviceEnrolled marks a device as enrolled with the provided certificate serial.
 func (s *PXEGRPCService) SetDeviceEnrolled(ctx context.Context, req *platformv1.SetPXEDeviceEnrolledRequest) (*platformv1.SetPXEDeviceEnrolledResponse, error) {
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "SetDeviceEnrolled"); err != nil {
+		return nil, err
+	}
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -388,6 +415,9 @@ func (s *PXEGRPCService) SetDeviceEnrolled(ctx context.Context, req *platformv1.
 
 // Authorize authorizes a device for production network access.
 func (s *PXEGRPCService) Authorize(ctx context.Context, req *platformv1.AuthorizePXEDeviceRequest) (*platformv1.AuthorizePXEDeviceResponse, error) {
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "Authorize"); err != nil {
+		return nil, err
+	}
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -431,6 +461,9 @@ func (s *PXEGRPCService) Authorize(ctx context.Context, req *platformv1.Authoriz
 
 // Quarantine moves a device to quarantine state.
 func (s *PXEGRPCService) Quarantine(ctx context.Context, req *platformv1.QuarantinePXEDeviceRequest) (*platformv1.QuarantinePXEDeviceResponse, error) {
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "Quarantine"); err != nil {
+		return nil, err
+	}
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -468,6 +501,9 @@ func (s *PXEGRPCService) Quarantine(ctx context.Context, req *platformv1.Quarant
 
 // Retry resets a device to discovered state for retry.
 func (s *PXEGRPCService) Retry(ctx context.Context, req *platformv1.RetryPXEDeviceRequest) (*platformv1.RetryPXEDeviceResponse, error) {
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "Retry"); err != nil {
+		return nil, err
+	}
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -504,6 +540,9 @@ func (s *PXEGRPCService) Retry(ctx context.Context, req *platformv1.RetryPXEDevi
 
 // GetEvents retrieves all events for a device.
 func (s *PXEGRPCService) GetEvents(ctx context.Context, req *platformv1.GetPXEEventsRequest) (*platformv1.GetPXEEventsResponse, error) {
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "GetEvents"); err != nil {
+		return nil, err
+	}
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -537,6 +576,9 @@ func (s *PXEGRPCService) GetEvents(ctx context.Context, req *platformv1.GetPXEEv
 // status; a synthetic "stopped" would be a lie, since stopped means a
 // configured service an operator can start here.
 func (s *PXEGRPCService) GetStatus(ctx context.Context, req *platformv1.GetPXEStatusRequest) (*platformv1.GetPXEStatusResponse, error) {
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "GetStatus"); err != nil {
+		return nil, err
+	}
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -550,6 +592,9 @@ func (s *PXEGRPCService) GetStatus(ctx context.Context, req *platformv1.GetPXESt
 
 // StartService starts the PXE provisioning service.
 func (s *PXEGRPCService) StartService(ctx context.Context, req *platformv1.StartPXEServiceRequest) (*platformv1.StartPXEServiceResponse, error) {
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "StartService"); err != nil {
+		return nil, err
+	}
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -571,6 +616,9 @@ func (s *PXEGRPCService) StartService(ctx context.Context, req *platformv1.Start
 
 // StopService stops the PXE provisioning service.
 func (s *PXEGRPCService) StopService(ctx context.Context, req *platformv1.StopPXEServiceRequest) (*platformv1.StopPXEServiceResponse, error) {
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "StopService"); err != nil {
+		return nil, err
+	}
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
@@ -596,6 +644,11 @@ func (s *PXEGRPCService) StopService(ctx context.Context, req *platformv1.StopPX
 
 // WebhookComplete handles the callback when OS installation completes.
 func (s *PXEGRPCService) WebhookComplete(ctx context.Context, req *platformv1.PXEWebhookCompleteRequest) (*platformv1.PXEWebhookCompleteResponse, error) {
+	// The operator path carries no IDevID, so a non-system tenant could fail
+	// another tenant's device and quarantine its port (#1896 Codex r10).
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "WebhookComplete"); err != nil {
+		return nil, err
+	}
 	return s.webhookComplete(ctx, req, "")
 }
 

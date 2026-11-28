@@ -479,6 +479,38 @@ func TestService_UpdateDeviceState_InvalidTransition(t *testing.T) {
 	assert.True(t, errors.As(err, &transitionErr))
 }
 
+// TestService_UpdateDeviceState_RefusesAuthorized checks the generic state
+// path cannot authorize a device without a target VLAN.
+func TestService_UpdateDeviceState_RefusesAuthorized(t *testing.T) {
+	svc, _ := initializeTestService(t)
+	ctx := context.Background()
+
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.NoError(t, err)
+	for _, state := range []ProvisioningState{
+		StateBooting, StateInstalling, StateInstallComplete,
+		StateEnrolling, StateEnrolled, StateAuthorizing,
+	} {
+		require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, state, "transition"))
+	}
+
+	err = svc.UpdateDeviceState(ctx, device.ID, StateAuthorized, "x")
+	var transitionErr ErrInvalidStateTransition
+	require.True(t, errors.As(err, &transitionErr), "want ErrInvalidStateTransition, got %v", err)
+	assert.Contains(t, transitionErr.Reason, "AuthorizeDevice")
+
+	retrieved, err := svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StateAuthorizing, retrieved.State)
+	assert.Zero(t, retrieved.TargetVLAN)
+
+	require.NoError(t, svc.AuthorizeDevice(ctx, device.ID, testControlPlaneVLAN))
+	retrieved, err = svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StateAuthorized, retrieved.State)
+	assert.Equal(t, uint16(testControlPlaneVLAN), retrieved.TargetVLAN)
+}
+
 func TestService_UpdateDeviceState_NotFound(t *testing.T) {
 	svc, _ := initializeTestService(t)
 	ctx := context.Background()

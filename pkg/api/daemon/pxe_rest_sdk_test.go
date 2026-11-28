@@ -80,6 +80,11 @@ func connectPXERESTKeyed(t *testing.T, server platformv1.PXEServiceServer, key [
 
 	pxe := pxerest.NewPXERouter(logger, server, writer, true)
 	pxe.SetScopeAuthorizer(tokens)
+	// The parity fixture's caller is the operator of the system tenant, so
+	// the system-tenant guard admits it unchanged; tenant refusal is pinned
+	// by TestPXERouterREST_RefusesNonSystemTenant and
+	// TestPXERouter_RefusesNonSystemTenant.
+	pxe.SetSystemTenantGuard(func(next http.Handler) http.Handler { return next })
 	pxe.SetWebhookSecret(pxeRESTWebhookSecret)
 	bundle := testutil.GenerateTestTLSBundle(t)
 	clientLeaf, err := x509.ParseCertificate(bundle.ClientCert.Certificate[0])

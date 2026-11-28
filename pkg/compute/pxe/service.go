@@ -732,6 +732,16 @@ func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, 
 		return err
 	}
 
+	// Authorizing needs a target VLAN, which only AuthorizeDevice enforces.
+	if state == StateAuthorized {
+		return ErrInvalidStateTransition{
+			DeviceID:  deviceID,
+			FromState: string(device.State),
+			ToState:   string(StateAuthorized),
+			Reason:    "authorizing a device needs a target VLAN; use AuthorizeDevice",
+		}
+	}
+
 	// Fail closed: a device whose VLAN move failed keeps its old state,
 	// so a device sent to failed or quarantined is never reported moved
 	// while it keeps its old network access.

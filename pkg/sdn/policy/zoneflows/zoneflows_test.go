@@ -15,6 +15,7 @@ package zoneflows_test
 
 import (
 	"net"
+	"slices"
 	"strings"
 	"testing"
 
@@ -578,6 +579,58 @@ func TestCompileMatrixRules_AllowedWithServices_DNS(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "matrix rules must include DNS allow flow for provisioning→control-plane with dns service")
+}
+
+// TestCompileMatrixRules_ServiceScopedPairDeniesOtherTraffic: a
+// service-scoped AllowTo pair permits only its listed services. The
+// permits sit above the matrix deny (200) and a destination-scoped drop
+// at 200 refuses every other flow to the destination subnet, so a
+// template catch-all at 100 cannot forward unlisted services (#1896).
+func TestCompileMatrixRules_ServiceScopedPairDeniesOtherTraffic(t *testing.T) {
+	zones := []zone.ZoneConfig{
+		{
+			Name:    zone.ZoneProvisioning,
+			Isolate: true,
+			AllowTo: []zone.ZonePath{
+				{Zone: zone.ZoneControlPlane, Services: []string{"dns"}},
+			},
+		},
+		{Name: zone.ZoneControlPlane},
+	}
+	nets := map[zone.Zone]zoneflows.NetworkSummary{
+		zone.ZoneProvisioning: {VLAN: 201, Subnet: "192.0.2.0/24"},
+		zone.ZoneControlPlane: {VLAN: 200, Subnet: "10.4.6.0/24"},
+	}
+	flows := zoneflows.CompileMatrixRules(zoneflows.MatrixRuleConfig{
+		Matrix:         zone.CompileMatrix(zones),
+		Zones:          zones,
+		NetworksByZone: nets,
+	})
+
+	const deny = 200
+	dst := "nw_dst=10.4.6.0/24"
+	var permits, drops int
+	for _, f := range flows {
+		fields := strings.Split(f.Match, ",")
+		if !slices.Contains(fields, dst) {
+			continue
+		}
+		switch {
+		case f.Actions == "drop":
+			assert.Equal(t, deny, f.Priority, "destination drop: %s", f.Match)
+			assert.Contains(t, fields, "dl_type=0x0800", "destination drop must match all IPv4: %s", f.Match)
+			assert.NotContains(t, f.Match, "tp_dst=", "drop must not be service-scoped: %s", f.Match)
+			drops++
+		case strings.Contains(f.Match, "tp_dst="):
+			assert.Greater(t, f.Priority, deny, "DNS permit must sit above the destination drop: %s", f.Match)
+			assert.Equal(t, "normal", f.Actions)
+			permits++
+		default:
+			t.Errorf("unexpected rule to the service-scoped destination: %+v", f)
+		}
+	}
+	assert.Positive(t, permits, "DNS permits for the service-scoped pair")
+	assert.Equal(t, 1, drops, "one destination drop for the service-scoped pair")
 }
 
 // TestCompileMatrixRules_AllowedWithServices_ACME covers the acme service path.

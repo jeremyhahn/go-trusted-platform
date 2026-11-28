@@ -141,6 +141,7 @@ func handlerRoot(server platformv1.PXEServiceServer) *mux.Router {
 		return fingerprintOf(handlerDeviceCert), nil
 	}))
 	root := mux.NewRouter()
+	guardForSystem(r, root)
 	sub := root.PathPrefix("/api/v1").Subrouter()
 	r.RegisterMachineFacingRoutes(sub)
 	r.RegisterRoutes(sub)

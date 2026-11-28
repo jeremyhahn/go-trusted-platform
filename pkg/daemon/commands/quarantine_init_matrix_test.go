@@ -15,6 +15,9 @@ package commands
 
 import (
 	"context"
+	"net"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -60,6 +63,10 @@ func TestSharedZoneFlowManagerCarriesTheZoneMatrix(t *testing.T) {
 		if shared {
 			zfm, err = newSharedZoneFlowManager(cfg)
 		} else {
+			cfg.GeneratorSet = zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
+				BridgeName: cfg.BridgeName,
+				Quarantine: zoneflows.QuarantineConfig{DNSServerIP: net.IP(netplan.HostServices4.AsSlice())},
+			})
 			zfm, err = policy.NewZoneFlowManager(cfg)
 		}
 		require.NoError(t, err)
@@ -79,4 +86,91 @@ func TestSharedZoneFlowManagerCarriesTheZoneMatrix(t *testing.T) {
 	require.NotEqual(t, noneRec.rules, wantRec.rules,
 		"the compiled matrix must open rules the zero matrix does not")
 	require.ElementsMatch(t, wantRec.rules, gotRec.rules)
+}
+
+// TestSharedZoneFlowManagerQuarantineAllowsDNS checks the production manager
+// opens quarantine DNS to the host-services resolver and to nothing else.
+func TestSharedZoneFlowManagerQuarantineAllowsDNS(t *testing.T) {
+	zones := zone.Defaults()
+	plan, err := netplan.New(netplan.Environment{ID: 4}, zones)
+	require.NoError(t, err)
+
+	rec := &recordingOVSPort{}
+	zfm, err := newSharedZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName:     "br-fabric",
+		FlowController: rec,
+		PortController: rec,
+		Plan:           plan,
+		Zones:          zones,
+	})
+	require.NoError(t, err)
+	require.NoError(t, zfm.ApplyZoneFlows(context.Background(), "tap0", zone.ZoneQuarantine))
+
+	// Rules below the quarantine default drop (1100) never forward.
+	const dnsPriority, quarantineDropPriority = 1800, 1100
+	hostDNS := "nw_dst=" + netplan.HostServices4.String()
+	var allowed []zoneflows.FlowRule
+	for _, r := range rec.rules {
+		fields := strings.Split(r.Match, ",")
+		if r.Actions == "drop" || r.Priority <= quarantineDropPriority || !slices.Contains(fields, "tp_dst=53") {
+			continue
+		}
+		require.True(t, slices.Contains(fields, hostDNS),
+			"quarantine DNS rule open to a destination other than host services: %s", r.Match)
+		allowed = append(allowed, r)
+	}
+	require.Len(t, allowed, 1, "quarantine must open exactly one DNS rule")
+	require.Equal(t, dnsPriority, allowed[0].Priority)
+	require.Contains(t, strings.Split(allowed[0].Match, ","), "nw_proto=17")
+}
+
+// TestSharedZoneFlowManagerServiceScopedPairDeniesOtherTraffic: through
+// the shared wiring, a dns-only hypervisor → storage path opens DNS to
+// storage above the matrix deny (200) and drops every other flow to the
+// storage subnet at 200, below which the hypervisor template's catch-all
+// normal rule sits (#1896).
+func TestSharedZoneFlowManagerServiceScopedPairDeniesOtherTraffic(t *testing.T) {
+	zones := zone.Defaults()
+	for i := range zones {
+		if zones[i].Name == zone.ZoneHypervisor {
+			zones[i].AllowTo = append(zones[i].AllowTo,
+				zone.ZonePath{Zone: zone.ZoneStorage, Services: []string{"dns"}})
+		}
+	}
+	plan, err := netplan.New(netplan.Environment{ID: 4}, zones)
+	require.NoError(t, err)
+	storage, ok := plan.Zone(zone.ZoneStorage)
+	require.True(t, ok)
+
+	rec := &recordingOVSPort{}
+	zfm, err := newSharedZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName:     "br-fabric",
+		FlowController: rec,
+		PortController: rec,
+		Plan:           plan,
+		Zones:          zones,
+	})
+	require.NoError(t, err)
+	require.NoError(t, zfm.ApplyZoneFlows(context.Background(), "tap0", zone.ZoneHypervisor))
+
+	const deny = 200
+	dst := "nw_dst=" + storage.Subnet4.String()
+	var dnsPermits, drops int
+	for _, r := range rec.rules {
+		fields := strings.Split(r.Match, ",")
+		if !slices.Contains(fields, dst) {
+			continue
+		}
+		switch {
+		case r.Actions == "drop" && r.Priority == deny && !strings.Contains(r.Match, "tp_dst="):
+			drops++
+		case slices.Contains(fields, "tp_dst=53") && r.Actions == "normal":
+			require.Greater(t, r.Priority, deny, "DNS permit below the destination drop: %s", r.Match)
+			dnsPermits++
+		case r.Actions != "drop":
+			require.Greater(t, r.Priority, deny, "rule forwards unlisted traffic to storage: %+v", r)
+		}
+	}
+	require.Positive(t, dnsPermits, "DNS to storage must be permitted")
+	require.Positive(t, drops, "other traffic to storage must be dropped at %d", deny)
 }
