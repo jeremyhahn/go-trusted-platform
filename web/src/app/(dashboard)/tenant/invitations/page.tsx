@@ -3,7 +3,6 @@
 import * as React from "react";
 import {
   Crown,
-  Eye,
   Mail,
   MailPlus,
   MoreHorizontal,
@@ -35,8 +34,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { InvitationForm } from "@/components/features/tenant/invitation-form";
-import { InvitationDetailDialog } from "@/components/features/tenant/invitation-detail-dialog";
-import { Gated } from "@/components/features/capabilities/gated";
 import { useAuth } from "@/contexts/AuthContext";
 import { useApi, useIAM, useInvitation, useInvitationList, useToast } from "@/hooks";
 import type { SendInvitationInput } from "@/types/tenant";
@@ -52,9 +49,6 @@ const roleIcons: Record<string, React.ElementType> = {
 // Invitation as the REST endpoint emits it: the status arrives as an
 // enum name such as "INVITATION_STATUS_PENDING" (#445).
 type InvitationWire = Omit<Invitation, "status"> & { status?: string };
-
-// GetInvitation's route template, as the server's capability list names it.
-const GET_INVITATION_OP = "GET /api/v1/invitations/{id:[0-9]+}";
 
 const statusColors: Record<InvitationStatus, "secondary" | "default" | "destructive" | "outline"> = {
   pending: "secondary",
@@ -85,8 +79,6 @@ export default function InvitationsPage() {
     [rolesData],
   );
   const [processingId, setProcessingId] = React.useState<string | null>(null);
-  // The invitation the detail dialog reads through GetInvitation, if open.
-  const [detailId, setDetailId] = React.useState<string | null>(null);
 
   // Use SDK invitation hooks
   const { create, revoke, resend } = useInvitation();
@@ -242,9 +234,7 @@ export default function InvitationsPage() {
       cell: ({ row }) => {
         const date = new Date(row.original.expiresAt);
         const now = new Date();
-        const isExpired =
-          date < now &&
-          (row.original.status === "pending" || row.original.status === "expired");
+        const isExpired = date < now;
 
         return (
           <span
@@ -298,12 +288,6 @@ export default function InvitationsPage() {
             <DropdownMenuContent align="end">
               <DropdownMenuLabel>Actions</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <Gated op={GET_INVITATION_OP}>
-                <DropdownMenuItem onClick={() => setDetailId(invitation.id)}>
-                  <Eye className="h-4 w-4 mr-2" />
-                  View details
-                </DropdownMenuItem>
-              </Gated>
               {canResend && (
                 <DropdownMenuItem onClick={() => handleResend(invitation)}>
                   <RefreshCw className="h-4 w-4 mr-2" />
@@ -317,6 +301,11 @@ export default function InvitationsPage() {
                 >
                   <X className="h-4 w-4 mr-2" />
                   Cancel Invitation
+                </DropdownMenuItem>
+              )}
+              {!canResend && !canCancel && (
+                <DropdownMenuItem disabled>
+                  No actions available
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>
@@ -465,16 +454,6 @@ export default function InvitationsPage() {
           )}
         </CardContent>
       </Card>
-
-      {detailId && (
-        <InvitationDetailDialog
-          id={detailId}
-          open
-          onOpenChange={(open) => {
-            if (!open) setDetailId(null);
-          }}
-        />
-      )}
     </div>
   );
 }

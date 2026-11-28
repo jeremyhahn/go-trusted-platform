@@ -30,7 +30,6 @@ export const EAB_OPS = {
   delete: "DELETE /api/v1/eab/credentials/{id:[0-9]+}",
   byKey: "GET /api/v1/eab/credentials/key/{key}",
   validate: "POST /api/v1/eab/credentials/validate",
-  cleanup: "POST /api/v1/eab/credentials/cleanup",
 } as const;
 
 // The REST wire shape: protojson sends the uint64 id and profile id as strings
@@ -68,9 +67,8 @@ function formatDate(value?: string): string {
 
 // The tools card: GetCredentialByKeyID, ValidateCredential and
 // CleanupExpiredCredentials through the SDK client (#2050).
-function EABTools({ onChanged }: { onChanged: () => void }) {
+function EABTools() {
   const client = usePlatformClient();
-  const { toast } = useToast();
   const [keyId, setKeyId] = React.useState("");
   const [hmacKey, setHmacKey] = React.useState("");
   const [result, setResult] = React.useState<{ text: string; failed?: boolean } | null>(null);
@@ -104,14 +102,6 @@ function EABTools({ onChanged }: { onChanged: () => void }) {
       setResult(res.valid ? { text: "Valid" } : { text: `Invalid: ${res.errorMessage || "not valid"}`, failed: true });
     });
 
-  const cleanupExpired = () =>
-    run(async () => {
-      const res = unwrapEAB(await client.eab.cleanupExpired(), "clean up expired credentials");
-      const n = Number(res.deletedCount ?? 0);
-      toast({ title: `Deleted ${n} expired credentials`, variant: "success" });
-      onChanged();
-    });
-
   const hasKey = keyId.trim() !== "";
   return (
     <Card>
@@ -140,11 +130,6 @@ function EABTools({ onChanged }: { onChanged: () => void }) {
               onClick={() => void validate()}
             >
               Validate
-            </Button>
-          </Gated>
-          <Gated op={EAB_OPS.cleanup}>
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => void cleanupExpired()}>
-              Clean up expired
             </Button>
           </Gated>
         </div>
@@ -222,7 +207,7 @@ export default function EABCredentialsPage() {
         title="EAB Credentials"
         description="ACME External Account Binding credentials"
       />
-      <EABTools onChanged={() => void refetch()} />
+      <EABTools />
       <Card>
         <CardContent className="pt-6">
           {isLoading ? (

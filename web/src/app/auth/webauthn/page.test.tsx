@@ -1,8 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { withControlPlane } from "@/test/control-plane-fetch";
-
 import WebAuthnUI from "./page";
 
 // #643: registration begin reads the account address from "email" and the
@@ -38,7 +36,7 @@ describe("WebAuthnUI registration form", () => {
     fetchMock.mockResolvedValue(
       jsonResponse(400, { error: 'invalid email address: "jhahn"' })
     );
-    render(withControlPlane(<WebAuthnUI />));
+    render(<WebAuthnUI />);
 
     const input = await screen.findByLabelText("Email");
     expect(input.getAttribute("type")).toBe("email");
@@ -54,7 +52,7 @@ describe("WebAuthnUI registration form", () => {
   });
 
   it("refuses to submit without an email", async () => {
-    render(withControlPlane(<WebAuthnUI />));
+    render(<WebAuthnUI />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Register" }));
 

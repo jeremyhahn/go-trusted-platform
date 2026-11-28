@@ -10,7 +10,6 @@ import type {
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/browser";
-import { useInvitationGetByToken } from "trusted-platform-sdk";
 import { getBaseUrl } from "@/utils/getBaseUrl";
 import { getCookie, setCookie } from "@/utils/cookie";
 import { storeSession } from "@/utils/session";
@@ -261,8 +260,8 @@ function AuthStatusChecker({
         setInvitationToken(invitation);
         setStatus("not_registered");
 
-        // WebAuthnUI reads the invitation itself through GetInvitationByToken;
-        // a tenant_name the link carries is shown in place of the tenant id.
+        // Optionally decode invitation to show tenant name
+        // For now, we'll just show that they're being invited
         const tenantName = searchParams.get("tenant_name");
         if (tenantName) {
           setInvitedTenantName(tenantName);
@@ -284,27 +283,6 @@ export default function WebAuthnUI() {
   const [invitedTenantName, setInvitedTenantName] = useState<string | null>(null);
 
   const router = useRouter();
-
-  // The invitation the link carries, read through GetInvitationByToken
-  // (GET /api/v1/invitations/token/{token}, no session needed).
-  const { data: invitationData, error: invitationError } = useInvitationGetByToken(
-    invitationToken ?? undefined
-  );
-  const invitation = invitationData?.invitation;
-
-  useEffect(() => {
-    if (invitation?.email) {
-      setEmail((current) => current || invitation.email);
-    }
-  }, [invitation?.email]);
-
-  const invitationMessage = invitation
-    ? `You've been invited to join ${invitedTenantName ?? `tenant ${invitation.tenantId}`} as ${invitation.role}. `
-    : invitationToken && invitedTenantName
-    ? `You've been invited to join ${invitedTenantName}. `
-    : invitationToken
-    ? "You've been invited to join a workspace. "
-    : "Create your account and workspace. ";
 
   const handleRegister = async () => {
     if (!email) {
@@ -497,13 +475,14 @@ export default function WebAuthnUI() {
                 {invitationToken ? "Join Workspace" : "Create Account"}
               </h2>
               <p className={styles.message}>
-                {invitationMessage}
+                {invitationToken && invitedTenantName
+                  ? `You've been invited to join ${invitedTenantName}. `
+                  : invitationToken
+                  ? "You've been invited to join a workspace. "
+                  : "Create your account and workspace. "}
                 This service supports only WebAuthn/FIDO2 passkeys to ensure the
                 highest level of privacy and security.
               </p>
-              {invitationToken && invitationError && (
-                <p className={styles.errorMessage}>This invitation is no longer valid.</p>
-              )}
               {errorMessage && (
                 <p className={styles.errorMessage}>{errorMessage}</p>
               )}
