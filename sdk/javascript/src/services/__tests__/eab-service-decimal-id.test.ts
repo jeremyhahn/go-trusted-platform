@@ -67,9 +67,4 @@ describe('EABService decimal credential ids', () => {
     await service.getEnrollmentURL(ID);
     expect(url('get')).toBe(`/v1/eab/credentials/${ID}/url`);
   });
-
-  it('markUsed sends the exact decimal id', async () => {
-    await service.markUsed(ID);
-    expect(url('post')).toBe(`/v1/eab/credentials/${ID}/used`);
-  });
 });

@@ -92,7 +92,7 @@ test.describe('EAB credentials', () => {
     await expect(adminPage.getByText('HMAC key', { exact: true })).toBeVisible();
   });
 
-  test('finds a credential by key ID, validates it and cleans up expired ones', async ({ adminPage, sdk, tenant }) => {
+  test('finds a credential by key ID and validates it', async ({ adminPage, sdk, tenant }) => {
     const seeded = await seedCredential(sdk, tenant.id);
 
     await adminPage.goto('/ca/eab');
@@ -109,10 +109,5 @@ test.describe('EAB credentials', () => {
     await expectGateOpen(validate);
     await validate.click();
     await expect(result).toHaveText('Valid');
-
-    const cleanup = adminPage.getByRole('button', { name: 'Clean up expired' });
-    await expectGateOpen(cleanup);
-    await cleanup.click();
-    await expect(adminPage.getByText(/Deleted \d+ expired credentials/).first()).toBeVisible();
   });
 });

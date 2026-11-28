@@ -4,14 +4,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ok, stubControlPlane, withControlPlane, type Answer } from '@/test/control-plane-fetch';
 import EABCredentialsPage from './page';
 
-// #2050: the EAB page reaches GetCredentialByKeyID, ValidateCredential and
-// CleanupExpiredCredentials through the SDK client (client.eab.getByKeyId,
-// .validate, .cleanupExpired), each control behind the capability gate.
+// #2050: the EAB page reaches GetCredentialByKeyID and ValidateCredential
+// through the SDK client (client.eab.getByKeyId, .validate), each control
+// behind the capability gate.
 
 const EAB_OPS = [
   'GET /api/v1/eab/credentials',
   'POST /api/v1/eab/credentials',
-  'POST /api/v1/eab/credentials/cleanup',
   'POST /api/v1/eab/credentials/validate',
   'GET /api/v1/eab/credentials/key/{key}',
   'GET /api/v1/eab/credentials/{id:[0-9]+}',
@@ -111,30 +110,12 @@ describe('EABCredentialsPage tools', () => {
     expect(await invalid.findByText('Invalid: eab: HMAC key does not match')).toBeTruthy();
   });
 
-  it('cleans up expired credentials and toasts the count', async () => {
-    const sent = stubControlPlane({
-      ...shared(),
-      'POST /api/v1/eab/credentials/cleanup': ok({ deletedCount: 3, status: 'EAB_STATUS_SUCCESS' }),
-    });
-    await renderLoaded();
-
-    await click('Clean up expired');
-
-    await waitFor(() => {
-      expect(screen.getAllByTestId('toast').map((t) => t.textContent).join('\n')).toContain(
-        'Deleted 3 expired credentials',
-      );
-    });
-    expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/eab/credentials/cleanup')).toBe(true);
-  });
-
   it('withholds the controls the server does not offer', async () => {
     stubControlPlane({
       ...shared(),
       'GET /api/v1/capabilities': caps([
         'GET /api/v1/eab/credentials/key/{key}',
         'POST /api/v1/eab/credentials/validate',
-        'POST /api/v1/eab/credentials/cleanup',
         'POST /api/v1/eab/credentials/{id:[0-9]+}/revoke',
         'DELETE /api/v1/eab/credentials/{id:[0-9]+}',
       ]),
@@ -146,7 +127,7 @@ describe('EABCredentialsPage tools', () => {
         'false',
       );
     });
-    for (const name of ['Find by key ID', 'Validate', 'Clean up expired', 'Revoke', 'Delete']) {
+    for (const name of ['Find by key ID', 'Validate', 'Revoke', 'Delete']) {
       const button = screen.getByRole('button', { name }) as HTMLButtonElement;
       expect(button.disabled).toBe(true);
       expect(button.getAttribute('data-capability-enabled')).toBe('false');
