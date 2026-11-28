@@ -2292,6 +2292,66 @@ func TestService_QuarantineIntentSurvivesRestartOnQuarantineVLAN(t *testing.T) {
 	})
 }
 
+// A restrictive UpdateDeviceState on a fresh registration (already on the
+// quarantine VLAN) whose state write fails must leave a durable intent, so
+// a restarted service still refuses a boot until the restrictive state is
+// stored (#2081 Codex round 9).
+func TestService_UpdateDeviceState_FailedRestrictiveWriteKeepsQuarantineAcrossRestart(t *testing.T) {
+	ctx := context.Background()
+	restart := func(t *testing.T, svc *service, store *failingDeviceStore, sw *fakeSwitch) *service {
+		t.Helper()
+		store.mu.Lock()
+		store.failPut = nil
+		store.mu.Unlock()
+		restarted := &service{
+			logger:       logging.DefaultLogger(),
+			stateManager: reloadFrom(t, store),
+			vlanManager:  newSwitchVLAN(t, sw),
+			config:       svc.config,
+		}
+		restarted.initialized.Store(true)
+		return restarted
+	}
+	cases := []struct {
+		name  string
+		state ProvisioningState
+	}{
+		{"quarantined", StateQuarantined},
+		{"failed", StateFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sw := &fakeSwitch{tags: map[string]int64{}}
+			svc, _, store, id := newStoreBackedService(t, tc.state)
+			svc.vlanManager = newSwitchVLAN(t, sw)
+			setStoredDevice(t, svc, store, id, StateDiscovered, svc.config.QuarantineVLAN,
+				func(d *DeviceInfo) bool { return d.State == tc.state })
+			device, err := svc.stateManager.Get(id)
+			require.NoError(t, err)
+			port := device.PortID
+
+			require.Error(t, svc.UpdateDeviceState(ctx, id, tc.state, "posture failed"))
+			require.Equal(t, int64(svc.config.QuarantineVLAN), sw.tag(port))
+
+			restarted := restart(t, svc, store, sw)
+			err = restarted.UpdateDeviceState(ctx, id, StateBooting, "pxe boot")
+			var refused ErrInvalidStateTransition
+			require.ErrorAs(t, err, &refused)
+			assert.Equal(t, int64(svc.config.QuarantineVLAN), sw.tag(port),
+				"the boot must not reconnect the device")
+			stored, err := reloadFrom(t, store).Get(id)
+			require.NoError(t, err)
+			assert.Equal(t, StateDiscovered, stored.State)
+
+			require.NoError(t, restarted.UpdateDeviceState(ctx, id, tc.state, "posture failed"))
+			stored, err = reloadFrom(t, store).Get(id)
+			require.NoError(t, err)
+			assert.Equal(t, tc.state, stored.State)
+			assert.Equal(t, svc.config.QuarantineVLAN, stored.CurrentVLAN)
+		})
+	}
+}
+
 // A failed transition write must not consume the retry (#2081 Codex P1).
 func TestService_RetryDevice_FailedTransitionWriteKeepsRetry(t *testing.T) {
 	svc, _, store, id := newStoreBackedService(t, StateQuarantined)
