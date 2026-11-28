@@ -603,6 +603,11 @@ func (s *TenantUserService) GetUserTenant(ctx context.Context, userID uint64) (*
 // authenticated principal by. The workspace must still exist in the
 // tenant manager (the go-quicbaas IAM tenant service on the daemon), so a
 // deleted workspace is refused rather than handed to a session.
+//
+// A user whose originating invitation was never accepted (an Accept that
+// failed after the user was saved, #2362) has no workspace until the
+// redemption completes: it is refused with ErrRedemptionUnfinished. Users
+// with no originating invitation are unaffected.
 func (s *TenantUserService) Workspace(ctx context.Context, email string) (string, error) {
 	if email == "" {
 		return "", ErrInvalidEmail{Email: email}
@@ -613,6 +618,15 @@ func (s *TenantUserService) Workspace(ctx context.Context, email string) (string
 	}
 	if user.TenantID == "" {
 		return "", ErrUserNotInTenant{UserID: user.ID}
+	}
+	if user.InvitationID != 0 {
+		inv, err := s.invitationService.GetByID(ctx, user.InvitationID)
+		if err != nil || inv == nil {
+			return "", ErrRedemptionUnfinished{Email: email, InvitationID: user.InvitationID}
+		}
+		if inv.Status != entities.InvitationStatusAccepted {
+			return "", ErrRedemptionUnfinished{Email: email, InvitationID: user.InvitationID, Status: inv.Status}
+		}
 	}
 	workspace, err := s.tenantManager.GetTenant(ctx, user.TenantID)
 	if err != nil || workspace == nil {
