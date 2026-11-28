@@ -22,6 +22,8 @@ import { claimSystemAdmin } from './system-admin';
  *    run; the bearer is persisted in the run directory and set as the jwt
  *    cookie of each test's context.
  *  - systemSdk: the SDK PlatformClient on systemAdminPage's session.
+ *  - proxyAuthorized: whether systemAdminPage's session is scope-authorized
+ *    for the proxy API (GET /api/v1/proxy/status answers other than 403).
  *
  * The config seeds no tenant (platformd.test.yaml): the admin and its tenant
  * are created over the API here.
@@ -49,6 +51,7 @@ interface TestFixtures {
   tenant: Tenant;
   systemAdminPage: Page;
   systemSdk: PlatformClient;
+  proxyAuthorized: boolean;
 }
 
 /** The directory of the daemon global-setup started (its cwd). */
@@ -181,6 +184,21 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
     );
   },
 
+  /**
+   * Whether the system-admin session is scope-authorized for the proxy API.
+   * pkg/webservice/v1/router.go:370-375 (authMiddleware) serves the legacy JWT
+   * handler unless broker platform tokens are configured, and
+   * rest/proxy/router.go:108-117 (requireScope) then refuses every proxy op
+   * with 403, because that handler is no ScopeAuthorizer. The real-server
+   * harness has no scope-authorized session yet (#2369 Codex round 2,
+   * escalated), so the system-admin specs assert that fail-closed guard
+   * instead of a success path when this is false.
+   */
+  proxyAuthorized: async ({ systemAdminPage }, use) => {
+    const res = await systemAdminPage.context().request.get('/api/v1/proxy/status', { failOnStatusCode: false });
+    await use(res.status() !== 403);
+  },
+
   tenant: async ({ adminPage, sdk }, use) => {
     const id = (await sessionClaims(adminPage.context())).tenant_id;
     if (typeof id !== 'string' || !id) throw new Error('[real-server] the admin session carries no tenant_id');
@@ -189,5 +207,29 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
     await use({ id, name: res.data.tenant.name });
   },
 });
+
+/**
+ * Asserts the proxy's fail-closed guard: each op ('METHOD /path', each {id}
+ * path parameter filled with a throwaway id) answers 403 on request's session.
+ * pkg/webservice/v1/router.go:370-375 (authMiddleware) serves the legacy JWT
+ * handler unless broker platform tokens are configured, and
+ * rest/proxy/router.go:108-117 (requireScope) then refuses every proxy op
+ * with 403, because that handler is no ScopeAuthorizer. The real-server
+ * harness has no scope-authorized session yet (#2369 Codex round 2,
+ * escalated), so the system-admin specs assert this guard instead of a
+ * success path.
+ */
+export async function expectProxyFailsClosed(request: APIRequestContext, ops: readonly string[]): Promise<void> {
+  for (const op of ops) {
+    const [method, rawPath] = op.split(' ', 2);
+    const path = rawPath.replace(/\{[^}]+\}/g, `e2e-refused-${Date.now()}`);
+    const res = await request.fetch(path, {
+      method,
+      failOnStatusCode: false,
+      data: method === 'POST' || method === 'PUT' ? {} : undefined,
+    });
+    expect(res.status(), op).toBe(403);
+  }
+}
 
 export { expect };
