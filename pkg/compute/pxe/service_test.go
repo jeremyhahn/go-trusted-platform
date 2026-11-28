@@ -2026,6 +2026,83 @@ func TestService_QuarantineDevice_FromAuthorizedFailedWriteStaysIsolated(t *test
 	assert.Equal(t, "quarantine", vlan.flows())
 }
 
+// enforcedPlacementVLAN reports the VLAN its last flows enforce, as the zone
+// flow manager's port map does.
+type enforcedPlacementVLAN struct {
+	*recordingFlowsVLAN
+	quarantine, provisioning uint16
+}
+
+func (v *enforcedPlacementVLAN) GetCurrentVLAN(_ context.Context, portID string) (uint16, error) {
+	switch v.flows() {
+	case "quarantine":
+		return v.quarantine, nil
+	case "provisioning":
+		return v.provisioning, nil
+	default:
+		return 0, ErrDeviceNotFound{DeviceID: portID}
+	}
+}
+
+// A quarantine whose write failed is enforced but not stored. A recreated
+// service has an empty pendingQuarantine map, so it must learn the enforced
+// quarantine from the port's placement and refuse the widening report until
+// the quarantine is stored (#2081 Codex round 6).
+func TestService_QuarantinePendingSurvivesServiceRecreation(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name  string
+		state ProvisioningState
+		widen func(s *service, id string) error
+	}{
+		{"install_complete report", StateInstalling, func(s *service, id string) error {
+			return s.UpdateDeviceState(ctx, id, StateInstallComplete, "install complete")
+		}},
+		{"authorize", StateAuthorizing, func(s *service, id string) error {
+			return s.AuthorizeDevice(ctx, id, 200)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, rec, store, id := newStoreBackedService(t, StateQuarantined)
+			vlan := &enforcedPlacementVLAN{recordingFlowsVLAN: rec, quarantine: svc.config.QuarantineVLAN, provisioning: svc.config.ProvisioningVLAN}
+			svc.vlanManager = vlan
+			setStoredDevice(t, svc, store, id, tc.state, svc.config.ProvisioningVLAN,
+				func(d *DeviceInfo) bool { return d.State == StateQuarantined })
+			rec.set("provisioning")
+
+			require.Error(t, svc.QuarantineDevice(ctx, id, "posture failed"))
+			require.Equal(t, "quarantine", rec.flows())
+
+			store.mu.Lock()
+			store.failPut = nil
+			store.mu.Unlock()
+
+			restarted := &service{
+				logger:       logging.DefaultLogger(),
+				stateManager: reloadFrom(t, store),
+				vlanManager:  vlan,
+				config:       svc.config,
+			}
+			restarted.initialized.Store(true)
+
+			err := tc.widen(restarted, id)
+			var refused ErrInvalidStateTransition
+			require.ErrorAs(t, err, &refused)
+			assert.Equal(t, "quarantine", rec.flows(), "the widening move must not reconnect the device")
+			stored, err := reloadFrom(t, store).Get(id)
+			require.NoError(t, err)
+			assert.Equal(t, tc.state, stored.State)
+
+			require.NoError(t, restarted.QuarantineDevice(ctx, id, "posture failed"))
+			reloaded, err := reloadFrom(t, store).Get(id)
+			require.NoError(t, err)
+			assert.Equal(t, StateQuarantined, reloaded.State)
+			assert.Equal(t, svc.config.QuarantineVLAN, reloaded.CurrentVLAN)
+		})
+	}
+}
+
 // A failed transition write must not consume the retry (#2081 Codex P1).
 func TestService_RetryDevice_FailedTransitionWriteKeepsRetry(t *testing.T) {
 	svc, _, store, id := newStoreBackedService(t, StateQuarantined)
