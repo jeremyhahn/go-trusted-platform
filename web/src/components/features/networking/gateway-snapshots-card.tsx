@@ -125,7 +125,7 @@ export function GatewaySnapshotsCard() {
         )}
         {open && (
           <div className="space-y-2">
-            <GatewaySnapshotDetail snapshot={open} />
+            <GatewaySnapshotDetail key={open.gateway_id} snapshot={open} />
             <Button variant="ghost" onClick={() => setOpen(null)}>
               Close
             </Button>

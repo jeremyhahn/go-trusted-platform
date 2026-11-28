@@ -328,7 +328,7 @@ export function GatewaySnapshotDetail({ snapshot }: GatewaySnapshotDetailProps) 
                 </dl>
               </div>
             )}
-            {overlay && <GatewayAdmittedVTEPs gatewayId={snapshot.gateway_id} overlay={overlay} />}
+            {overlay && <GatewayAdmittedVTEPs key={snapshot.gateway_id} gatewayId={snapshot.gateway_id} overlay={overlay} />}
           </section>
         </CardContent>
       </Card>
