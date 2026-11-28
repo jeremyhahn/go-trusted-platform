@@ -128,6 +128,31 @@ func TestPolicyFlowCookie_OwnedAndStable(t *testing.T) {
 	assert.True(t, samePolicyCookie(fmt.Sprintf("0x%x", rule0), fmt.Sprintf("0x%x", rule1)))
 }
 
+// TestPolicyOwnsCookie pins the rollback's held-entry check: every per-rule
+// cookie of the policy, and its legacy cookie, are the policy's own; another
+// policy's cookie and an unparsable rendering are not.
+func TestPolicyOwnsCookie(t *testing.T) {
+	cases := []struct {
+		name     string
+		rendered string
+		want     bool
+	}{
+		{"own rule 0", fmt.Sprintf("0x%x", policyFlowCookie("p1", 0)), true},
+		{"own rule 3", fmt.Sprintf("0x%x", policyFlowCookie("p1", 3)), true},
+		{"legacy cookie", fmt.Sprintf("0x%x", legacyPolicyFlowCookie("p1")), true},
+		{"another policy", fmt.Sprintf("0x%x", policyFlowCookie("p2", 0)), false},
+		{"another policy legacy", fmt.Sprintf("0x%x", legacyPolicyFlowCookie("p2")), false},
+		{"no 0x prefix", fmt.Sprintf("%x", policyFlowCookie("p1", 3)), true},
+		{"unparsable", "not-a-cookie", false},
+		{"zero cookie", "0x0", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, policyOwnsCookie(tc.rendered, "p1"))
+		})
+	}
+}
+
 // Two rules on one entry would install one switch flow (OFPFC_ADD keeps the
 // later) while the record keeps the first rule's cookie, so a strict delete
 // would miss the flow: ApplyPolicy refuses them before any install.
@@ -437,14 +462,18 @@ func TestSDNService_ApplyPolicy_FailedReplacementKeepsRawFlowOnDroppedEntry(t *t
 	require.Equal(t, 2, fake.calls)
 	flows, err := fake.ListFlows(context.Background(), "br0")
 	require.NoError(t, err)
-	var denyA *ovs.Flow
+	var denyA, denyB *ovs.Flow
 	for _, fl := range flows {
 		if strings.Contains(fl.Match, "192.0.2.10") {
 			denyA = fl
+		} else {
+			denyB = fl
 		}
 	}
 	require.NotNil(t, denyA)
-	policyCookie := denyA.Cookie
+	require.NotNil(t, denyB)
+	// Each rule carries its own cookie (#1955): deny-b is restored with its own.
+	denyBCookie := denyB.Cookie
 
 	// A raw API add at deny-a's entry takes it over.
 	rawCookie, err := ovs.NewAPIFlowCookie()
@@ -469,7 +498,7 @@ func TestSDNService_ApplyPolicy_FailedReplacementKeepsRawFlowOnDroppedEntry(t *t
 			assert.Equal(t, rawCookieStr, fl.Cookie, "the raw flow on the dropped entry was overwritten")
 			assert.Equal(t, "output:2", fl.Actions)
 		} else {
-			assert.Equal(t, policyCookie, fl.Cookie, "prior deny-b not restored")
+			assert.Equal(t, denyBCookie, fl.Cookie, "prior deny-b not restored")
 		}
 	}
 }
