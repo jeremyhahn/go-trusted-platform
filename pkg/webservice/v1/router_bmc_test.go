@@ -141,6 +141,17 @@ func newBMCTenantRouter(t *testing.T, tenantID string) (*mux.Router, *recordingB
 	return router, h
 }
 
+// probeBMC is probe with a well-formed power body on the power route: the
+// power route decodes its body to pick the action scope, so an empty body
+// answers 400 before the tenant check this file asserts.
+func probeBMC(router *mux.Router, method, template string) int {
+	if strings.HasSuffix(template, "/power") {
+		return serve(router, httptest.NewRequest(method, testutil.ConcreteFor(template),
+			strings.NewReader(`{"action":"on"}`)))
+	}
+	return probe(router, method, template)
+}
+
 // TestBMCRoutes_DenyAnAdminOfAnotherTenant is the Codex P1 on #1730: the
 // admin gate alone let a tenant-a administrator drive tenant-b's BMC with
 // the daemon's stored credentials. The profile's owner must be the caller's
@@ -149,7 +160,7 @@ func TestBMCRoutes_DenyAnAdminOfAnotherTenant(t *testing.T) {
 	router, h := newBMCTenantRouter(t, "tenant-a")
 	for _, tc := range bmcTenantProbes {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
-			assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path),
+			assert.Equal(t, http.StatusForbidden, probeBMC(router, tc.method, tc.path),
 				"an admin of tenant-a reached a BMC it does not own")
 		})
 	}
@@ -159,12 +170,16 @@ func TestBMCRoutes_DenyAnAdminOfAnotherTenant(t *testing.T) {
 // TestBMCRoutes_AdmitTheOwnerAndTheSystemTenant: the profile's own tenant
 // reaches its BMC, and the system tenant, the control plane, reaches any.
 func TestBMCRoutes_AdmitTheOwnerAndTheSystemTenant(t *testing.T) {
+	// The mounted BMC routes are system-tenant only: the profile owner
+	// tenant-b is refused and reaches nothing.
 	owner, ownerHits := newBMCTenantRouter(t, "tenant-b")
-	assert.Equal(t, http.StatusOK, probe(owner, http.MethodGet, "/api/v1/bmc/7/users"))
-	assert.Equal(t, http.StatusOK, probe(owner, http.MethodPost, "/api/v1/bmc/7/power"))
-	assert.Equal(t, []string{"ListUsers", "PowerAction"}, ownerHits.reached)
+	assert.Equal(t, http.StatusForbidden, probe(owner, http.MethodGet, "/api/v1/bmc/7/users"))
+	assert.Equal(t, http.StatusForbidden, probeBMC(owner, http.MethodPost, "/api/v1/bmc/7/power"))
+	assert.Empty(t, ownerHits.reached)
 
-	system, systemHits := newBMCTenantRouter(t, "system")
+	// The system tenant is admitted once its session carries the BMC scopes.
+	systemHits := &recordingBMCHandler{}
+	system := newBMCScopedRouter(t, systemHits, allBMCScopes)
 	assert.Equal(t, http.StatusOK, probe(system, http.MethodDelete, "/api/v1/bmc/7/users/3"))
 	assert.Equal(t, http.StatusOK, probe(system, http.MethodGet, "/api/v1/bmc/9/users"))
 	assert.Equal(t, []string{"DeleteUser", "ListUsers"}, systemHits.reached)
@@ -327,8 +342,10 @@ func TestBMCRoutes_PowerActionTrailingJSONTakesTheWriteScope(t *testing.T) {
 		scope string
 		want  int
 	}{
-		{"bmc:power", http.StatusForbidden},
-		{"bmc:write", http.StatusOK},
+		// The canonical decoder refuses a trailing JSON value with 400
+		// whichever scope the session holds; no action reaches the handler.
+		{"bmc:power", http.StatusBadRequest},
+		{"bmc:write", http.StatusBadRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.scope, func(t *testing.T) {

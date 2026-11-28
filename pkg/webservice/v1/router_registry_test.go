@@ -162,6 +162,10 @@ type testHandlerRegistry struct {
 // methods are never reached: the admin gate refuses every probe first.
 type stubBMCHandler struct{ bmcwebsvc.RestHandler }
 
+// ProvisioningConfigured reports the provisioning store wired, so the
+// router mounts the BMC routes on a fixture built on this stub.
+func (stubBMCHandler) ProvisioningConfigured() bool { return true }
+
 func (r *testHandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 	return r.acmeService
 }

@@ -336,9 +336,6 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.overlayService = &stubOverlayServer{}
 	registry.switchService = &stubSwitchService{}
 	registry.sdnService = &stubSDNServer{}
-	if registry.bmcHandler == nil {
-		registry.bmcHandler = stubBMCHandler{}
-	}
 	registry.gatewayService = &stubGatewayServer{}
 	registry.gatewayStore = &stubGatewayStore{}
 	registry.configDelivery = &stubConfigDelivery{}
