@@ -188,6 +188,24 @@ func (o *QEMUOrchestrator) MigrateVM(ctx context.Context, instanceID, destinatio
 	}
 
 	inst.mu.Lock()
+	cfg := inst.instance.Config
+	tpmSocket := inst.instance.Metadata["tpm_socket"]
+	// The receiver does not restore swtpm state, so a vTPM guest would arrive
+	// without its TPM: refuse it before the destination is contacted.
+	if (cfg != nil && cfg.TPMEnabled) || tpmSocket != "" {
+		inst.mu.Unlock()
+		return nil, &SentinelCauseError{Sentinel: ErrMigrationVTPMUnsupported, Cause: &MessageError{Msg: "the guest has a vTPM"}}
+	}
+	// A live receiver opens <work dir>/<instance id>/disk.qcow2 only; a guest
+	// whose disk lives elsewhere (e.g. a cold-migrated incoming-* image) would
+	// pair its RAM with the wrong or a missing image.
+	if mode == MigrateModeLive {
+		shared := filepath.Join(o.config.WorkDir, instanceID, "disk.qcow2")
+		if cfg == nil || o.config.WorkDir == "" || filepath.Clean(cfg.DiskPath) != shared {
+			inst.mu.Unlock()
+			return nil, &SentinelCauseError{Sentinel: ErrLiveMigrationDiskLayout, Cause: &MessageError{Msg: "the guest disk is not " + shared}}
+		}
+	}
 	spec := MigrationSpec{
 		InstanceID: instanceID,
 		VMName:     inst.instance.Name,

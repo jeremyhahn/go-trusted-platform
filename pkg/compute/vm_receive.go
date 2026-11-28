@@ -257,8 +257,21 @@ func (tr *trackedReceiver) abort(o *QEMUOrchestrator, id string) {
 	if err := tr.recv.Abort(context.Background()); err != nil {
 		o.logger.Warnf("Failed to abort migration receiver %s: %v", id, err)
 	}
+	tr.reapAfterAbort(o, id)
 	tr.cleanup()
 	tr.cancel()
+}
+
+// reapAfterAbort reaps an aborted receiver's process without blocking the
+// caller: Abort only signals it, so a Wait is needed to collect the child.
+// A committed receiver is never passed here; adoptReceived owns its Wait.
+func (tr *trackedReceiver) reapAfterAbort(o *QEMUOrchestrator, id string) {
+	recv := tr.recv
+	go func() {
+		if err := recv.Wait(); err != nil {
+			o.logger.Debugf("Migration receiver %s exited after abort: %v", id, err)
+		}
+	}()
 }
 
 func receiversFor(o *QEMUOrchestrator) *receiverRegistry {
@@ -317,6 +330,11 @@ func (r *receiverRegistry) take(id string) (*trackedReceiver, bool) {
 func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSpec) (*ReceiverHandle, error) {
 	if spec.Config == nil {
 		return nil, ErrMigrationSpecRequired
+	}
+	// The receiver does not restore swtpm state; refuse a vTPM guest before
+	// any credential is issued.
+	if spec.Config.TPMEnabled {
+		return nil, ErrMigrationVTPMUnsupported
 	}
 
 	// The receiver is built from this host's arch profile; refuse a guest it
@@ -410,6 +428,7 @@ func (o *QEMUOrchestrator) FinalizeIncoming(ctx context.Context, receiverID stri
 	}
 
 	defer tr.cancel()
+	defer tr.reapAfterAbort(o, receiverID)
 	if err := tr.recv.Abort(ctx); err != nil {
 		return &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "abort received VM", Err: err}}
 	}
