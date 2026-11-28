@@ -629,25 +629,25 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `TenantService.ListTenants` | - | - | - | - | missing |
-| `TenantService.GetTenant` | `GET /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` | - | `auth.spec.ts`<br>`dashboard.spec.ts`<br>`tenant.spec.ts` | covered |
-| `TenantService.GetTenantByName` | `GET /by-name/{name}` | - | - | - | missing |
-| `TenantService.CreateTenant` | - | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | - | partial |
-| `TenantService.UpdateTenant` | `PUT /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | - | partial |
-| `TenantService.DeleteTenant` | `DELETE /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | - | partial |
-| `TenantService.SuspendTenant` | `POST /{id}/suspend` | - | - | - | missing |
-| `TenantService.ResumeTenant` | `POST /{id}/resume` | - | - | - | missing |
+| `TenantService.ListTenants` | `GET /` | `(dashboard)/tenant/directory/page.tsx` | - | `tenant-directory.spec.ts` | covered |
+| `TenantService.GetTenant` | `GET /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx`<br>`admin/tenant/page.tsx` | - | `auth.spec.ts`<br>`dashboard.spec.ts`<br>`tenant.spec.ts`<br>`admin-workspace.spec.ts` | covered |
+| `TenantService.GetTenantByName` | `GET /by-name/{name}` | `(dashboard)/tenant/directory/page.tsx` | - | `tenant-directory.spec.ts` | covered |
+| `TenantService.CreateTenant` | `POST /` | `(dashboard)/tenant/directory/page.tsx`<br>`(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | `tenant-directory.spec.ts` | covered |
+| `TenantService.UpdateTenant` | `PUT /{id}` | `(dashboard)/tenant/directory/page.tsx`<br>`(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | `tenant-directory.spec.ts` | covered |
+| `TenantService.DeleteTenant` | `DELETE /{id}` | `(dashboard)/tenant/directory/page.tsx`<br>`(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | `tenant-directory.spec.ts` | covered |
+| `TenantService.SuspendTenant` | `POST /{id}/suspend` | `(dashboard)/tenant/directory/page.tsx` | - | `tenant-directory.spec.ts` | covered |
+| `TenantService.ResumeTenant` | `POST /{id}/resume` | `(dashboard)/tenant/directory/page.tsx` | - | `tenant-directory.spec.ts` | covered |
 | `TenantService.GetQuotas` | `GET /{id}/quotas` | `(dashboard)/tenant/quotas/page.tsx` | - | `tenant-management.spec.ts` | covered |
-| `TenantService.UpdateQuotas` | `PUT /{id}/quotas` | `(dashboard)/tenant/quotas/page.tsx` (read-only) | - | - | partial |
+| `TenantService.UpdateQuotas` | `PUT /{id}/quotas` | `(dashboard)/tenant/quotas/page.tsx` | - | `tenant-quotas.spec.ts` | covered |
 | `TenantService.GetUsage` | `GET /{id}/usage` | `(dashboard)/tenant/quotas/page.tsx` | - | `tenant-management.spec.ts` | covered |
-| `TenantService.CheckQuota` | `POST /{id}/quota-check` | - | - | - | missing |
-| `TenantService.Sync` | `POST /sync` | - | - | - | missing |
-| `TenantService.RotateTenantDEK` | `POST /{id}/dek/rotate` | - | - | - | missing |
-| `TenantService.GetTenantDEKStatus` | `GET /{id}/dek` | - | - | - | missing |
-| `TenantService.InitTenantBarrier` | - | - | - | - | missing |
-| `TenantService.UnsealTenantBarrier` | - | - | - | - | missing |
-| `TenantService.SealTenantBarrier` | - | - | - | - | missing |
-| `TenantService.GetTenantBarrierStatus` | `GET /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` | - | `auth.spec.ts`<br>`dashboard.spec.ts`<br>`tenant.spec.ts` | covered |
+| `TenantService.CheckQuota` | `POST /{id}/quota-check` | `(dashboard)/tenant/quotas/page.tsx` | - | `tenant-quotas.spec.ts` | covered |
+| `TenantService.Sync` | `POST /sync` | `(dashboard)/tenant/directory/page.tsx` | - | `tenant-directory.spec.ts` | covered |
+| `TenantService.RotateTenantDEK` | `POST /{id}/dek/rotate` | `(dashboard)/tenant/barrier/page.tsx` (gated off: the daemon wires no DEK backend; DEK isolation is off, see PR body) | - | `tenant-dek.spec.ts` | partial |
+| `TenantService.GetTenantDEKStatus` | `GET /{id}/dek` | `(dashboard)/tenant/barrier/page.tsx` (gated off: the daemon wires no DEK backend; DEK isolation is off, see PR body) | - | `tenant-dek.spec.ts` | partial |
+| `TenantService.InitTenantBarrier` | `POST /{id}/barrier/init` | `(dashboard)/tenant/barrier/page.tsx` | - | `tenant-barrier.spec.ts` | partial: the real-server harness can make only prefix tenants (go-quicbaas#358), so tenant-barrier.spec.ts drives this op to the server's refusal; the barrier-tenant lifecycle is pkg/tenant unit tests |
+| `TenantService.UnsealTenantBarrier` | `POST /{id}/barrier/unseal` | `(dashboard)/tenant/barrier/page.tsx` | - | `tenant-barrier.spec.ts` | partial: the real-server harness can make only prefix tenants (go-quicbaas#358), so tenant-barrier.spec.ts drives this op to the server's refusal; the barrier-tenant lifecycle is pkg/tenant unit tests |
+| `TenantService.SealTenantBarrier` | `POST /{id}/barrier/seal` | `(dashboard)/tenant/barrier/page.tsx` | - | `tenant-barrier.spec.ts` | partial: the real-server harness can make only prefix tenants (go-quicbaas#358), so tenant-barrier.spec.ts drives this op to the server's refusal; the barrier-tenant lifecycle is pkg/tenant unit tests |
+| `TenantService.GetTenantBarrierStatus` | `GET /{id}/barrier` | `(dashboard)/tenant/barrier/page.tsx` | - | `tenant-barrier.spec.ts` | covered |
 
 ## TPMService (`tpm.proto`)
 
@@ -762,11 +762,11 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | SchedulerService | 11 | 0 | 0 | 0 | 0 | 11 |
 | SDNService | 29 | 11 | 1 | 16 | 1 | 0 |
 | SwitchService | 5 | 5 | 0 | 0 | 0 | 0 |
-| TenantService | 19 | 4 | 4 | 11 | 0 | 0 |
+| TenantService | 19 | 12 | 4 | 3 | 0 | 0 |
 | TPMService | 31 | 17 | 7 | 7 | 0 | 0 |
 | VPNService | 8 | 8 | 0 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 10 | 9 | 1 | 0 |
-| **Total** | **529** | **191** | **50** | **207** | **50** | **31** |
+| **Total** | **529** | **199** | **50** | **199** | **50** | **31** |
 
 ## Proposed slices
 

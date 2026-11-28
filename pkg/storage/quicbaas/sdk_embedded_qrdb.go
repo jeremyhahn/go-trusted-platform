@@ -93,6 +93,12 @@ func buildEmbeddedQRDBServicers(es *EmbeddedServer) (quicbaas.QRDBEmbeddedServic
 		servicers.UserAuthFactor = uafSvc
 	}
 
+	// The node's tenant servicer backs TenantMgmt() and the per-tenant
+	// barrier verbs (status, unseal, seal), as go-quicbaas
+	// cmd/quicbaas/embedded_qrdb.go wires it; without it those calls reach a
+	// nil servicer.
+	wireEmbeddedTenantServicer(&servicers, srv)
+
 	// Default ceremony / credential / barrier services come from the node's
 	// bootstrap ceremony stack and data-plane barrier.
 	if stack := srv.GetCeremonyServices(); stack != nil {
@@ -115,6 +121,22 @@ func buildEmbeddedQRDBServicers(es *EmbeddedServer) (quicbaas.QRDBEmbeddedServic
 	}
 
 	return servicers, nil
+}
+
+// tenantServicerSource is the embedded node server's tenant servicer
+// accessor.
+type tenantServicerSource interface {
+	GetQRDBTenantServicer() quicbaas.QRDBTenantServicer
+}
+
+var _ tenantServicerSource = (*quicbaas.Server)(nil)
+
+// wireEmbeddedTenantServicer installs the source's tenant servicer when it
+// has one.
+func wireEmbeddedTenantServicer(servicers *quicbaas.QRDBEmbeddedServicers, src tenantServicerSource) {
+	if tenantSvc := src.GetQRDBTenantServicer(); tenantSvc != nil {
+		servicers.Tenant = tenantSvc
+	}
 }
 
 // embeddedQRDBOption returns the SDK option that wires the in-process

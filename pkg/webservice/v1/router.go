@@ -1109,7 +1109,20 @@ func (v1Router *Router) tenantRoutes() {
 	}
 	// Tenant lifecycle, quotas, the per-tenant DEK and the per-tenant
 	// barrier. Every route is an administrative operation on tenancy state,
-	// so the whole subtree keeps the admin gate as well.
+	// so the whole subtree keeps the admin gate as well. The DEK and barrier
+	// routes answer not configured, and list so, when the daemon's tenant
+	// manager has no backend for them.
+	r.SetUnavailable(
+		func(name string) http.Handler {
+			return v1Router.serviceRegistry.serviceUnavailableHandler(
+				name, name+" backend not configured by daemon")
+		},
+		v1Router.serviceRegistry.recordUnavailable)
+	// Each route then takes its TenantService RPC's catalog scope, as on
+	// gRPC; under the legacy JWT handler the role gate alone applies.
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		r.SetScopeAuthorizer(scoped)
+	}
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 

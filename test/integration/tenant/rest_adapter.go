@@ -472,6 +472,9 @@ func (a *RESTAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarr
 
 	path := fmt.Sprintf("/api/v1/tenants/%s/barrier/init", opts.TenantID)
 	reqBody := map[string]interface{}{}
+	if opts.Passphrase != "" {
+		reqBody["passphrase"] = opts.Passphrase
+	}
 	if opts.Threshold > 0 {
 		reqBody["threshold"] = opts.Threshold
 	}

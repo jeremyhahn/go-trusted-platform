@@ -538,7 +538,7 @@ func (a *QUICAdapter) SyncTenants(ctx context.Context) (*SyncTenantsResult, erro
 // InitTenantBarrier explicitly initializes a per-tenant barrier.
 func (a *QUICAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarrierOptions) (*InitTenantBarrierResult, error) {
 	raw, err := a.sendCategory(ctx, "InitTenantBarrier", tqOpTenantBarrierCategory, tqBarrierSubInit,
-		&platformv1.InitTenantBarrierRequest{TenantId: opts.TenantID})
+		&platformv1.InitTenantBarrierRequest{TenantId: opts.TenantID, Threshold: opts.Threshold, Shares: opts.Shares, Passphrase: opts.Passphrase})
 	if err != nil {
 		return nil, err
 	}

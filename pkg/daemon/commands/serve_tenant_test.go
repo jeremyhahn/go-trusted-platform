@@ -23,6 +23,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 )
 
 // stubTenantClient satisfies iam.TenantClient. Construction never calls it;
@@ -34,13 +35,13 @@ type stubTenantClient struct{ iam.TenantClient }
 type stubRoleClient struct{ iam.RoleClient }
 
 func TestNewIAMOnlyTenantManager_BuildsWithoutOptionalSubsystems(t *testing.T) {
-	mgr, err := newIAMOnlyTenantManager(stubTenantClient{}, stubRoleClient{})
+	mgr, err := newIAMOnlyTenantManager(stubTenantClient{}, stubRoleClient{}, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, mgr)
 }
 
 func TestNewIAMOnlyTenantManager_RefusesMissingIAMClient(t *testing.T) {
-	mgr, err := newIAMOnlyTenantManager(nil, stubRoleClient{})
+	mgr, err := newIAMOnlyTenantManager(nil, stubRoleClient{}, nil)
 	require.Error(t, err)
 	assert.Nil(t, mgr)
 }
@@ -48,9 +49,31 @@ func TestNewIAMOnlyTenantManager_RefusesMissingIAMClient(t *testing.T) {
 func TestNewIAMOnlyTenantManager_RefusesMissingRoleClient(t *testing.T) {
 	// Without a role client a new tenant would be created with no roles,
 	// and every user mirrored into it would fail (#641).
-	mgr, err := newIAMOnlyTenantManager(stubTenantClient{}, nil)
+	mgr, err := newIAMOnlyTenantManager(stubTenantClient{}, nil, nil)
 	require.Error(t, err)
 	assert.Nil(t, mgr)
+}
+
+// stubBarrierClient stands in for the QRDB-backed barrier adapter; the
+// constructor only stores it, so no method is called.
+type stubBarrierClient struct{ tenant.TenantBarrierClient }
+
+func TestNewPlatformTenantManager_WiresBarrierClient(t *testing.T) {
+	// The shipping daemon hands the manager a per-tenant barrier client,
+	// so /tenant/barrier reaches a real backend; DEK isolation stays off.
+	mgr, err := newIAMOnlyTenantManager(stubTenantClient{}, stubRoleClient{}, stubBarrierClient{})
+	require.NoError(t, err)
+	require.NotNil(t, mgr)
+	assert.True(t, mgr.BarrierConfigured())
+	assert.False(t, mgr.DEKConfigured())
+}
+
+func TestNewPlatformTenantManager_NilBarrierClientStaysDark(t *testing.T) {
+	mgr, err := newIAMOnlyTenantManager(stubTenantClient{}, stubRoleClient{}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, mgr)
+	assert.False(t, mgr.BarrierConfigured())
+	assert.False(t, mgr.DEKConfigured())
 }
 
 func TestPlatformTenantManager_NilAppWiresNothing(t *testing.T) {

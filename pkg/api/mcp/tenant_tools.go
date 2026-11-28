@@ -467,6 +467,10 @@ func (r *ToolRegistry) registerTenantTools() {
 					"type":        "string",
 					"description": "Tenant ID (required)",
 				},
+				"passphrase": map[string]interface{}{
+					"type":        "string",
+					"description": "Operator-supplied barrier passphrase (required); never stored or defaulted",
+				},
 				"threshold": map[string]interface{}{
 					"type":        "integer",
 					"description": "Shamir share threshold; must be 0: the per-tenant barrier initializes deterministically and a Shamir request is refused",
@@ -476,7 +480,7 @@ func (r *ToolRegistry) registerTenantTools() {
 					"description": "Shamir share count; must be 0: the per-tenant barrier initializes deterministically and a Shamir request is refused",
 				},
 			},
-			"required": []string{"tenant_id"},
+			"required": []string{"tenant_id", "passphrase"},
 		},
 	})
 
@@ -910,9 +914,10 @@ func (r *ToolRegistry) executeTenantBarrierInit(ctx context.Context, args map[st
 
 	tenantID := getString(args, "tenant_id")
 	resp, err := server.InitTenantBarrier(ctx, &platformv1.InitTenantBarrierRequest{
-		TenantId:  tenantID,
-		Threshold: int32(getInt(args, "threshold")),
-		Shares:    int32(getInt(args, "shares")),
+		TenantId:   tenantID,
+		Threshold:  int32(getInt(args, "threshold")),
+		Shares:     int32(getInt(args, "shares")),
+		Passphrase: getString(args, "passphrase"),
 	})
 	if err != nil {
 		return nil, err

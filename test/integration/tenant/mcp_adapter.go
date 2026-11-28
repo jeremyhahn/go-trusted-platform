@@ -514,6 +514,9 @@ func (a *MCPAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarri
 	args := map[string]interface{}{
 		"tenant_id": opts.TenantID,
 	}
+	if opts.Passphrase != "" {
+		args["passphrase"] = opts.Passphrase
+	}
 	if opts.Threshold > 0 {
 		args["threshold"] = opts.Threshold
 	}

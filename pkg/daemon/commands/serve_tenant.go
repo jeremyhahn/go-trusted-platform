@@ -34,8 +34,14 @@ import (
 // answered every call with "tenant manager not initialized", served no
 // /api/v1/tenants route and refused tenant requests on QUIC (#730).
 //
-// The manager is IAM-only: DEK isolation and the VLAN, quota and bridge
-// subsystems stay off until they are constructed at startup too (#721).
+// The per-tenant barrier backend is wired from the SDK's QRDB tenant client,
+// so the barrier status, init, unseal and seal routes reach a real backend;
+// without that client they stay dark and list not-configured. In embedded
+// deployments the QRDB composition now installs the node's tenant servicer
+// behind that client (pkg/storage/quicbaas/sdk_embedded_qrdb.go), so the
+// barrier calls reach it rather than a nil servicer. DEK isolation
+// and the VLAN, quota and bridge subsystems stay off until they are
+// constructed at startup too (#721).
 func platformTenantManager(logger *logging.Logger, a *app.App) *tenant.Manager {
 	if a == nil {
 		return nil
@@ -50,12 +56,20 @@ func platformTenantManager(logger *logging.Logger, a *app.App) *tenant.Manager {
 		logger.Warn("platform tenant manager not wired: QuicBaaS IAM client unavailable")
 		return nil
 	}
-	mgr, err := newIAMOnlyTenantManager(iamClient.Tenant(), iamClient.Role())
+	var bc tenant.TenantBarrierClient
+	if svc := sdk.TenantMgmtService(); svc == nil {
+		logger.Warn("platform tenant barrier not wired: QuicBaaS tenant service unavailable")
+	} else if tc, err := svc.Tenant(); err != nil {
+		logger.Warn("platform tenant barrier not wired: QRDB tenant client unavailable", "error", err)
+	} else {
+		bc = tenant.NewTenantBarrierClient(tc)
+	}
+	mgr, err := newIAMOnlyTenantManager(iamClient.Tenant(), iamClient.Role(), bc)
 	if err != nil {
 		logger.Warn("failed to construct platform tenant manager", "error", err)
 		return nil
 	}
-	logger.Info("platform tenant manager wired (IAM-only)")
+	logger.Info("platform tenant manager wired", "barrier", mgr.BarrierConfigured())
 	return mgr
 }
 
@@ -74,14 +88,16 @@ func platformTenantID(a *app.App) string {
 // newIAMOnlyTenantManager constructs a tenant.Manager over the IAM tenant
 // client with the subsystems that are not yet constructed at startup turned
 // off, so NewManager does not refuse it for a missing DEK, VLAN or bridge
-// dependency.
-func newIAMOnlyTenantManager(tc iam.TenantClient, rc tenant.RoleReconciler) (*tenant.Manager, error) {
+// dependency. bc is the per-tenant barrier backend; nil leaves the barrier
+// routes dark (BarrierConfigured false).
+func newIAMOnlyTenantManager(tc iam.TenantClient, rc tenant.RoleReconciler, bc tenant.TenantBarrierClient) (*tenant.Manager, error) {
 	cfg := tenant.DefaultConfig()
 	cfg.EnableDEKIsolation = false
 	return tenant.NewManager(&tenant.ManagerConfig{
-		IAMTenantClient: tc,
-		IAMRoleClient:   rc,
-		Config:          cfg,
-		Logger:          slog.Default(),
+		IAMTenantClient:     tc,
+		IAMRoleClient:       rc,
+		TenantBarrierClient: bc,
+		Config:              cfg,
+		Logger:              slog.Default(),
 	})
 }

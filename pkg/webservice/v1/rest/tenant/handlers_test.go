@@ -251,6 +251,45 @@ func TestHandlers_RotateDEKCarriesBackground(t *testing.T) {
 	}
 }
 
+// TestListTenants_PassesLimitAndOffset: the directory pages through every
+// tenant, so GET /api/v1/tenants forwards limit and offset to the server;
+// with no query both stay zero (the server's default page).
+func TestListTenants_PassesLimitAndOffset(t *testing.T) {
+	srv := &fakeTenantServer{}
+	rec := serve(newRouterWithServer(t, srv), http.MethodGet, "/api/v1/tenants?limit=2&offset=4", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	got, ok := srv.last.(*platformv1.ListTenantsRequest)
+	require.True(t, ok, "the server got %T", srv.last)
+	assert.Equal(t, int32(2), got.GetLimit())
+	assert.Equal(t, int32(4), got.GetOffset())
+
+	srv = &fakeTenantServer{}
+	rec = serve(newRouterWithServer(t, srv), http.MethodGet, "/api/v1/tenants", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	got, ok = srv.last.(*platformv1.ListTenantsRequest)
+	require.True(t, ok, "the server got %T", srv.last)
+	assert.Zero(t, got.GetLimit())
+	assert.Zero(t, got.GetOffset())
+}
+
+// TestListTenants_RefusesABadPageBound: a negative, non-numeric or
+// out-of-range bound answers 400 naming the parameter and reaches no server.
+func TestListTenants_RefusesABadPageBound(t *testing.T) {
+	for _, tc := range []struct{ query, parameter string }{
+		{"limit=-1", "limit"},
+		{"offset=x", "offset"},
+		{"limit=99999999999", "limit"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			srv := &fakeTenantServer{}
+			rec := serve(newRouterWithServer(t, srv), http.MethodGet, "/api/v1/tenants?"+tc.query, "")
+			assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			assert.Contains(t, rec.Body.String(), tc.parameter)
+			assert.Nil(t, srv.last, "a bad page bound must not reach the server")
+		})
+	}
+}
+
 func TestHandlers_ListTenantsForwardsLimitOffset(t *testing.T) {
 	srv := &fakeTenantServer{}
 	rec := serve(newRouterWithServer(t, srv), http.MethodGet, "/api/v1/tenants?limit=100&offset=200", "")

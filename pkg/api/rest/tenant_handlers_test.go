@@ -317,7 +317,7 @@ func (m *mockTenantManager) GetTenantDEKStatus(ctx context.Context, tenantID str
 }
 
 // Per-tenant barrier mock methods
-func (m *mockTenantManager) InitTenantBarrier(ctx context.Context, tenantID string) error {
+func (m *mockTenantManager) InitTenantBarrier(ctx context.Context, tenantID string, _ []byte) error {
 	if m.initBarrierErr != nil {
 		return m.initBarrierErr
 	}

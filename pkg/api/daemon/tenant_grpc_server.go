@@ -74,6 +74,20 @@ func (s *TenantGRPCServer) SetManager(manager *tenant.Manager) {
 	s.manager = manager
 }
 
+// BarrierConfigured reports whether the tenant manager has a per-tenant
+// barrier backend; the REST router mounts the barrier routes as not
+// configured when it does not (resttenant.Features).
+func (s *TenantGRPCServer) BarrierConfigured() bool {
+	return s != nil && s.manager.BarrierConfigured()
+}
+
+// DEKConfigured reports whether the tenant manager has a per-tenant DEK
+// backend; the REST router mounts the DEK routes as not configured when it
+// does not (resttenant.Features).
+func (s *TenantGRPCServer) DEKConfigured() bool {
+	return s != nil && s.manager.DEKConfigured()
+}
+
 // =============================================================================
 // Tenant CRUD Operations
 // =============================================================================
@@ -737,8 +751,12 @@ func (s *TenantGRPCServer) InitTenantBarrier(
 		shamir := ErrTenantBarrierShamirUnsupported{Threshold: req.GetThreshold(), Shares: req.GetShares()}
 		return nil, status.Error(codes.InvalidArgument, shamir.Error())
 	}
+	// The passphrase is operator supplied, never stored or defaulted.
+	if req.GetPassphrase() == "" {
+		return nil, status.Error(codes.InvalidArgument, "passphrase is required")
+	}
 
-	if err := s.manager.InitTenantBarrier(ctx, req.GetTenantId()); err != nil {
+	if err := s.manager.InitTenantBarrier(ctx, req.GetTenantId(), []byte(req.GetPassphrase())); err != nil {
 		s.logger.Error("failed to init tenant barrier", "tenant_id", req.GetTenantId(), "error", err)
 		return nil, s.toGRPCError(err)
 	}
@@ -807,8 +825,10 @@ func (s *TenantGRPCServer) SealTenantBarrier(
 }
 
 // GetTenantBarrierStatus reports the current sealed/initialized state and
-// active strategy metadata of a per-tenant barrier. Uninitialized barriers
-// return Sealed=true, Initialized=false rather than erroring.
+// active strategy metadata of a per-tenant barrier, with the tenant's
+// isolation type. Uninitialized barriers return Sealed=true,
+// Initialized=false rather than erroring; a tenant with no per-tenant
+// barrier (prefix isolation) returns only its isolation type.
 func (s *TenantGRPCServer) GetTenantBarrierStatus(
 	ctx context.Context,
 	req *platformv1.GetTenantBarrierStatusRequest,
@@ -836,6 +856,7 @@ func (s *TenantGRPCServer) GetTenantBarrierStatus(
 			Initialized:    st.Initialized,
 			Strategy:       st.Strategy,
 			HardwareBacked: st.HardwareBacked,
+			Isolation:      st.Isolation,
 		},
 	}, nil
 }

@@ -109,16 +109,14 @@ export class TenantService extends BaseService {
    * @returns List of tenants
    */
   async listTenants(request?: ListTenantsRequest): Promise<ApiResponse<ListTenantsResponse>> {
-    const filters: Record<string, string | undefined> = {};
+    // The server pages by limit and offset (GET /api/v1/tenants), not page.
+    const filters: Record<string, string | number | undefined> = { offset: request?.offset };
     if (request?.selector?.matchLabels !== undefined) {
       Object.entries(request.selector.matchLabels).forEach(([k, v]) => {
         filters[`label_${k}`] = v;
       });
     }
     return this.client.get<ListTenantsResponse>(this.buildUrl('', {
-      page: request?.offset !== undefined && request?.limit !== undefined
-        ? Math.floor(request.offset / request.limit) + 1
-        : undefined,
       limit: request?.limit,
       filters,
     }));
@@ -232,7 +230,7 @@ export class TenantService extends BaseService {
    */
   async checkQuota(request: CheckQuotaRequest): Promise<ApiResponse<CheckQuotaResponse>> {
     return this.client.post<CheckQuotaResponse>(
-      this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/quotas/check`),
+      this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/quota-check`),
       { resource: request.resource, amount: request.amount }
     );
   }
@@ -262,7 +260,7 @@ export class TenantService extends BaseService {
    */
   async getDEKStatus(tenantId: string): Promise<ApiResponse<GetTenantDEKStatusResponse>> {
     return this.client.get<GetTenantDEKStatusResponse>(
-      this.buildUrl(`/${this.encodePathSegment(tenantId)}/dek/status`)
+      this.buildUrl(`/${this.encodePathSegment(tenantId)}/dek`)
     );
   }
 

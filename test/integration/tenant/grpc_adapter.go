@@ -536,9 +536,10 @@ func (a *GRPCAdapter) pbToStorageQuotaData(pb *platformv1.StorageQuota) *Storage
 // InitTenantBarrier explicitly initializes a per-tenant barrier.
 func (a *GRPCAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarrierOptions) (*InitTenantBarrierResult, error) {
 	resp, err := a.client.InitTenantBarrier(ctx, &platformv1.InitTenantBarrierRequest{
-		TenantId:  opts.TenantID,
-		Threshold: opts.Threshold,
-		Shares:    opts.Shares,
+		TenantId:   opts.TenantID,
+		Threshold:  opts.Threshold,
+		Shares:     opts.Shares,
+		Passphrase: opts.Passphrase,
 	})
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "InitTenantBarrier", Err: err}

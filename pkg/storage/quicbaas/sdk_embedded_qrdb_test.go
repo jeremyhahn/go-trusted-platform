@@ -17,6 +17,7 @@ import (
 	stderrors "errors"
 	"testing"
 
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -120,4 +121,36 @@ func TestNewSDKClientWithEmbeddedServer_InvalidConfigReturnsTypedError(t *testin
 	client, err := NewSDKClientWithEmbeddedServer(cfg, nil)
 	require.Error(t, err)
 	assert.Nil(t, client)
+}
+
+// fakeTenantSource stands in for the embedded node server's tenant servicer
+// accessor.
+type fakeTenantSource struct {
+	tenant quicbaas.QRDBTenantServicer
+}
+
+func (f *fakeTenantSource) GetQRDBTenantServicer() quicbaas.QRDBTenantServicer {
+	return f.tenant
+}
+
+type stubTenantServicer struct {
+	quicbaas.QRDBTenantServicer
+}
+
+// TestWireEmbeddedTenantServicer_InstallsTheNodeTenantServicer verifies the
+// embedded composition carries the node's tenant servicer, so TenantMgmt()
+// and the barrier verbs reach it instead of a nil servicer.
+func TestWireEmbeddedTenantServicer_InstallsTheNodeTenantServicer(t *testing.T) {
+	stub := &stubTenantServicer{}
+	var servicers quicbaas.QRDBEmbeddedServicers
+	wireEmbeddedTenantServicer(&servicers, &fakeTenantSource{tenant: stub})
+	assert.Equal(t, quicbaas.QRDBTenantServicer(stub), servicers.Tenant)
+}
+
+// TestWireEmbeddedTenantServicer_NilServicerLeavesTenantUnset verifies a node
+// without a tenant servicer leaves the field unset.
+func TestWireEmbeddedTenantServicer_NilServicerLeavesTenantUnset(t *testing.T) {
+	var servicers quicbaas.QRDBEmbeddedServicers
+	wireEmbeddedTenantServicer(&servicers, &fakeTenantSource{})
+	assert.Nil(t, servicers.Tenant)
 }

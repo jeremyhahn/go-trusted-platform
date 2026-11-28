@@ -48,6 +48,11 @@ type TenantBarrierClient interface {
 	// TenantBarrierStatus reports the current sealed/initialized state and
 	// active strategy metadata of a per-tenant barrier.
 	TenantBarrierStatus(ctx context.Context, req *quicbaassdk.QRDBTenantBarrierStatusRequest) (*quicbaassdk.QRDBTenantBarrierStatusResponse, error)
+
+	// TenantIsolationType reports the tenant's engine isolation type. Only
+	// barrier, volume and raft tenants route their data through the
+	// per-tenant barrier.
+	TenantIsolationType(ctx context.Context, tenantID string) (string, error)
 }
 
 // TenantBarrierState describes the current state of a per-tenant barrier as
@@ -72,6 +77,12 @@ type TenantBarrierState struct {
 	// HardwareBacked is true when the active strategy uses dedicated
 	// cryptographic hardware (HSM, TPM, etc.).
 	HardwareBacked bool
+
+	// Isolation is the tenant's isolation type ("prefix", "barrier",
+	// "volume", "raft"). Only barrier, volume and raft tenants have a
+	// per-tenant barrier; for any other the barrier fields are not
+	// applicable and stay zero.
+	Isolation string
 }
 
 // DEKStatus represents the status of a tenant's DEK.
@@ -366,9 +377,13 @@ func (m *Manager) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*
 		})
 	}
 
-	// Step 4: Initialize per-tenant barrier (non-fatal on failure)
+	// Step 4: Initialize per-tenant barrier (non-fatal on failure). No
+	// passphrase exists at creation (it comes from the operator in
+	// Initialize and is never defaulted), so the barrier refuses this
+	// attempt and the tenant stays uninitialized until the operator
+	// initializes it.
 	if m.tenantBarrierClient != nil {
-		if barrierErr := m.initTenantBarrierInternal(ctx, tenantID); barrierErr != nil {
+		if barrierErr := m.initTenantBarrierInternal(ctx, tenantID, nil); barrierErr != nil {
 			m.logger.Warn("failed to initialize per-tenant barrier during creation; barrier can be initialized later",
 				slog.String("tenant_id", tenantID),
 				slog.Any("error", barrierErr),
@@ -571,8 +586,9 @@ func (m *Manager) UpdateTenant(ctx context.Context, id string, req *UpdateTenant
 // Steps:
 // 1. Set state to deleting
 // 2. Delete DEK
-// 3. Seal the per-tenant barrier
-// 4. Delete from QuicBaaS IAM
+// 3. Delete from QuicBaaS IAM, which deprovisions the tenant's users and
+// then destroys the per-tenant barrier. The platform does not seal the
+// barrier first: the upstream user deprovisioning refuses a sealed tenant.
 func (m *Manager) DeleteTenant(ctx context.Context, id string) error {
 	if id == "" {
 		return ErrInvalidRequest{Reason: "tenant ID is required"}
@@ -611,26 +627,8 @@ func (m *Manager) DeleteTenant(ctx context.Context, id string) error {
 		}
 	}
 
-	// Step 3: Seal the per-tenant barrier before IAM tenant deletion so any
-	// in-flight reads/writes are refused while the metadata cleanup runs.
-	// A failed seal is logged but does not block deletion — the IAM delete
-	// below removes the underlying QRDB tenant record which implicitly
-	// tears down the barrier registry entry.
-	if m.tenantBarrierClient != nil {
-		sealReq := &quicbaassdk.QRDBTenantBarrierSealRequest{TenantID: id}
-		if err := m.tenantBarrierClient.TenantBarrierSeal(ctx, sealReq); err != nil {
-			m.logger.Warn("failed to seal per-tenant barrier before delete",
-				slog.String("tenant_id", id),
-				slog.Any("error", err),
-			)
-		} else {
-			m.logger.Info("per-tenant barrier sealed before IAM delete",
-				slog.String("tenant_id", id),
-			)
-		}
-	}
-
-	// Step 4: Delete from QuicBaaS IAM
+	// Step 3: Delete from QuicBaaS IAM. The upstream delete deprovisions the
+	// tenant's users while the barrier is still open, then destroys it.
 	if err := m.deleteFromIAM(ctx, id); err != nil {
 		m.logger.Error("failed to delete tenant from IAM",
 			slog.String("tenant_id", id),
@@ -1007,9 +1005,19 @@ func (m *Manager) GetTenantDEKStatus(ctx context.Context, tenantID string) (*DEK
 // InitTenantBarrier explicitly initializes the per-tenant barrier for the
 // given tenant. This is useful when the automatic initialization during
 // CreateTenant was skipped or failed.
-func (m *Manager) InitTenantBarrier(ctx context.Context, tenantID string) error {
+//
+// The passphrase is supplied by the operator in the Initialize request. It is
+// passed straight to the barrier and never stored, logged or defaulted; an
+// empty one is refused with ErrInvalidRequest before the barrier is called
+// (go-qrdb refuses it with ErrEmptyPassphrase too).
+// A tenant whose data does not route through a per-tenant barrier (prefix
+// isolation) is refused with ErrInvalidRequest.
+func (m *Manager) InitTenantBarrier(ctx context.Context, tenantID string, passphrase []byte) error {
 	if tenantID == "" {
 		return ErrInvalidRequest{Reason: "tenant ID is required"}
+	}
+	if len(passphrase) == 0 {
+		return ErrInvalidRequest{Reason: "barrier passphrase is required"}
 	}
 
 	if m.tenantBarrierClient == nil {
@@ -1021,11 +1029,17 @@ func (m *Manager) InitTenantBarrier(ctx context.Context, tenantID string) error 
 		return err
 	}
 
-	return m.initTenantBarrierInternal(ctx, tenantID)
+	if err := m.requireBarrierIsolation(ctx, tenantID, "init"); err != nil {
+		return err
+	}
+
+	return m.initTenantBarrierInternal(ctx, tenantID, passphrase)
 }
 
 // UnsealTenantBarrier explicitly unseals a per-tenant barrier using the
 // provided key material.
+// A tenant whose data does not route through a per-tenant barrier (prefix
+// isolation) is refused with ErrInvalidRequest.
 func (m *Manager) UnsealTenantBarrier(ctx context.Context, tenantID string, key []byte) error {
 	if tenantID == "" {
 		return ErrInvalidRequest{Reason: "tenant ID is required"}
@@ -1041,6 +1055,10 @@ func (m *Manager) UnsealTenantBarrier(ctx context.Context, tenantID string, key 
 
 	// Verify tenant exists
 	if _, err := m.GetTenant(ctx, tenantID); err != nil {
+		return err
+	}
+
+	if err := m.requireBarrierIsolation(ctx, tenantID, "unseal"); err != nil {
 		return err
 	}
 
@@ -1068,12 +1086,17 @@ func (m *Manager) UnsealTenantBarrier(ctx context.Context, tenantID string, key 
 // state. Subsequent reads and writes against the tenant's namespace fail
 // until the barrier is unsealed again via UnsealTenantBarrier. The tenant
 // must exist and its barrier must have been previously initialized.
+// A tenant whose data does not route through a per-tenant barrier (prefix
+// isolation) is refused with ErrInvalidRequest.
 func (m *Manager) SealTenantBarrier(ctx context.Context, tenantID string) error {
 	if tenantID == "" {
 		return ErrInvalidRequest{Reason: "tenant ID is required"}
 	}
 	if m.tenantBarrierClient == nil {
 		return ErrBarrierNotSupported{Operation: "SealTenantBarrier"}
+	}
+	if err := m.requireBarrierIsolation(ctx, tenantID, "seal"); err != nil {
+		return err
 	}
 
 	req := &quicbaassdk.QRDBTenantBarrierSealRequest{TenantID: tenantID}
@@ -1086,17 +1109,34 @@ func (m *Manager) SealTenantBarrier(ctx context.Context, tenantID string) error 
 	return nil
 }
 
-// TenantBarrierStatus returns the current sealed/initialized state and active
-// strategy metadata of a per-tenant barrier. When the barrier has never been
-// registered the response carries Sealed=true, Initialized=false, and an
-// empty Strategy — callers can use the Initialized flag to decide whether to
-// call InitTenantBarrier first.
+// TenantBarrierStatus returns the current sealed/initialized state, active
+// strategy metadata and isolation type of a per-tenant barrier. When the
+// barrier has never been registered the response carries Sealed=true,
+// Initialized=false, and an empty Strategy — callers can use the Initialized
+// flag to decide whether to call InitTenantBarrier first.
+//
+// A tenant whose isolation type has no per-tenant barrier (prefix isolation
+// reports "prefix") gets a state carrying only TenantID and Isolation, and
+// the barrier backend is not asked. A failed isolation lookup fails closed.
 func (m *Manager) TenantBarrierStatus(ctx context.Context, tenantID string) (*TenantBarrierState, error) {
 	if tenantID == "" {
 		return nil, ErrInvalidRequest{Reason: "tenant ID is required"}
 	}
 	if m.tenantBarrierClient == nil {
 		return nil, ErrBarrierNotSupported{Operation: "TenantBarrierStatus"}
+	}
+
+	iso, err := m.tenantBarrierClient.TenantIsolationType(ctx, tenantID)
+	if err != nil {
+		return nil, ErrStorageFailed{Operation: "TenantIsolationType", Err: err}
+	}
+	switch iso {
+	case string(quicbaassdk.TenantIsolationBarrier), string(quicbaassdk.TenantIsolationVolume), string(quicbaassdk.TenantIsolationRaft):
+	default:
+		if iso == "" {
+			iso = "prefix"
+		}
+		return &TenantBarrierState{TenantID: tenantID, Isolation: iso}, nil
 	}
 
 	req := &quicbaassdk.QRDBTenantBarrierStatusRequest{TenantID: tenantID}
@@ -1114,12 +1154,27 @@ func (m *Manager) TenantBarrierStatus(ctx context.Context, tenantID string) (*Te
 		Initialized:    resp.Initialized,
 		Strategy:       resp.Strategy,
 		HardwareBacked: resp.HardwareBacked,
+		Isolation:      iso,
 	}, nil
 }
 
 // BarrierManager returns the platform barrier manager, or nil if not configured.
 func (m *Manager) BarrierManager() *barrier.Manager {
 	return m.barrierManager
+}
+
+// BarrierConfigured reports whether the manager has a per-tenant barrier
+// backend. Without one, every barrier operation fails (GetStatus and Seal
+// with ErrBarrierNotSupported, Init and Unseal on the missing client), so a
+// transport mounts those operations as not configured instead.
+func (m *Manager) BarrierConfigured() bool {
+	return m != nil && m.tenantBarrierClient != nil
+}
+
+// DEKConfigured reports whether the manager has a per-tenant DEK backend.
+// Without one, RotateTenantDEK and GetTenantDEKStatus cannot answer.
+func (m *Manager) DEKConfigured() bool {
+	return m != nil && m.dekClient != nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1282,30 +1337,46 @@ func (m *Manager) walkIAMTenants(ctx context.Context, visit func(t *iam.Tenant, 
 	return nil
 }
 
+// listFromIAM reads the whole IAM tenant list and returns its limit/offset
+// window. It asks for page size 0: the embedded IAM list handler ignores page
+// tokens and returns no pagination, but answers page size 0 with every
+// tenant; a token-paging backend answers it with its default page and a
+// NextPageToken, which the walk follows. The total is the number of tenants
+// collected rather than Pagination.TotalCount, which the embedded handler
+// reports as 0, and the limit/offset window is cut after the walk.
 func (m *Manager) listFromIAM(ctx context.Context, limit, offset int) ([]iam.Tenant, int, error) {
-	// IAM pages by token, so skip the first offset tenants across pages
-	// and collect up to limit.
-	var (
-		tenants []iam.Tenant
-		total   int
-		skipped int
-	)
-	err := m.walkIAMTenants(ctx, func(t *iam.Tenant, pageTotal int) bool {
-		total = pageTotal
-		if limit <= 0 {
-			return false
+	var all []iam.Tenant
+	seen := make(map[string]struct{})
+	token := ""
+	for {
+		resp, err := m.iamTenantClient.List(ctx, &iam.ListTenantsRequest{
+			PageSize:  0,
+			PageToken: token,
+		})
+		if err != nil {
+			return nil, 0, err
 		}
-		if skipped < offset {
-			skipped++
-			return true
+		all = append(all, resp.Tenants...)
+
+		next := resp.Pagination.NextPageToken
+		if next == "" || len(resp.Tenants) == 0 {
+			break
 		}
-		tenants = append(tenants, *t)
-		return len(tenants) < limit
-	})
-	if err != nil {
-		return nil, 0, err
+		// Guard against a backend that hands back a token it already gave.
+		if _, dup := seen[next]; dup || next == token {
+			break
+		}
+		seen[next] = struct{}{}
+		token = next
 	}
-	return tenants, total, nil
+	// Same order as walkIAMTenants: sorted by ID.
+	sort.SliceStable(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+
+	total := len(all)
+	if limit <= 0 || offset >= total {
+		return nil, total, nil
+	}
+	return all[offset:min(offset+limit, total)], total, nil
 }
 
 func (m *Manager) updateInIAM(ctx context.Context, entity *TenantEntity) error {
@@ -1362,10 +1433,12 @@ func (m *Manager) deleteTenantDEK(ctx context.Context, tenantID string) error {
 // Per-tenant barrier internal methods
 // ---------------------------------------------------------------------------
 
-// initTenantBarrierInternal calls the SDK to initialize the per-tenant barrier.
-func (m *Manager) initTenantBarrierInternal(ctx context.Context, tenantID string) error {
+// initTenantBarrierInternal calls the SDK to initialize the per-tenant barrier
+// with the operator's passphrase. The passphrase is never stored or logged.
+func (m *Manager) initTenantBarrierInternal(ctx context.Context, tenantID string, passphrase []byte) error {
 	req := &quicbaassdk.QRDBTenantBarrierInitRequest{
-		TenantID: tenantID,
+		TenantID:   tenantID,
+		Passphrase: passphrase,
 	}
 
 	if err := m.tenantBarrierClient.TenantBarrierInit(ctx, req); err != nil {
@@ -1377,4 +1450,23 @@ func (m *Manager) initTenantBarrierInternal(ctx context.Context, tenantID string
 	}
 
 	return nil
+}
+
+// requireBarrierIsolation refuses a barrier operation on a tenant whose data
+// does not route through a per-tenant barrier. Only barrier, volume and raft
+// tenants do; an empty type is the engine default, prefix. A failed lookup
+// fails closed.
+func (m *Manager) requireBarrierIsolation(ctx context.Context, tenantID, op string) error {
+	iso, err := m.tenantBarrierClient.TenantIsolationType(ctx, tenantID)
+	if err != nil {
+		return ErrStorageFailed{Operation: "TenantIsolationType", Err: err}
+	}
+	switch iso {
+	case string(quicbaassdk.TenantIsolationBarrier), string(quicbaassdk.TenantIsolationVolume), string(quicbaassdk.TenantIsolationRaft):
+		return nil
+	}
+	if iso == "" {
+		iso = "prefix"
+	}
+	return ErrInvalidRequest{Reason: fmt.Sprintf("tenant %s uses %s isolation: its data does not route through a per-tenant barrier, so barrier %s is refused", tenantID, iso, op)}
 }

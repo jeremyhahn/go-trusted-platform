@@ -351,6 +351,8 @@ type InitTenantBarrierOptions struct {
 	TenantID  string `json:"tenant_id"`
 	Threshold int32  `json:"threshold,omitempty"`
 	Shares    int32  `json:"shares,omitempty"`
+	// Passphrase is the operator barrier passphrase; the daemon refuses an empty one.
+	Passphrase string `json:"passphrase,omitempty"`
 }
 
 // InitTenantBarrierResult is the result of an explicit barrier init.

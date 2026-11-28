@@ -42,6 +42,10 @@ type mockIAMClient struct {
 	updateErr error
 	deleteErr error
 
+	// onDelete, when set, runs inside Delete after the deleteErr check and
+	// before the tenant record is removed; its error is returned.
+	onDelete func(tenantID string) error
+
 	// Role reconcile state: the roles each tenant carries, and how many
 	// Reconcile calls wrote something.
 	roles          map[string][]string
@@ -215,6 +219,11 @@ func (m *mockIAMClient) Update(ctx context.Context, tenantID string, req *iam.Up
 func (m *mockIAMClient) Delete(ctx context.Context, tenantID string) error {
 	if m.deleteErr != nil {
 		return m.deleteErr
+	}
+	if m.onDelete != nil {
+		if err := m.onDelete(tenantID); err != nil {
+			return err
+		}
 	}
 
 	m.mu.Lock()

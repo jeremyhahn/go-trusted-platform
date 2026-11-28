@@ -276,7 +276,7 @@ func TestRunCommands_InProcess(t *testing.T) {
 		require.NoError(t, runQuotasSet(f, name, &quotasSetOptions{MaxVMs: 7, setMaxVMs: true}))
 		require.NoError(t, runTenantSuspend(f, name))
 		require.NoError(t, runTenantResume(f, name))
-		require.NoError(t, runBarrierInit(f, name, 2, 3))
+		require.NoError(t, runBarrierInit(f, name, "operator-pass", 2, 3))
 		require.NoError(t, runBarrierUnseal(f, name, "00112233", ""))
 		require.NoError(t, runBarrierSeal(f, name))
 		require.NoError(t, runBarrierStatus(f, name))
@@ -297,7 +297,7 @@ func TestRunCommands_UnknownTenant(t *testing.T) {
 		"suspend": func() error { return runTenantSuspend(f, "ghost") },
 		"resume":  func() error { return runTenantResume(f, "ghost") },
 		"delete":  func() error { return runTenantDelete(f, "ghost", true) },
-		"init":    func() error { return runBarrierInit(f, "ghost", 2, 3) },
+		"init":    func() error { return runBarrierInit(f, "ghost", "operator-pass", 2, 3) },
 		"unseal":  func() error { return runBarrierUnseal(f, "ghost", "00", "") },
 		"seal":    func() error { return runBarrierSeal(f, "ghost") },
 		"status":  func() error { return runBarrierStatus(f, "ghost") },
@@ -324,7 +324,7 @@ func TestRunCommands_ServerFailure(t *testing.T) {
 	assert.Error(t, runTenantResume(f, "acme"))
 	assert.Error(t, runTenantDelete(f, "acme", true))
 	assert.Error(t, runQuotasSet(f, "acme", &quotasSetOptions{MaxVMs: 1, setMaxVMs: true}))
-	assert.Error(t, runBarrierInit(f, "acme", 2, 3))
+	assert.Error(t, runBarrierInit(f, "acme", "operator-pass", 2, 3))
 	assert.Error(t, runBarrierSeal(f, "acme"))
 	assert.Error(t, runBarrierStatus(f, "acme"))
 }

@@ -103,13 +103,16 @@ func (a *CLIAdapter) Teardown(ctx context.Context) error {
 	return os.RemoveAll(a.configDir)
 }
 
-// runCommand executes a CLI command and returns its stdout. Stderr is kept
-// apart so warnings never corrupt JSON output, and reported on failure.
-func (a *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
+// runCommandInput executes a CLI command with stdin fed from the given
+// string, so a secret such as the barrier passphrase never goes in argv, and
+// returns its stdout. Stderr is kept apart so warnings never corrupt JSON
+// output, and reported on failure.
+func (a *CLIAdapter) runCommandInput(ctx context.Context, stdin string, args ...string) ([]byte, error) {
 	if a.configPath != "" {
 		args = append([]string{"--config", a.configPath}, args...)
 	}
 	cmd := exec.CommandContext(ctx, a.cliPath, args...)
+	cmd.Stdin = strings.NewReader(stdin)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	output, err := cmd.Output()
@@ -125,7 +128,12 @@ func (a *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 
 // runJSON runs a CLI command with --output json and decodes stdout into out.
 func (a *CLIAdapter) runJSON(ctx context.Context, operation string, out any, args ...string) error {
-	output, err := a.runCommand(ctx, append(args, "--output", "json")...)
+	return a.runJSONInput(ctx, operation, "", out, args...)
+}
+
+// runJSONInput is runJSON with stdin fed from the given string.
+func (a *CLIAdapter) runJSONInput(ctx context.Context, operation, stdin string, out any, args ...string) error {
+	output, err := a.runCommandInput(ctx, stdin, append(args, "--output", "json")...)
 	if err != nil {
 		return err
 	}

@@ -3,19 +3,20 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { getUserFromToken } from "@/utils/jwt";
-import { getBaseUrl } from "@/utils/getBaseUrl";
-import { getCookie } from "@/utils/cookie";
+import { useTenant } from "@/hooks";
 import styles from "./TenantPage.module.css";
 import { useLogout } from "@/hooks/use-logout";
 
 interface TenantInfo {
   id: string;
   name?: string;
-  member_count: number;
+  state?: string;
 }
 
+// #2067: reads the tenant through TenantService.getTenant (GET /api/v1/tenants/{id}); /api/v1/tenant is not served.
 export default function TenantPage() {
   const router = useRouter();
+  const tenantService = useTenant();
   const [tenantInfo, setTenantInfo] = useState<TenantInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -40,24 +41,16 @@ export default function TenantPage() {
 
   const fetchTenantInfo = async (tenantId: string) => {
     try {
-      const baseUrl = getBaseUrl();
-      const jwt = getCookie("jwt");
-
-      const response = await fetch(`${baseUrl}/api/v1/tenant`, {
-        headers: {
-          Authorization: `Bearer ${jwt}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch tenant information");
+      const res = await tenantService.getTenant(tenantId);
+      if (!res.success || !res.data?.tenant) {
+        throw new Error(res.error?.message ?? "Failed to fetch tenant information");
       }
 
-      const data = await response.json();
+      const t = res.data.tenant;
       setTenantInfo({
         id: tenantId,
-        name: data.name,
-        member_count: data.member_count || 0,
+        name: t.displayName || t.name,
+        state: t.state,
       });
     } catch (error) {
       setError(
@@ -68,7 +61,6 @@ export default function TenantPage() {
       if (user && user.tenantId) {
         setTenantInfo({
           id: user.tenantId,
-          member_count: 0,
         });
       }
     } finally {
@@ -114,12 +106,12 @@ export default function TenantPage() {
               <div className={styles.infoValue}>{tenantInfo.name}</div>
             </div>
           )}
-          <div className={styles.infoItem}>
-            <div className={styles.infoLabel}>Members</div>
-            <div className={styles.infoValue}>
-              {tenantInfo?.member_count || 0}
+          {tenantInfo?.state && (
+            <div className={styles.infoItem}>
+              <div className={styles.infoLabel}>State</div>
+              <div className={styles.infoValue}>{tenantInfo.state}</div>
             </div>
-          </div>
+          )}
         </div>
       </div>
 
