@@ -167,4 +167,31 @@ describe('DeviceVerdictsPage', () => {
     urls = pollUrls();
     expect(urls[urls.length - 1].searchParams.get('cursor')).toBe('h1');
   }, 20000);
+
+  // docs/attestation/architecture.md: the console renders the baseline
+  // provenance beside every verdict, so a TOFU pass never looks identical to
+  // a signed-manifest pass.
+  it('shows the baseline provenance beside each verdict', async () => {
+    stubControlPlane({
+      'GET /api/v1/capabilities': caps(),
+      [OP]: ok({
+        cursor: 'c1',
+        verdicts: [
+          { ...verdict('tofu', 'SN-T', true, false, ''), baselineSource: 'tofu' },
+          { ...verdict('signed', 'SN-S', true, false, ''), baselineSource: 'signed' },
+          verdict('unknown', 'SN-U', true, false, ''),
+        ],
+      }),
+    });
+    render(withControlPlane(<DeviceVerdictsPage />));
+
+    await screen.findByText('SN-T');
+    const tofu = screen.getByTestId('verdict-tofu').textContent;
+    expect(tofu).toContain('TOFU baseline');
+    expect(tofu).not.toContain('Signed baseline');
+    const signed = screen.getByTestId('verdict-signed').textContent;
+    expect(signed).toContain('Signed baseline');
+    expect(signed).not.toContain('TOFU baseline');
+    expect(screen.getByTestId('verdict-unknown').textContent).toContain('Baseline unknown');
+  });
 });
