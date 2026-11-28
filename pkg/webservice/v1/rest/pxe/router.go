@@ -38,9 +38,18 @@ type PXERouter struct {
 	// scopeAuthorizer is the per-route scope check the operator and gateway
 	// routes take on top of the admin gate; nil leaves them on the gate.
 	scopeAuthorizer middleware.ScopeAuthorizer
+	// systemTenant is the session guard that admits only the system tenant:
+	// the PXE device store is platform-wide, with no tenant filter.
+	systemTenant func(http.Handler) http.Handler
 	// webhookEnabled is pxe.ServiceConfig.WebhookEnabled: whether the
 	// install-completion webhook is mounted at all.
 	webhookEnabled bool
+	// webhookSecret is pxe.ServiceConfig.WebhookSecret: the HMAC key every
+	// install-completion report is verified with (webhook_auth.go).
+	webhookSecret []byte
+	// webhookIdentity, when set, replaces the PXE device-record lookup the
+	// webhook binds its caller's client certificate to (webhook_auth.go).
+	webhookIdentity WebhookIdentity
 	router.WebServiceRouter
 }
 
@@ -142,12 +151,26 @@ func (r *PXERouter) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
 	r.scopeAuthorizer = authorizer
 }
 
-// requireScope wraps handler in the scope check when one is configured.
+// SetSystemTenantGuard supplies the session guard every operator and
+// gateway route takes, admitting only the system tenant (#1896 Codex r10).
+// A router without one refuses every operator and gateway route.
+func (r *PXERouter) SetSystemTenantGuard(guard func(http.Handler) http.Handler) {
+	r.systemTenant = guard
+}
+
+// requireScope wraps handler in the system-tenant guard and, when one is
+// configured, the scope check. Without a guard it refuses (fail closed): the
+// PXE device store is platform-wide, so only the system tenant may reach it.
 func (r *PXERouter) requireScope(scope string, handler http.HandlerFunc) http.Handler {
-	if r.scopeAuthorizer == nil {
-		return handler
+	if r.systemTenant == nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		})
 	}
-	return r.scopeAuthorizer.RequireScope(scope)(handler)
+	if r.scopeAuthorizer == nil {
+		return r.systemTenant(handler)
+	}
+	return r.systemTenant(r.scopeAuthorizer.RequireScope(scope)(handler))
 }
 
 // RegisterMachineFacingRoutes registers the install-completion webhook, and
@@ -160,29 +183,24 @@ func (r *PXERouter) requireScope(scope string, handler http.HandlerFunc) http.Ha
 // an unknown path, answered 404, and the service's WebhookComplete is never
 // reached. Off is the default because of what follows.
 //
-// It is ungated because its caller is a booting node with no operator
-// session — and, unlike the gateway's telemetry pair or the EAB-authenticated
-// provisioning routes, **it presents no credential and the server checks
-// none**: the handler decodes the body and the service identifies the device
-// by a MAC address taken from it. `pkg/compute/pxe/config.go` declares and
-// REQUIRES a `WebhookSecret` described as "the HMAC secret for webhook
-// authentication" which nothing ever reads.
+// It is off the operator gate because its caller is a booting node with no
+// operator session. It authenticates the node instead (#240): every report
+// carries WebhookSignatureHeader, the HMAC-SHA256 of the body under
+// pxe.ServiceConfig.WebhookSecret (SetWebhookSecret), checked in constant
+// time before the body is decoded. A missing or wrong signature answers 401,
+// and an enabled webhook with no secret refuses every report.
 //
-// That is tracked as #238 and is deliberately not fixed here. Choosing what a
-// booting node presents — HMAC over the body with the secret that already
-// exists, IDevID over mTLS as gatewayd uses, or a provisioning-session token
-// — is an architecture decision, and inventing one inside a gating change
-// would build a second authentication mechanism nobody ratified.
-//
-// So this method is not an endorsement: it is the boundary of what #165 can
-// close, drawn explicitly so the route is not mistaken for one this campaign
-// has certified.
+// The HMAC alone does not bind the report to one machine, so the caller
+// must also present a client certificate the listener verified (401
+// otherwise) whose serial is the certificate recorded on the reported MAC's
+// PXE device (403 otherwise): a node reports only for itself (SPEC
+// installer row). Replay protection is #238.
 func (r *PXERouter) RegisterMachineFacingRoutes(parent *mux.Router) {
 	if !r.webhookEnabled {
 		return
 	}
 	sr := parent.PathPrefix(basePath).Subrouter()
-	sr.HandleFunc("/webhook/complete", r.webhookComplete).Methods("POST")
+	sr.HandleFunc("/webhook/complete", r.verifyWebhook(r.webhookComplete)).Methods("POST")
 }
 
 func (r *PXERouter) ensure(w http.ResponseWriter, req *http.Request) bool {
@@ -404,9 +422,8 @@ func (r *PXERouter) webhookComplete(w http.ResponseWriter, req *http.Request) {
 		r.respWriter.Error400(w, req, err)
 		return
 	}
-	resp, err := r.server.WebhookComplete(req.Context(), pbReq)
-	if err != nil {
-		protorest.WriteError(w, req, r.respWriter, err)
+	resp, ok := r.completeWebhook(w, req, pbReq)
+	if !ok {
 		return
 	}
 	protorest.WriteSuccess(w, req, r.respWriter, resp)

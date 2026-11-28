@@ -101,23 +101,18 @@ type ServiceConfig struct {
 
 	// WebhookEnabled mounts the install-completion webhook,
 	// POST /api/v1/pxe/webhook/complete (default: false). When false the
-	// route is not served at all. When true it is served WITHOUT
-	// authentication -- see WebhookSecret and #238.
+	// route is not served at all. When true it admits only reports signed
+	// with WebhookSecret.
 	WebhookEnabled bool
 
-	// WebhookSecret is reserved for authenticating install-completion
-	// webhooks. It is NOT CURRENTLY USED.
+	// WebhookSecret authenticates install-completion webhooks (#240). Each
+	// report carries X-PXE-Webhook-Signature: "sha256=" and the hex
+	// HMAC-SHA256 of the raw request body under this secret; a missing or
+	// wrong signature answers 401 (pkg/webservice/v1/rest/pxe/webhook_auth.go).
 	//
-	// Setting it protects nothing today: no code reads this field beyond the
-	// validation below, and POST /api/v1/pxe/webhook/complete authenticates
-	// nobody -- the handler identifies the device by a MAC address taken from
-	// the request body, and MACs are not secrets. Configuring a value here
-	// must not be read as evidence the endpoint is authenticated.
-	//
-	// The field is retained rather than removed because what a booting node
-	// should present -- an HMAC over the body using this secret, IDevID over
-	// mTLS, or a provisioning-session token -- is an open architecture
-	// decision. See #238.
+	// The HMAC proves the sender holds the secret. It does not bind a report
+	// to one machine, and a captured report can be replayed; what a node
+	// presents beyond a shared secret is #238.
 	WebhookSecret string
 }
 
@@ -171,6 +166,167 @@ func NewServiceConfig(plan *netplan.Plan) (*ServiceConfig, error) {
 		WebhookEnabled:       false,
 		WebhookSecret:        "",
 	}, nil
+}
+
+// DaemonConfig is the daemon's optional `pxe:` section (#1694). It is off
+// by default: with no section, or with enabled: false, the daemon builds no
+// PXE backend and every PXE RPC answers SERVICE_NOT_CONFIGURED. Fields left
+// at their zero value keep the NewServiceConfig defaults.
+type DaemonConfig struct {
+	// Enabled turns the PXE backend on.
+	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
+
+	// BridgeName is the OVS bridge for VLAN management (required when enabled).
+	BridgeName string `yaml:"bridge-name,omitempty" json:"bridge-name,omitempty" mapstructure:"bridge-name"`
+
+	// RegistryAddr is the ISO registry endpoint.
+	RegistryAddr string `yaml:"registry-addr,omitempty" json:"registry-addr,omitempty" mapstructure:"registry-addr"`
+
+	// DefaultISORef is the default ISO registry reference.
+	DefaultISORef string `yaml:"default-iso-ref,omitempty" json:"default-iso-ref,omitempty" mapstructure:"default-iso-ref"`
+
+	// MaxRetries is the maximum number of retry attempts.
+	MaxRetries int `yaml:"max-retries,omitempty" json:"max-retries,omitempty" mapstructure:"max-retries"`
+
+	// InstallTimeout is the OS installation timeout.
+	InstallTimeout time.Duration `yaml:"install-timeout,omitempty" json:"install-timeout,omitempty" mapstructure:"install-timeout"`
+
+	// EnrollmentTimeout is the device enrollment timeout.
+	EnrollmentTimeout time.Duration `yaml:"enrollment-timeout,omitempty" json:"enrollment-timeout,omitempty" mapstructure:"enrollment-timeout"`
+
+	// WebhookEnabled mounts the install-completion webhook; it needs WebhookSecret.
+	WebhookEnabled bool `yaml:"webhook-enabled,omitempty" json:"webhook-enabled,omitempty" mapstructure:"webhook-enabled"`
+
+	// WebhookSecret is the HMAC key for install-completion webhooks.
+	WebhookSecret string `yaml:"webhook-secret,omitempty" json:"webhook-secret,omitempty" mapstructure:"webhook-secret"`
+
+	// BindHost is the iPXE server bind address.
+	BindHost string `yaml:"bind-host,omitempty" json:"bind-host,omitempty" mapstructure:"bind-host"`
+
+	// HTTPPort is the iPXE HTTP server port; zero keeps ipxe.DefaultHTTPPort.
+	HTTPPort int `yaml:"http-port,omitempty" json:"http-port,omitempty" mapstructure:"http-port"`
+
+	// LocalFilesDir is the iPXE server's local files directory.
+	LocalFilesDir string `yaml:"local-files-dir,omitempty" json:"local-files-dir,omitempty" mapstructure:"local-files-dir"`
+
+	// InstallsDir is the iPXE server's installs directory.
+	InstallsDir string `yaml:"installs-dir,omitempty" json:"installs-dir,omitempty" mapstructure:"installs-dir"`
+
+	// FirmwareDir is the iPXE server's firmware directory.
+	FirmwareDir string `yaml:"firmware-dir,omitempty" json:"firmware-dir,omitempty" mapstructure:"firmware-dir"`
+
+	// FirmwareOffline serves firmware from FirmwareDir without fetching it.
+	FirmwareOffline bool `yaml:"firmware-offline,omitempty" json:"firmware-offline,omitempty" mapstructure:"firmware-offline"`
+
+	// BootEntries are the iPXE boot menu entries.
+	BootEntries []ipxe.BootEntry `yaml:"boot-entries,omitempty" json:"boot-entries,omitempty" mapstructure:"boot-entries"`
+
+	// ACMEServers are the ACME server addresses a provisioning device may
+	// reach on TCP 443. Empty means the boot server addresses.
+	ACMEServers []string `yaml:"acme-servers,omitempty" json:"acme-servers,omitempty" mapstructure:"acme-servers"`
+
+	// DNSServers are the DNS resolver addresses a provisioning device may
+	// reach on port 53. Empty keeps provisioning DNS closed.
+	DNSServers []string `yaml:"dns-servers,omitempty" json:"dns-servers,omitempty" mapstructure:"dns-servers"`
+}
+
+// parseServerIPs parses a pxe: section address list, naming the key in the
+// error for the first entry that is not an IP address.
+func parseServerIPs(field string, values []string) ([]net.IP, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	ips := make([]net.IP, 0, len(values))
+	for _, v := range values {
+		ip := net.ParseIP(v)
+		if ip == nil {
+			return nil, ErrInvalidConfiguration{Field: field, Reason: "not an IP address: " + v}
+		}
+		ips = append(ips, ip)
+	}
+	return ips, nil
+}
+
+// Webhook returns whether the install-completion webhook is served and the
+// HMAC key it verifies reports with. It is served only when the section and
+// its webhook are both enabled; a nil section serves nothing (#1694).
+func (c *DaemonConfig) Webhook() (enabled bool, secret string) {
+	if c == nil || !c.Enabled || !c.WebhookEnabled {
+		return false, ""
+	}
+	return true, c.WebhookSecret
+}
+
+// ToServiceConfig builds the PXE ServiceConfig for an enabled section. A nil
+// or disabled section returns nil and no error: no backend is built. An
+// enabled section starts from NewServiceConfig(plan), takes the fields it
+// sets, and returns Validate's typed error unchanged when it is invalid.
+func (d *DaemonConfig) ToServiceConfig(plan *netplan.Plan) (*ServiceConfig, error) {
+	if d == nil || !d.Enabled {
+		return nil, nil
+	}
+	cfg, err := NewServiceConfig(plan)
+	if err != nil {
+		return nil, err
+	}
+	cfg.BridgeName = d.BridgeName
+	if d.RegistryAddr != "" {
+		cfg.RegistryAddr = d.RegistryAddr
+	}
+	if d.DefaultISORef != "" {
+		cfg.DefaultISORef = d.DefaultISORef
+	}
+	if d.MaxRetries != 0 {
+		cfg.MaxRetries = d.MaxRetries
+	}
+	if d.InstallTimeout != 0 {
+		cfg.InstallTimeout = d.InstallTimeout
+	}
+	if d.EnrollmentTimeout != 0 {
+		cfg.EnrollmentTimeout = d.EnrollmentTimeout
+	}
+	cfg.WebhookEnabled = d.WebhookEnabled
+	cfg.WebhookSecret = d.WebhookSecret
+	if cfg.IPXEConfig == nil {
+		cfg.IPXEConfig = ipxe.DefaultServerConfig()
+	}
+	if d.BindHost != "" {
+		cfg.IPXEConfig.BindHost = d.BindHost
+	}
+	if d.HTTPPort != 0 {
+		if d.HTTPPort < 0 || d.HTTPPort > 65535 {
+			return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("http-port must be between 1 and 65535, got %d", d.HTTPPort)}}
+		}
+		if d.HTTPPort > 65534 {
+			return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "http-port must be between 1 and 65534: the device-script server listens on http-port+1"}}
+		}
+		cfg.IPXEConfig.HTTPPort = d.HTTPPort
+	}
+	if d.LocalFilesDir != "" {
+		cfg.IPXEConfig.LocalFilesDir = d.LocalFilesDir
+	}
+	if d.InstallsDir != "" {
+		cfg.IPXEConfig.InstallsDir = d.InstallsDir
+	}
+	if d.FirmwareDir != "" {
+		cfg.IPXEConfig.FirmwareDir = d.FirmwareDir
+	}
+	if d.FirmwareOffline {
+		cfg.IPXEConfig.FirmwareOffline = true
+	}
+	if len(d.BootEntries) > 0 {
+		cfg.IPXEConfig.BootEntries = d.BootEntries
+	}
+	if cfg.ACMEServerIPs, err = parseServerIPs("pxe.acme-servers", d.ACMEServers); err != nil {
+		return nil, err
+	}
+	if cfg.DNSServerIPs, err = parseServerIPs("pxe.dns-servers", d.DNSServers); err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 // DefaultFirmwareConfig returns a FirmwareConfig with sensible defaults.
@@ -231,21 +387,13 @@ func (c *ServiceConfig) Validate() error {
 		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "MaxRetries must be non-negative"}}
 	}
 
-	// Require WebhookSecret when webhooks are enabled.
-	//
-	// This requirement is currently a placeholder, and the message says so.
-	// Demanding a credential the platform never checks tells an operator the
-	// endpoint is protected when it is not -- a false assurance is worse than
-	// an obviously open endpoint, because it stops the reader looking. The
-	// requirement is kept so that configurations already carrying a secret
-	// stay valid for whatever #238 decides.
+	// Require WebhookSecret when webhooks are enabled: it is the HMAC key
+	// every report is verified with, and an enabled webhook without one
+	// refuses every report.
 	if c.WebhookEnabled && c.WebhookSecret == "" {
 		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{
-			Msg: "WebhookSecret is required when WebhookEnabled is true. " +
-				"NOTE: this secret is not yet enforced -- the install-completion " +
-				"webhook currently authenticates no caller and identifies the device " +
-				"by a MAC address from the request body. Setting it does not protect " +
-				"the endpoint (see #238)"}}
+			Msg: "WebhookSecret is required when WebhookEnabled is true: it is the " +
+				"HMAC-SHA256 key every install-completion report is signed with"}}
 	}
 
 	return nil

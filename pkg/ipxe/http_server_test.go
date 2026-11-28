@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -572,6 +573,7 @@ func TestHTTPServer_handleProxy(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := DefaultServerConfig()
 			cfg.ProxyCACertPool = proxyTrust
+			cfg.proxyAllowPrivateDestinations = true
 			server := newTestHTTPServer(t, cfg)
 
 			req := httptest.NewRequest("GET", tt.path, nil)
@@ -988,6 +990,143 @@ func TestHTTPServer_handleProxy_FailedFetch(t *testing.T) {
 
 	// Should return 502 Bad Gateway when upstream fails
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+}
+
+func TestHTTPServer_handleProxy_RefusesRedirect(t *testing.T) {
+	var hits atomic.Int64
+	internal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Write([]byte("internal secret"))
+	}))
+	defer internal.Close()
+
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, internal.URL+"/secret", http.StatusFound)
+	}))
+	defer upstream.Close()
+
+	pool := x509.NewCertPool()
+	pool.AddCert(upstream.Certificate())
+	cfg := DefaultServerConfig()
+	cfg.ProxyCACertPool = pool
+	cfg.proxyAllowPrivateDestinations = true
+	server := newTestHTTPServer(t, cfg)
+
+	path := fmt.Sprintf("/proxy/https/%s/x", strings.TrimPrefix(upstream.URL, "https://"))
+	req := httptest.NewRequest("GET", path, nil)
+	w := httptest.NewRecorder()
+
+	server.handleProxy(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	assert.Equal(t, int64(0), hits.Load())
+}
+
+func TestHTTPServer_handleProxy_RefusesInternalDestination(t *testing.T) {
+	var hits atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Write([]byte("internal secret"))
+	}))
+	defer upstream.Close()
+
+	pool := x509.NewCertPool()
+	pool.AddCert(upstream.Certificate())
+	cfg := DefaultServerConfig()
+	cfg.ProxyCACertPool = pool
+	server := newTestHTTPServer(t, cfg)
+
+	path := fmt.Sprintf("/proxy/https/%s/x", strings.TrimPrefix(upstream.URL, "https://"))
+	req := httptest.NewRequest("GET", path, nil)
+	w := httptest.NewRecorder()
+
+	server.handleProxy(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	assert.Equal(t, int64(0), hits.Load())
+}
+
+// TestHTTPServer_handleProxy_ConfiguredInternalBootAsset drives the whole
+// fetch path for a BootEntry on an internal HTTPS host: the kernel URL the
+// boot script names is proxied, and another path on that host is refused.
+func TestHTTPServer_handleProxy_ConfiguredInternalBootAsset(t *testing.T) {
+	var hits atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.URL.Path == "/vmlinuz" {
+			w.Write([]byte("kernel-bytes"))
+			return
+		}
+		w.Write([]byte("internal secret"))
+	}))
+	defer upstream.Close()
+
+	pool := x509.NewCertPool()
+	pool.AddCert(upstream.Certificate())
+	cfg := DefaultServerConfig()
+	cfg.ProxyCACertPool = pool
+	entry := BootEntry{Name: "internal", Kernel: upstream.URL + "/vmlinuz", Initrd: upstream.URL + "/initrd"}
+	cfg.BootEntries = []BootEntry{entry}
+	server := newTestHTTPServer(t, cfg)
+
+	var kernelURL string
+	for _, line := range strings.Split(server.generateKernelScript(&entry), "\n") {
+		if fields := strings.Fields(line); len(fields) >= 2 && fields[0] == "kernel" {
+			kernelURL = fields[1]
+		}
+	}
+	path := strings.TrimPrefix(kernelURL, server.config.ExternalURL)
+	if !strings.HasPrefix(path, "/proxy/https/") {
+		t.Fatalf("kernel URL %q is not proxied", kernelURL)
+	}
+
+	w := httptest.NewRecorder()
+	server.handleProxy(w, httptest.NewRequest("GET", path, nil))
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "kernel-bytes", string(body))
+
+	before := hits.Load()
+	other := fmt.Sprintf("/proxy/https/%s/other", strings.TrimPrefix(upstream.URL, "https://"))
+	w = httptest.NewRecorder()
+	server.handleProxy(w, httptest.NewRequest("GET", other, nil))
+	resp = w.Result()
+	resp.Body.Close()
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	assert.Equal(t, before, hits.Load())
+}
+
+func TestProxyDestinationBlocked(t *testing.T) {
+	tests := []struct {
+		ip      string
+		blocked bool
+	}{
+		{"127.0.0.1", true},
+		{"::1", true},
+		{"0.0.0.0", true},
+		{"::", true},
+		{"10.0.0.1", true},
+		{"169.254.169.254", true},
+		{"fe80::1", true},
+		{"fd00::1", true},
+		{"100.64.0.1", true},
+		{"224.0.0.1", true},
+		{"203.0.113.10", false},
+		{"198.51.100.10", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ip, func(t *testing.T) {
+			ip := net.ParseIP(tt.ip)
+			require.NotNil(t, ip)
+			assert.Equal(t, tt.blocked, proxyDestinationBlocked(ip))
+		})
+	}
 }
 
 func TestHTTPServer_handleProxy_InvalidURL(t *testing.T) {

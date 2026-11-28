@@ -343,8 +343,8 @@ listed below.
 `make integration-test` runs the runner's `ALL_TARGETS` list in order:
 every key except `cold-start` and `barrier-gate` (each needs the shared
 `platformd` not running), `bmc` (needs the vBMC config), `diskimage`,
-`netboot`, `nat64` and `ipsec` (each needs inputs built on the host first),
-`pxe` (platformd has no PXE backend) and `secureboot` (needs prebuilt FIPS-kernel
+`netboot`, `nat64` and `ipsec` (each needs inputs built on the host first)
+and `secureboot` (needs prebuilt FIPS-kernel
 artifacts), all three in the table below, and the keys that
 only run part of a suite already in the list (`lb`, `ipxe-dhcp`,
 `testenv-enrollment`). `tpm` is the last suite on the shared
@@ -564,7 +564,7 @@ cache the bring-up only links the binaries and starts OVS, swtpm and
 |-----|------|---------------------|---------------|
 | 1 | `acme`, `authenticode`, `ca`, `iso` | 8.9 min (`iso` 7.9) | about 10.5 min |
 | 2 | `ceremony`, `cli`, `container`, `sdn` | 3.7 min | about 5 min |
-| 3 | `daemon`, `device`, `dns`, `sdn-stress` | 5.5 min (`sdn-stress` 4.5) | about 7 min |
+| 3 | `daemon`, `device`, `dns`, `sdn-stress`, `pxe` | 5.5 min (`sdn-stress` 4.5; before `pxe`) | about 7 min, plus `pxe` (go test timeout 15 min) |
 | 4 | `helpers`, `ipxe`, `installer`, `e2e`, `root`, `attestation`, `fido2`, `iam`, `iso-vm`, `kms`, `luks`, `ntp`, `objectstorage` | 3.8 min (with `sdk`, since moved to `pkg/storage/quicbaas`'s unit suite; before `iso-vm`) | about 5.5 min, plus `iso-vm` (go test timeout 55 min) |
 | 5 | `piv`, `provision`, `proxy`, `registry`, `secrets`, `tenant`, `vpn`, `vtpm`, `tpm`, `compute` | about 12 min (24 less a 6.5-minute build and a 5.5-minute bring-up, as on the other legs) | about 13.5 min |
 
@@ -601,7 +601,6 @@ Kept out of the runner, or out of its default set:
 
 | Directory | Why | How it runs |
 |-----------|-----|-------------|
-| `pxe` | platformd constructs its PXE service with a nil backend (`NewPXEGRPCService(logger, nil)` in `pkg/api/daemon/daemon.go`), and nothing outside tests calls `SetPXEService` or `pkg/compute/pxe.NewService`, so every transport answers `SERVICE_NOT_CONFIGURED` and the suite fails at adapter setup. Its six adapters are real; it rejoins `ALL_TARGETS` when platformd has a PXE backend | `make integration-test-pxe` |
 | `secureboot` | `TestFIPSKernelModuleSignatureEnforcement` fails without a prebuilt FIPS kernel, its modules tarball and the module-signing key it was built with (`test/integration/secureboot/fipskernel_test.go:210-212`, `helpers.go:84-94`), which only the caller supplies through `FIPS_KERNEL_IMAGE`, `FIPS_MODULES_TAR` and `FIPS_MODULE_SIGNING_KEY`; the runner sets none of them. `docs/firmware/secure-boot.md:539-540` already keeps the target out of the `all` sweep | `make integration-test-secureboot` with the three variables set |
 | `secureboot/hardware` | Real TPM and efivarfs on the node; disabled unless `TP_HW_TPM`/`TP_HW_EFIVARS` is `1` | `make integration-test-secureboot-hw` on the node |
 | `sdn/topology` | The multi-node topology tests start their nodes with docker-compose (`test/integration/sdn/topology/docker-compose.tmpl`), and the devcontainer has neither docker-compose nor a Docker daemon. The `topology` build tag keeps them out of the `sdn` and `sdn-stress` keys' packages; run anywhere else, they fail with `ErrDockerComposeMissing` | `make integration-test-sdn-topology` on a host with docker-compose |
@@ -743,9 +742,12 @@ The Makefile automatically handles:
   suite reaches real zone storage. DNSSEC and DANE stay off.
   `TestIntegrationConfig_LoadsWithDNSServer` (`pkg/app`) loads the file the way
   platformd does and checks the `dns:` keys strictly. The file has no `pxe:`
-  section: platformd has no reader for one, because PXE is a gateway-role
-  service. Its `PXEGRPCService` therefore has no backend, so the `pxe` suite is
-  kept out of `ALL_TARGETS` (see the kept-out table above).
+  section, so the shared platformd has no PXE backend. The `pxe` suite runs
+  in leg 3 on its own daemon: after the shared-daemon suites, the runner
+  restarts platformd with `test/integration/pxe/platformd-pxe.yaml` appended
+  (`prepare_pxe_config`, `TARGET_OWN_DAEMON`, `RUN_PXE`), and that overlay's
+  `http-port: 18089` gives its iPXE HTTP server its own port, apart from the
+  `ipxe` suite's 8080 on the shared host network (#1896).
 - Script: `build/docker/devcontainer/run-integration-tests.sh`
 - Test cleanup: `/tmp/platformd-integration` directory removed before each run to avoid key/cert mismatches
 

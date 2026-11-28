@@ -40,8 +40,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -51,7 +53,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/perf"
 	ipambackends "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vpn"
@@ -1005,10 +1010,15 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	logger.Info("DNS gRPC service registered")
 
 	// Create the PXE gRPC service. Every transport serves this one
-	// instance. platformd never sets its backend (PXE is a gateway-role
-	// service and the platformd config has no pxe: section), so each call
-	// answers Unavailable with SERVICE_NOT_CONFIGURED (requireService).
-	pxeGRPCService := NewPXEGRPCService(logger, nil)
+	// instance. Its backend comes from the optional `pxe:` section, off by
+	// default: with no section or enabled: false each call answers
+	// Unavailable with SERVICE_NOT_CONFIGURED (requireService); an invalid
+	// enabled section fails daemon start.
+	pxeGRPCService, err := pxeGRPCServiceFromConfig(context.Background(), logger, config.App, config.PXE, config.PXEFlowManager)
+	if err != nil {
+		return nil, err
+	}
+	pxeGRPCService.SetSystemTenant(config.PlatformTenantID)
 	if grpcServer != nil {
 		platformv1.RegisterPXEServiceServer(grpcServer, pxeGRPCService)
 	}
@@ -2036,6 +2046,135 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	return daemon, nil
 }
 
+// pxeGRPCServiceFromConfig builds the PXE gRPC service from the daemon's
+// optional `pxe:` section (#1694). With no section, or enabled: false, the
+// service has no backend and every call answers SERVICE_NOT_CONFIGURED. An
+// enabled section is built against the SDN network plan, initialized, and
+// set as the backend; an invalid section returns its typed error so the
+// daemon does not start.
+// provisioningDeviceScriptPortOffset is pkg/bootstrap/container's
+// DeviceScriptPortOffset: the bootstrap device-script and UKI server
+// listens on the iPXE HTTP port plus one (8081 by default).
+const provisioningDeviceScriptPortOffset = 1
+
+// provisioningNBDPort is pkg/bootstrap/nbd.DefaultPort, the NBD export a
+// provisioning device mounts its root from.
+const provisioningNBDPort uint16 = 10809
+
+// refuseProvisioningHTTPPort refuses an iPXE HTTP port that leaves no room
+// for the device-script server at http-port+1: such a backend would start
+// with no provisioning HTTP allowance and booting devices would drop every
+// connection to it.
+func refuseProvisioningHTTPPort(port int) error {
+	if port+provisioningDeviceScriptPortOffset > 65535 {
+		return pxe.ErrInvalidConfiguration{
+			Field:  "pxe.http-port",
+			Reason: "must be between 1 and 65534 (the device-script server listens on http-port+1), got " + strconv.Itoa(port),
+		}
+	}
+	return nil
+}
+
+func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *app.App, section *pxe.DaemonConfig, flows *policy.ZoneFlowManager) (*PXEGRPCService, error) {
+	svc := NewPXEGRPCService(logger, nil)
+	if section == nil || !section.Enabled {
+		return svc, nil
+	}
+	// SDNConfig.Zones holds the raw operator overrides; the plan is built
+	// from the resolved zones (the overrides merged onto the built-ins), as
+	// sdn.Config.Validate builds it, so a config that tunes one zone still
+	// carries quarantine and provisioning at their built-in offsets.
+	var plan *netplan.Plan
+	if a != nil && a.SDNConfig != nil && a.SDNConfig.Enabled && a.SDNConfig.Environment != nil {
+		plan = a.SDNConfig.Plan()
+		if plan == nil {
+			resolved, err := zone.Resolve(a.SDNConfig.Zones)
+			if err != nil {
+				return nil, err
+			}
+			p, err := netplan.New(*a.SDNConfig.Environment, resolved)
+			if err != nil {
+				return nil, err
+			}
+			plan = p
+		}
+	}
+	// http-port+1 is the device-script port, so 65535 cannot carry both;
+	// refused here as well as by the config (a second line).
+	if err := refuseProvisioningHTTPPort(section.HTTPPort); err != nil {
+		return nil, err
+	}
+	cfg, err := section.ToServiceConfig(plan)
+	if err != nil {
+		return nil, err
+	}
+	// The quarantine, provisioning and authorized transitions are flows on
+	// the SDN zone flow manager; without one they would be no-ops, so an
+	// enabled backend refuses to start instead (#1694).
+	if flows == nil {
+		return nil, pxe.ErrInvalidConfiguration{Field: "pxe.enabled", Reason: "the SDN zone flow manager is required"}
+	}
+	// The VLAN wrapper only delegates to the shared flow manager, which
+	// deletes and installs on sdn.ovs.bridge; a different pxe.bridge-name
+	// would be silently ignored, so it is refused.
+	if cfg.BridgeName != flows.BridgeName() {
+		return nil, pxe.ErrInvalidConfiguration{
+			Field:  "pxe.bridge-name",
+			Reason: "must match the SDN flow manager's bridge " + flows.BridgeName() + ", got " + cfg.BridgeName,
+		}
+	}
+	// A device in provisioning fetches its boot script and payloads from
+	// the iPXE HTTP server, its per-device script and installed UKI from
+	// the bootstrap device-script server (the HTTP port plus one), and its
+	// root over NBD. docs/SPEC.md (ipxe) requires the provisioning-zone
+	// rules to admit TCP 8080, 8081 and 10809; a provisioning transition
+	// replaces the port's flows, so all three are carried into the
+	// generator. They are open only to the address the iPXE server
+	// advertises in its boot URL (GetServerIP, the same resolution
+	// ipxe.NewServer makes), which with a wildcard bind host is a detected
+	// host address rather than the provisioning gateway; a loopback or
+	// unresolvable address still falls back to the provisioning zone's own
+	// addresses, so an inter-zone deny still wins on them.
+	bootServer := ""
+	if cfg.IPXEConfig != nil {
+		bootServer = cfg.IPXEConfig.BindHost
+		if ip, err := cfg.IPXEConfig.GetServerIP(); err == nil {
+			bootServer = ip
+		}
+	}
+	if cfg.IPXEConfig != nil && cfg.IPXEConfig.HTTPPort > 0 {
+		if err := refuseProvisioningHTTPPort(cfg.IPXEConfig.HTTPPort); err != nil {
+			return nil, err
+		}
+		flows.AllowProvisioningBootPorts(bootServer,
+			uint16(cfg.IPXEConfig.HTTPPort),
+			uint16(cfg.IPXEConfig.HTTPPort+provisioningDeviceScriptPortOffset),
+		)
+	}
+	flows.AllowProvisioningBootPorts(bootServer, provisioningNBDPort)
+	// The pxe: section's acme-servers and dns-servers scope the provisioning
+	// template's TCP 443 and port 53 allowances; ACME defaults to the boot
+	// servers resolved above, and with no DNS server provisioning DNS stays
+	// closed.
+	flows.AllowProvisioningServers(cfg.ACMEServerIPs, cfg.DNSServerIPs)
+	if len(cfg.DNSServerIPs) == 0 {
+		logger.Warn("PXE: no pxe.dns-servers configured; provisioning devices get no DNS access")
+	}
+	backend := pxe.NewService(
+		pxe.WithLogger(logger),
+		pxe.WithStateManager(pxe.NewStateManager()),
+		pxe.WithVLANIntegration(pxe.NewVLANIntegrationWrapper(
+			pxe.WithBridgeName(cfg.BridgeName),
+			pxe.WithFlowManager(flows),
+		)),
+	)
+	if err := backend.Initialize(ctx, cfg); err != nil {
+		return nil, err
+	}
+	svc.SetPXEService(backend)
+	return svc, nil
+}
+
 // grpcServerWrapper wraps *grpc.Server to implement GRPCServerInterface
 type grpcServerWrapper struct {
 	server *grpc.Server
@@ -2726,6 +2865,11 @@ func (d *Daemon) rollbackPartialStart(ctx context.Context) {
 			d.logger.Warn("startup rollback: REST server stop failed", "error", err)
 		}
 	}
+	// PXE last among the surfaces: until every transport is down a
+	// StartService call can still start the backend, and its run context
+	// outlives the RPC. StopBackend takes the backend's lifecycle lock, so
+	// it also waits for a Start already in flight and stops what it left.
+	d.stopPXEBackend(ctx, "startup rollback")
 	if d.tenantService != nil {
 		if err := d.tenantService.Stop(ctx); err != nil {
 			d.logger.Warn("startup rollback: tenant service stop failed", "error", err)
@@ -3040,6 +3184,10 @@ func (d *Daemon) Stop(ctx context.Context) error {
 		_ = d.grpcListener.Close()
 	}
 
+	// Close the PXE backend only after every transport has stopped and
+	// drained, so no PXE request is still in flight against it.
+	d.closePXEBackend("stop")
+
 	// Trigger shutdown through the service
 	_, err := d.service.Shutdown(ctx, &platformv1.ShutdownRequest{
 		Graceful:       true,
@@ -3053,6 +3201,29 @@ func (d *Daemon) Stop(ctx context.Context) error {
 // forceStopTimeoutSeconds is the deadline ForceStop hands each service's
 // Stop. A forced stop ignores the error a failed or expired Stop returns.
 const forceStopTimeoutSeconds = 5
+
+// closePXEBackend stops the PXE backend named in the pxe: section, if any,
+// releasing its iPXE listener and VLAN integration (#1694). A failure is
+// logged; the rest of the shutdown goes on.
+func (d *Daemon) closePXEBackend(phase string) {
+	if d.pxeGRPCService == nil {
+		return
+	}
+	if err := d.pxeGRPCService.Close(); err != nil {
+		d.logger.Warn(phase+": PXE backend close failed", "error", err)
+	}
+}
+
+// stopPXEBackend stops the PXE backend's iPXE server and keeps the backend
+// initialized, so a Start retry after a startup rollback serves PXE.
+func (d *Daemon) stopPXEBackend(ctx context.Context, phase string) {
+	if d.pxeGRPCService == nil {
+		return
+	}
+	if err := d.pxeGRPCService.StopBackend(ctx); err != nil {
+		d.logger.Warn(phase+": PXE backend stop failed", "error", err)
+	}
+}
 
 // ForceStop immediately stops the daemon
 func (d *Daemon) ForceStop() error {
@@ -3131,6 +3302,10 @@ func (d *Daemon) ForceStop() error {
 	if d.grpcListener != nil {
 		_ = d.grpcListener.Close()
 	}
+
+	// Close the PXE backend only after every transport has stopped; the
+	// backend's Close also waits for any PXE call still in flight.
+	d.closePXEBackend("force stop")
 
 	// Force shutdown through the service
 	_, _ = d.service.Shutdown(context.Background(), &platformv1.ShutdownRequest{

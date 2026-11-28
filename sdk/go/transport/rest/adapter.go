@@ -19,7 +19,10 @@ package rest
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,6 +61,23 @@ type Adapter struct {
 	tlsConfig  *tls.Config
 	token      atomic.Value // stores auth token as string
 	timeout    time.Duration
+	// webhookKey signs PXE install-completion reports (WithPXEWebhookKey).
+	webhookKey []byte
+}
+
+// pxeWebhookCompletePath is the machine-facing route whose body the
+// daemon verifies against X-PXE-Webhook-Signature.
+const (
+	pxeWebhookCompletePath    = "/api/v1/pxe/webhook/complete"
+	pxeWebhookSignatureHeader = "X-PXE-Webhook-Signature"
+)
+
+// signPXEWebhookBody is the signature the PXE router verifies: "sha256="
+// followed by the hex HMAC-SHA256 of the request body under the key.
+func signPXEWebhookBody(key, body []byte) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
 // Connect establishes a REST connection to the platform daemon.
@@ -103,6 +123,7 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		baseURL:    baseURL,
 		tlsConfig:  tlsConfig,
 		timeout:    timeout,
+		webhookKey: append([]byte(nil), opts.PXEWebhookKey...),
 	}
 	a.connected.Store(true)
 	if opts.BearerToken != "" {
@@ -245,8 +266,10 @@ func (a *Adapter) do(ctx context.Context, client *http.Client, method, path stri
 	url := a.baseURL + path
 
 	var bodyReader io.Reader
+	var bodyBytes []byte
 	if body != nil {
-		bodyBytes, err := json.Marshal(body)
+		var err error
+		bodyBytes, err = json.Marshal(body)
 		if err != nil {
 			return ErrMarshalFailed{Err: err}
 		}
@@ -263,6 +286,11 @@ func (a *Adapter) do(ctx context.Context, client *http.Client, method, path stri
 
 	if token := a.GetToken(); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	// The install-completion webhook admits only HMAC-signed reports; the
+	// signature covers exactly the bytes sent.
+	if method == http.MethodPost && path == pxeWebhookCompletePath && len(a.webhookKey) > 0 {
+		req.Header.Set(pxeWebhookSignatureHeader, signPXEWebhookBody(a.webhookKey, bodyBytes))
 	}
 
 	resp, err := client.Do(req)

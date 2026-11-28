@@ -215,6 +215,10 @@ func (f *recordingPXEService) RemoveDevice(_ context.Context, deviceID string) e
 	return err
 }
 
+func (f *recordingPXEService) UpdateDeviceStateForIDevID(ctx context.Context, deviceID, _ string, state pxe.ProvisioningState, reason string) error {
+	return f.UpdateDeviceState(ctx, deviceID, state, reason)
+}
+
 func (f *recordingPXEService) UpdateDeviceState(_ context.Context, deviceID string, state pxe.ProvisioningState, reason string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -224,6 +228,18 @@ func (f *recordingPXEService) UpdateDeviceState(_ context.Context, deviceID stri
 		return err
 	}
 	f.changed(device, state, reason)
+	return nil
+}
+
+func (f *recordingPXEService) RecordIDevIDFingerprint(_ context.Context, deviceID, fingerprint string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("RecordIDevIDFingerprint", deviceID, fingerprint)
+	device, err := f.lookup(deviceID)
+	if err != nil {
+		return err
+	}
+	device.IDevIDFingerprint = fingerprint
 	return nil
 }
 
@@ -313,7 +329,9 @@ type pxeSDKFixture struct {
 
 func newPXESDKFixture() *pxeSDKFixture {
 	svc := newRecordingPXEService()
-	return &pxeSDKFixture{svc: svc, server: NewPXEGRPCService(logging.DefaultLogger(), svc)}
+	server := NewPXEGRPCService(logging.DefaultLogger(), svc)
+	server.SetSystemTenant(pxeSDKSystemTenant)
+	return &pxeSDKFixture{svc: svc, server: server}
 }
 
 // pxeSDKRequests holds one request for every PXEService method.
@@ -359,6 +377,9 @@ func invokePXEServer(server platformv1.PXEServiceServer, method string, req prot
 // caller holding only the scope gRPC requires for it, and checks that the
 // reply and the calls the PXE service saw are the ones a direct gRPC call
 // gives.
+// pxeSDKSystemTenant is the system tenant the SDK parity fixture admits.
+const pxeSDKSystemTenant = "system"
+
 func testSDKPXEMethods(t *testing.T, transport string, connect pxeSDKConnect) {
 	requests := pxeSDKRequests()
 	require.Len(t, requests, len(platformv1.PXEService_ServiceDesc.Methods))

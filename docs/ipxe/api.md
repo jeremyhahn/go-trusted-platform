@@ -263,10 +263,33 @@ who arrived here can find them:
 
 **The install-complete webhook route exists only when the operator sets
 `pxe.ServiceConfig.WebhookEnabled`** (default `false`). Disabled, the path is
-not registered and answers 404 like any unknown path. Enabled, it is
-**unauthenticated**: the caller is a booting node that presents no credential,
-and the device is identified by the MAC in the request body. What a booting
-node should present is #238; `WebhookSecret` is reserved for it and unused.
+not registered and answers 404 like any unknown path. Enabled, it admits only
+a report that passes two checks, in this order:
+
+1. **HMAC signature (#240).** The `X-PXE-Webhook-Signature` header is `sha256=`
+   and the lower-case hex HMAC-SHA256 of the raw request body under
+   `pxe.ServiceConfig.WebhookSecret`.
+2. **Device identity (ruling 673).** The TLS connection carries a verified mTLS
+   client certificate chain, and the lower-case hex SHA-256 of its leaf
+   certificate is the IDevID fingerprint recorded for the device registered
+   under the MAC address the report names. A re-enrolment before install
+   completion replaces the recorded fingerprint; once the install-complete
+   webhook has presented it, the fingerprint is binding and a later enrolment
+   does not change it (owner ruling 1234).
+
+The refusals:
+
+| Status | When |
+|---|---|
+| `401` | no webhook secret configured (every report is refused); `X-PXE-Webhook-Signature` missing or wrong; no verified device client certificate on the connection |
+| `400` | the body cannot be read, does not decode, or names no MAC address |
+| `403` | no device is recorded for the reported MAC; the device has no IDevID fingerprint recorded; the client certificate is not the one whose fingerprint is recorded for that device (for example another device's certificate) |
+
+Any other failure of the device lookup maps through the normal error writer (a
+server without the device lookup answers service unavailable). The HMAC secret
+is shared by every machine; the client certificate is what ties a report to one
+device, so a report signed with the right secret but sent over another
+device's certificate is refused.
 
 **The `REST base` column is a locator, not the contract.** It gives the prefix a
 route hangs under; it does not give the route. The normative per-route path
@@ -366,8 +389,9 @@ the role gate alone applies.
 | `GET /api/v1/pxe/devices/{id}/events` | `GetEvents` | `pxe:read` |
 
 `POST /api/v1/pxe/webhook/complete` takes neither the admin gate nor a scope:
-its caller is a booting node, and it presents no credential (#238). It is the
-one PXE route wider than its RPC, `WebhookComplete`, which needs `pxe:write`. [`docs/provisioning/api.md`](../provisioning/api.md) §6
+its caller is a booting node, which presents an HMAC of the body under
+`WebhookSecret` instead (#240, §4). Its RPC, `WebhookComplete`, needs
+`pxe:write`. [`docs/provisioning/api.md`](../provisioning/api.md) §6
 covers the provisioning half of the control plane.
 
 ---

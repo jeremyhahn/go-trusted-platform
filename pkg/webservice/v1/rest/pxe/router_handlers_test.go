@@ -15,9 +15,11 @@ package pxe
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -44,6 +46,9 @@ type operatorPXE struct {
 	err  error
 	rpc  string
 	req  proto.Message
+	// fingerprint is the authenticated IDevID fingerprint the webhook
+	// route handed the service.
+	fingerprint string
 }
 
 func answer[T proto.Message](s *operatorPXE, rpc string, req proto.Message) (T, error) {
@@ -115,25 +120,53 @@ func (s *operatorPXE) WebhookComplete(_ context.Context, req *platformv1.PXEWebh
 	return answer[*platformv1.PXEWebhookCompleteResponse](s, "WebhookComplete", req)
 }
 
+// WebhookCompleteForIDevID is the path the webhook route takes: it records
+// the authenticated fingerprint the route hands over, which verifyWebhook
+// sets from the certificate serveHandler presents.
+func (s *operatorPXE) WebhookCompleteForIDevID(ctx context.Context, req *platformv1.PXEWebhookCompleteRequest, fingerprint string) (*platformv1.PXEWebhookCompleteResponse, error) {
+	s.fingerprint = fingerprint
+	return s.WebhookComplete(ctx, req)
+}
+
 // handlerRoot mounts the operator routes and the enabled webhook under
 // /api/v1, as v1Router does.
 func handlerRoot(server platformv1.PXEServiceServer) *mux.Router {
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 	r := NewPXERouter(logger, server, response.NewResponseWriter(logger, nil), true)
+	r.SetWebhookSecret(handlerWebhookSecret)
+	// Every MAC is recorded with handlerDeviceCert, the certificate
+	// serveHandler presents: these tests pin the handlers, and the binding
+	// is pinned by the TestWebhook_* tests.
+	r.SetWebhookIdentity(WebhookIdentityFunc(func(context.Context, string) (string, error) {
+		return fingerprintOf(handlerDeviceCert), nil
+	}))
 	root := mux.NewRouter()
+	guardForSystem(r, root)
 	sub := root.PathPrefix("/api/v1").Subrouter()
 	r.RegisterMachineFacingRoutes(sub)
 	r.RegisterRoutes(sub)
 	return root
 }
 
+// handlerDeviceCert is the verified client certificate serveHandler
+// presents on every request.
+var handlerDeviceCert = &x509.Certificate{SerialNumber: big.NewInt(4242)}
+
+// handlerWebhookSecret is the webhook key handlerRoot configures; every
+// request serveHandler sends is signed with it, as a booting node signs
+// (the operator routes ignore the header).
+const handlerWebhookSecret = "handler-test-webhook-secret"
+
 func serveHandler(router *mux.Router, method, path, body string) *httptest.ResponseRecorder {
 	var reader io.Reader
 	if body != "" {
 		reader = strings.NewReader(body)
 	}
+	req := httptest.NewRequest(method, path, reader)
+	req.Header.Set(WebhookSignatureHeader, SignWebhookBody([]byte(handlerWebhookSecret), []byte(body)))
+	req.TLS = verifiedTLS(handlerDeviceCert)
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(method, path, reader))
+	router.ServeHTTP(rec, req)
 	return rec
 }
 
@@ -304,6 +337,10 @@ func TestOperatorHandlers_HandTheServiceTheRequestAndAnswerItsResponse(t *testin
 			require.Equal(t, c.wantCode, rec.Code, rec.Body.String())
 			assert.Equal(t, c.rpc, server.rpc)
 			assert.Empty(t, cmpProto(c.wantReq, server.req), "request handed to the service")
+			if c.rpc == "WebhookComplete" {
+				assert.Equal(t, fingerprintOf(handlerDeviceCert), server.fingerprint,
+					"the webhook hands the service the authenticated fingerprint")
+			}
 
 			var env envelope
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))

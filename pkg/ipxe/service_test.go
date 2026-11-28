@@ -115,13 +115,14 @@ func startService(t *testing.T) runningService {
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", httpPort)
 
 	server, err := NewServer(&ServerConfig{
-		BindHost:         "127.0.0.1",
-		HTTPPort:         httpPort,
-		TFTPPort:         tftpPort,
-		ExternalURL:      baseURL,
-		FirmwareDir:      t.TempDir(),
-		FirmwareUpstream: firmwareUpstream.URL,
-		ProxyCACertPool:  proxyCAs,
+		BindHost:                      "127.0.0.1",
+		HTTPPort:                      httpPort,
+		TFTPPort:                      tftpPort,
+		ExternalURL:                   baseURL,
+		FirmwareDir:                   t.TempDir(),
+		FirmwareUpstream:              firmwareUpstream.URL,
+		ProxyCACertPool:               proxyCAs,
+		proxyAllowPrivateDestinations: true,
 		BootEntries: []BootEntry{
 			{
 				Name:        "alpine-test",

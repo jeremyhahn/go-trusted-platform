@@ -21,12 +21,15 @@ package pxe
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -57,25 +60,31 @@ func (e ErrCLIBinaryNotFound) Error() string {
 	return fmt.Sprintf("platformctl binary not found at path: %s", e.Path)
 }
 
-// ErrCLIPXENotImplemented is returned by every PXE verb of this adapter.
-//
-// docs/daemon/cli.md:223 documents that there is no `pxe` top-level group:
-// "PXE device lifecycle is API-only". This adapter used to shell
-// `platformctl pxe device ...` and `platformctl pxe state ...`, which do not
-// exist, so the CLI leg of TestPXEMultiProtocol failed against the documented
-// behaviour. It now refuses each verb with this typed error and the test
-// (requireCLIPXEGap in pxe_test.go) asserts that refusal instead of a fake
-// success. When a `platformctl pxe` group is added to the CLI, the adapter
-// must drive it and this typed refusal goes away (docs/provisioning/
-// engineering.md §7 records the hole and its flip).
-type ErrCLIPXENotImplemented struct {
-	Method string
+// ErrCLIDecode is returned when platformctl's JSON reply does not decode.
+type ErrCLIDecode struct {
+	Command string
+	Output  string
+	Err     error
 }
 
-func (e ErrCLIPXENotImplemented) Error() string {
-	return fmt.Sprintf(
-		"platformctl has no pxe command group (docs/daemon/cli.md:223; the PXE device lifecycle is API-only), so CLI %s is refused",
-		e.Method)
+func (e ErrCLIDecode) Error() string {
+	return fmt.Sprintf("decode platformctl %s reply: %v (output %q)", e.Command, e.Err, e.Output)
+}
+
+func (e ErrCLIDecode) Unwrap() error { return e.Err }
+
+// runJSON runs `platformctl --output json pxe <args>` and decodes the reply.
+// The CLI prints the gRPC reply with encoding/json, so it decodes back into
+// the same platformv1 type.
+func (c *CLIAdapter) runJSON(ctx context.Context, reply any, args ...string) error {
+	out, err := c.runCommand(ctx, append([]string{"pxe"}, args...)...)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(out, reply); err != nil {
+		return ErrCLIDecode{Command: strings.Join(args, " "), Output: string(out), Err: err}
+	}
+	return nil
 }
 
 // =============================================================================
@@ -191,94 +200,230 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 // =============================================================================
 // Device Management Commands
 //
-// docs/daemon/cli.md:223: there is no `pxe` top-level group, the PXE
-// device lifecycle is API-only. Every method below refuses with
-// ErrCLIPXENotImplemented rather than shelling a command that does not exist
-// or faking a success.
+// Every verb drives `platformctl pxe` (docs/provisioning/cli.md §5) and
+// decodes the gRPC reply the CLI prints as JSON.
 // =============================================================================
 
-// RegisterDevice is refused: the PXE device lifecycle is API-only
-// (docs/daemon/cli.md:223).
-func (c *CLIAdapter) RegisterDevice(_ context.Context, _ RegisterDeviceOptions) (*RegisterDeviceResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "RegisterDevice"}
+// RegisterDevice runs `platformctl pxe register --mac <mac> [--port <id>]`.
+func (c *CLIAdapter) RegisterDevice(ctx context.Context, opts RegisterDeviceOptions) (*RegisterDeviceResult, error) {
+	args := []string{"register", "--mac", opts.MACAddress}
+	if opts.PortID != "" {
+		args = append(args, "--port", opts.PortID)
+	}
+	var reply platformv1.RegisterPXEDeviceResponse
+	if err := c.runJSON(ctx, &reply, args...); err != nil {
+		return nil, err
+	}
+	d := reply.GetDevice()
+	return &RegisterDeviceResult{
+		ID:          d.GetId(),
+		MACAddress:  d.GetMacAddress(),
+		PortID:      d.GetPortId(),
+		State:       stateName(d.GetState()),
+		StateReason: d.GetStateReason(),
+		CurrentVLAN: uint16(d.GetCurrentVlan()),
+		CreatedAt:   timeOf(d.GetCreatedAt()),
+	}, nil
 }
 
-// GetDevice is refused: the PXE device lifecycle is API-only
-// (docs/daemon/cli.md:223).
-func (c *CLIAdapter) GetDevice(_ context.Context, _ string) (*GetDeviceResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "GetDevice"}
+// GetDevice runs `platformctl pxe get <device-id>`.
+func (c *CLIAdapter) GetDevice(ctx context.Context, deviceID string) (*GetDeviceResult, error) {
+	var reply platformv1.GetPXEDeviceResponse
+	if err := c.runJSON(ctx, &reply, "get", deviceID); err != nil {
+		return nil, err
+	}
+	return deviceResult(reply.GetDevice()), nil
 }
 
-// GetDeviceByMAC is refused: the PXE device lifecycle is API-only
-// (docs/daemon/cli.md:223).
-func (c *CLIAdapter) GetDeviceByMAC(_ context.Context, _ string) (*GetDeviceResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "GetDeviceByMAC"}
+// GetDeviceByMAC runs `platformctl pxe get-by-mac <mac>`.
+func (c *CLIAdapter) GetDeviceByMAC(ctx context.Context, macAddress string) (*GetDeviceResult, error) {
+	var reply platformv1.GetPXEDeviceByMACResponse
+	if err := c.runJSON(ctx, &reply, "get-by-mac", macAddress); err != nil {
+		return nil, err
+	}
+	return deviceResult(reply.GetDevice()), nil
 }
 
-// ListDevices is refused: the PXE device lifecycle is API-only
-// (docs/daemon/cli.md:223).
-func (c *CLIAdapter) ListDevices(_ context.Context, _ ListDevicesOptions) (*ListDevicesResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "ListDevices"}
+// ListDevices runs `platformctl pxe list` with the options as flags; a zero
+// option is left off, as the API treats it as "no filter".
+func (c *CLIAdapter) ListDevices(ctx context.Context, opts ListDevicesOptions) (*ListDevicesResult, error) {
+	args := []string{"list"}
+	if opts.State != "" {
+		args = append(args, "--state", opts.State)
+	}
+	if opts.MACAddress != "" {
+		args = append(args, "--mac", opts.MACAddress)
+	}
+	if opts.VLAN != 0 {
+		args = append(args, "--vlan", strconv.Itoa(int(opts.VLAN)))
+	}
+	if opts.Limit != 0 {
+		args = append(args, "--limit", strconv.Itoa(int(opts.Limit)))
+	}
+	if opts.Offset != 0 {
+		args = append(args, "--offset", strconv.Itoa(int(opts.Offset)))
+	}
+	var reply platformv1.ListPXEDevicesResponse
+	if err := c.runJSON(ctx, &reply, args...); err != nil {
+		return nil, err
+	}
+	result := &ListDevicesResult{TotalCount: reply.GetTotalCount()}
+	for _, d := range reply.GetDevices() {
+		result.Devices = append(result.Devices, DeviceSummary{
+			ID:          d.GetId(),
+			MACAddress:  d.GetMacAddress(),
+			PortID:      d.GetPortId(),
+			State:       stateName(d.GetState()),
+			CurrentVLAN: uint16(d.GetCurrentVlan()),
+			CreatedAt:   timeOf(d.GetCreatedAt()),
+			UpdatedAt:   timeOf(d.GetUpdatedAt()),
+		})
+	}
+	return result, nil
 }
 
-// RemoveDevice is refused: the PXE device lifecycle is API-only
-// (docs/daemon/cli.md:223).
-func (c *CLIAdapter) RemoveDevice(_ context.Context, _ string) (*RemoveDeviceResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "RemoveDevice"}
+// RemoveDevice runs `platformctl pxe remove <device-id>`. The CLI exits
+// non-zero on a failed call, so a reply is a removal unless its status
+// says otherwise.
+func (c *CLIAdapter) RemoveDevice(ctx context.Context, deviceID string) (*RemoveDeviceResult, error) {
+	var reply platformv1.RemovePXEDeviceResponse
+	if err := c.runJSON(ctx, &reply, "remove", deviceID); err != nil {
+		return nil, err
+	}
+	status := reply.GetStatus()
+	return &RemoveDeviceResult{ID: deviceID, Removed: status == nil || status.GetSuccess()}, nil
 }
 
 // =============================================================================
 // State Management Commands
 // =============================================================================
 
-// UpdateDeviceState is refused: the PXE device lifecycle is API-only
-// (docs/daemon/cli.md:223).
-func (c *CLIAdapter) UpdateDeviceState(_ context.Context, _ UpdateStateOptions) (*UpdateStateResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "UpdateDeviceState"}
+// UpdateDeviceState runs `platformctl pxe set-state <device-id> --state
+// <state> --reason <reason>`. The reply carries only the device after the
+// change, so FromState is left empty.
+func (c *CLIAdapter) UpdateDeviceState(ctx context.Context, opts UpdateStateOptions) (*UpdateStateResult, error) {
+	var reply platformv1.UpdatePXEStateResponse
+	if err := c.runJSON(ctx, &reply, "set-state", opts.DeviceID,
+		"--state", opts.State, "--reason", opts.Reason); err != nil {
+		return nil, err
+	}
+	d := reply.GetDevice()
+	return &UpdateStateResult{
+		ID:        d.GetId(),
+		ToState:   stateName(d.GetState()),
+		Reason:    d.GetStateReason(),
+		UpdatedAt: timeOf(d.GetUpdatedAt()),
+	}, nil
 }
 
-// SetDeviceEnrolled is refused: the PXE device lifecycle is API-only
-// (docs/daemon/cli.md:223).
-func (c *CLIAdapter) SetDeviceEnrolled(_ context.Context, _, _ string) (*SetEnrolledResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "SetDeviceEnrolled"}
+// SetDeviceEnrolled runs `platformctl pxe set-enrolled <device-id>
+// --certificate-serial <serial>`.
+func (c *CLIAdapter) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) (*SetEnrolledResult, error) {
+	var reply platformv1.SetPXEDeviceEnrolledResponse
+	if err := c.runJSON(ctx, &reply, "set-enrolled", deviceID, "--certificate-serial", certSerial); err != nil {
+		return nil, err
+	}
+	d := reply.GetDevice()
+	return &SetEnrolledResult{
+		ID:                d.GetId(),
+		State:             stateName(d.GetState()),
+		CertificateSerial: d.GetCertificateSerial(),
+		UpdatedAt:         timeOf(d.GetUpdatedAt()),
+	}, nil
 }
 
-// AuthorizeDevice is refused: the PXE device lifecycle is API-only
-// (docs/daemon/cli.md:223).
-func (c *CLIAdapter) AuthorizeDevice(_ context.Context, _ string, _ uint16) (*AuthorizeResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "AuthorizeDevice"}
+// AuthorizeDevice runs `platformctl pxe authorize <device-id> --target-vlan`.
+func (c *CLIAdapter) AuthorizeDevice(ctx context.Context, deviceID string, targetVLAN uint16) (*AuthorizeResult, error) {
+	var reply platformv1.AuthorizePXEDeviceResponse
+	if err := c.runJSON(ctx, &reply, "authorize", deviceID,
+		"--target-vlan", strconv.Itoa(int(targetVLAN))); err != nil {
+		return nil, err
+	}
+	d := reply.GetDevice()
+	return &AuthorizeResult{
+		ID:         d.GetId(),
+		State:      stateName(d.GetState()),
+		TargetVLAN: uint16(d.GetTargetVlan()),
+		UpdatedAt:  timeOf(d.GetUpdatedAt()),
+	}, nil
 }
 
-// QuarantineDevice is refused: the PXE device lifecycle is API-only
-// (docs/daemon/cli.md:223).
-func (c *CLIAdapter) QuarantineDevice(_ context.Context, _, _ string) (*QuarantineResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "QuarantineDevice"}
+// QuarantineDevice runs `platformctl pxe quarantine <device-id> --reason`.
+func (c *CLIAdapter) QuarantineDevice(ctx context.Context, deviceID, reason string) (*QuarantineResult, error) {
+	var reply platformv1.QuarantinePXEDeviceResponse
+	if err := c.runJSON(ctx, &reply, "quarantine", deviceID, "--reason", reason); err != nil {
+		return nil, err
+	}
+	d := reply.GetDevice()
+	return &QuarantineResult{
+		ID:          d.GetId(),
+		State:       stateName(d.GetState()),
+		Reason:      d.GetStateReason(),
+		CurrentVLAN: uint16(d.GetCurrentVlan()),
+		UpdatedAt:   timeOf(d.GetUpdatedAt()),
+	}, nil
 }
 
-// RetryDevice is refused: the PXE device lifecycle is API-only
-// (docs/daemon/cli.md:223).
-func (c *CLIAdapter) RetryDevice(_ context.Context, _ string) (*RetryResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "RetryDevice"}
+// RetryDevice runs `platformctl pxe retry <device-id>`.
+func (c *CLIAdapter) RetryDevice(ctx context.Context, deviceID string) (*RetryResult, error) {
+	var reply platformv1.RetryPXEDeviceResponse
+	if err := c.runJSON(ctx, &reply, "retry", deviceID); err != nil {
+		return nil, err
+	}
+	d := reply.GetDevice()
+	return &RetryResult{
+		ID:         d.GetId(),
+		State:      stateName(d.GetState()),
+		RetryCount: int(d.GetRetryCount()),
+		UpdatedAt:  timeOf(d.GetUpdatedAt()),
+	}, nil
 }
 
 // =============================================================================
 // Event Commands
 // =============================================================================
 
-// GetEvents is refused: the PXE device lifecycle is API-only
-// (docs/daemon/cli.md:223).
-func (c *CLIAdapter) GetEvents(_ context.Context, _ string) (*GetEventsResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "GetEvents"}
+// GetEvents runs `platformctl pxe events <device-id>`.
+func (c *CLIAdapter) GetEvents(ctx context.Context, deviceID string) (*GetEventsResult, error) {
+	var reply platformv1.GetPXEEventsResponse
+	if err := c.runJSON(ctx, &reply, "events", deviceID); err != nil {
+		return nil, err
+	}
+	result := &GetEventsResult{DeviceID: deviceID}
+	for _, e := range reply.GetEvents() {
+		result.Events = append(result.Events, ProvisioningEventInfo{
+			ID:        e.GetId(),
+			DeviceID:  e.GetDeviceId(),
+			EventType: strings.ToLower(strings.TrimPrefix(e.GetEventType().String(), eventTypePrefix)),
+			FromState: stateName(e.GetFromState()),
+			ToState:   stateName(e.GetToState()),
+			Details:   e.GetDetails(),
+			Error:     e.GetError(),
+			Timestamp: timeOf(e.GetTimestamp()),
+		})
+	}
+	return result, nil
 }
 
 // =============================================================================
 // Service Status Commands
 // =============================================================================
 
-// GetStatus is refused: the PXE device lifecycle is API-only
-// (docs/daemon/cli.md:223).
-func (c *CLIAdapter) GetStatus(_ context.Context) (*GetStatusResult, error) {
-	return nil, ErrCLIPXENotImplemented{Method: "GetStatus"}
+// GetStatus runs `platformctl pxe status`.
+func (c *CLIAdapter) GetStatus(ctx context.Context) (*GetStatusResult, error) {
+	var reply platformv1.GetPXEStatusResponse
+	if err := c.runJSON(ctx, &reply, "status"); err != nil {
+		return nil, err
+	}
+	s := reply.GetStatus()
+	return &GetStatusResult{
+		Running:          s.GetRunning(),
+		DeviceCount:      int(s.GetDeviceCount()),
+		StartTime:        timeOf(s.GetStartTime()),
+		IPXEServerAddr:   s.GetIpxeServerAddr(),
+		QuarantineVLAN:   uint16(s.GetQuarantineVlan()),
+		ProvisioningVLAN: uint16(s.GetProvisioningVlan()),
+	}, nil
 }
 
 // Ensure CLIAdapter implements PXECommands interface.

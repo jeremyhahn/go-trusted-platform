@@ -54,6 +54,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/argon2"
@@ -355,27 +356,31 @@ type App struct {
 	// Hostmaster (a zone contact, not an account) and not derivable from
 	// AdminUsername; unset leaves the admin-claim routes unregistered
 	// rather than binding the credential to a guessed identity.
-	AdminEmail       string                        `yaml:"admin-email" json:"admin_email" mapstructure:"admin-email"`
-	LogDir           string                        `yaml:"log-dir" json:"log_dir" mapstructure:"log-dir"`
-	LogFormat        string                        `yaml:"log-format" json:"log_format" mapstructure:"log-format"`
-	Logger           *logging.Logger               `yaml:"-" json:"-" mapstructure:"-"`
-	PlatformDir      string                        `yaml:"platform-dir" json:"platform_dir" mapstructure:"platform-dir"`
-	PlatformKS       xkmssdk.PlatformKeyStorer     `yaml:"-" json:"-" mapstructure:"-"`
-	ManagedCertStore xkmssdk.CertStore             `yaml:"-" json:"-" mapstructure:"-"`
-	PlatformConfig   *PlatformInitConfig           `yaml:"platform,omitempty" json:"platform,omitempty" mapstructure:"platform"`
-	SecretsConfig    *SecretsConfig                `yaml:"secrets,omitempty" json:"secrets,omitempty" mapstructure:"secrets"`
-	BMCConfig        *bmc.Config                   `yaml:"bmc,omitempty" json:"bmc,omitempty" mapstructure:"bmc"`
-	SDNConfig        *sdn.Config                   `yaml:"sdn,omitempty" json:"sdn,omitempty" mapstructure:"sdn"`
-	ComputeConfig    *compute.OrchestratorConfig   `yaml:"compute,omitempty" json:"compute,omitempty" mapstructure:"compute"`
-	SwitchConfigs    []switchmgmt.Config           `yaml:"switches,omitempty" json:"switches,omitempty" mapstructure:"switches"`
-	PublicIPv4       net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
-	PublicIPv6       net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
-	PrivateIPv4      net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
-	PrivateIPv6      net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
-	Random           io.Reader                     `yaml:"-" json:"-" mapstructure:"-"`
-	TenantID         string                        `yaml:"tenant-id" json:"tenant_id" mapstructure:"tenant-id"`
-	ShutdownChan     chan bool                     `yaml:"-" json:"-" mapstructure:"-"`
-	TPM              xkmssdk.TrustedPlatformModule `yaml:"-" json:"-" mapstructure:"-"`
+	AdminEmail       string                    `yaml:"admin-email" json:"admin_email" mapstructure:"admin-email"`
+	LogDir           string                    `yaml:"log-dir" json:"log_dir" mapstructure:"log-dir"`
+	LogFormat        string                    `yaml:"log-format" json:"log_format" mapstructure:"log-format"`
+	Logger           *logging.Logger           `yaml:"-" json:"-" mapstructure:"-"`
+	PlatformDir      string                    `yaml:"platform-dir" json:"platform_dir" mapstructure:"platform-dir"`
+	PlatformKS       xkmssdk.PlatformKeyStorer `yaml:"-" json:"-" mapstructure:"-"`
+	ManagedCertStore xkmssdk.CertStore         `yaml:"-" json:"-" mapstructure:"-"`
+	PlatformConfig   *PlatformInitConfig       `yaml:"platform,omitempty" json:"platform,omitempty" mapstructure:"platform"`
+	SecretsConfig    *SecretsConfig            `yaml:"secrets,omitempty" json:"secrets,omitempty" mapstructure:"secrets"`
+	BMCConfig        *bmc.Config               `yaml:"bmc,omitempty" json:"bmc,omitempty" mapstructure:"bmc"`
+	SDNConfig        *sdn.Config               `yaml:"sdn,omitempty" json:"sdn,omitempty" mapstructure:"sdn"`
+	// PXEConfig is the optional `pxe:` section (#1694), off by default;
+	// serve hands it to the daemon, which builds the PXE backend only when
+	// it is enabled.
+	PXEConfig     *pxe.DaemonConfig             `yaml:"pxe,omitempty" json:"pxe,omitempty" mapstructure:"pxe"`
+	ComputeConfig *compute.OrchestratorConfig   `yaml:"compute,omitempty" json:"compute,omitempty" mapstructure:"compute"`
+	SwitchConfigs []switchmgmt.Config           `yaml:"switches,omitempty" json:"switches,omitempty" mapstructure:"switches"`
+	PublicIPv4    net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
+	PublicIPv6    net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
+	PrivateIPv4   net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
+	PrivateIPv6   net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
+	Random        io.Reader                     `yaml:"-" json:"-" mapstructure:"-"`
+	TenantID      string                        `yaml:"tenant-id" json:"tenant_id" mapstructure:"tenant-id"`
+	ShutdownChan  chan bool                     `yaml:"-" json:"-" mapstructure:"-"`
+	TPM           xkmssdk.TrustedPlatformModule `yaml:"-" json:"-" mapstructure:"-"`
 	// enrollDevice replaces ACMEClient.EnrollDevice in EnrollIdentity; nil
 	// in production.
 	enrollDevice deviceEnrollFunc

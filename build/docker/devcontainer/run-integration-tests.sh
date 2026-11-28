@@ -187,6 +187,7 @@ declare -A TARGET_TIMEOUTS=(
     [testenv-enrollment]="40m"
     [e2e]="50m"
     [compute]="30m"
+    [pxe]="15m"
 )
 
 # Targets that run without the shared platformd. Each suite needs no daemon:
@@ -213,9 +214,13 @@ declare -A TARGET_NO_DAEMON=(
 # daemon NOT running; bmc needs platformd started against the vBMC config;
 # diskimage, netboot, nat64 and ipsec need inputs only their make targets
 # build on the host; lb, testenv-enrollment and ipxe-* are slices of
-# packages already listed (sdn, root, ipxe). pxe stays runnable by name but
-# is out of the default set: platformd builds its PXE service with no
-# backend, so every PXE call answers SERVICE_NOT_CONFIGURED.
+# packages already listed (sdn, root, ipxe).
+# pxe is in the list (leg 3) but not on the shared daemon: it needs its own
+# daemon config (the pxe: overlay, see prepare_pxe_config), which the shared
+# platformd does not carry, so it is a TARGET_OWN_DAEMON suite and runs after
+# the shared-daemon suites on a fresh swtpm and a platformd restarted with the
+# overlay, its iPXE HTTP server on its own port (http-port 18089), apart from
+# the ipxe suite's 8080 (#1896).
 # secureboot stays runnable by name but is out of the default set as well: its
 # FIPS-kernel test needs a prebuilt kernel, modules and signing key that only
 # the caller supplies (FIPS_KERNEL_IMAGE, FIPS_MODULES_TAR,
@@ -238,7 +243,14 @@ ALL_TARGETS=(
     root acme attestation authenticode ca ceremony cli
     container daemon device dns fido2 iam iso iso-vm kms luks
     ntp objectstorage piv provision proxy registry sdn
-    sdn-stress secrets tenant vpn vtpm tpm
+    sdn-stress secrets tenant vpn vtpm tpm pxe
+)
+
+# The ALL_TARGETS suites `all` and `leg-<n>` run on a platformd of their own,
+# restarted after the shared-daemon suites, not on the shared one: pxe needs
+# the pxe: overlay (prepare_pxe_config, RUN_PXE).
+declare -A TARGET_OWN_DAEMON=(
+    [pxe]=1
 )
 
 # The legs CI runs as parallel jobs, one container and one shared platformd
@@ -253,7 +265,7 @@ ALL_TARGETS=(
 INTEGRATION_LEGS=(
     "acme authenticode ca iso"
     "ceremony cli container sdn"
-    "daemon device dns sdn-stress"
+    "daemon device dns sdn-stress pxe"
     "helpers ipxe installer e2e root attestation fido2 iam iso-vm kms luks ntp objectstorage"
     "piv provision proxy registry secrets tenant vpn vtpm tpm compute"
 )
@@ -301,6 +313,7 @@ fi
 # one leg's share of them for `leg-<n>`.
 SELECTED_TARGETS=("${ALL_TARGETS[@]}")
 RUN_COMPUTE=true
+RUN_PXE=true
 RUN_LEG=""
 if [[ "$ARG1" =~ ^leg-([0-9]+)$ ]]; then
     RUN_LEG="${BASH_REMATCH[1]}"
@@ -320,6 +333,9 @@ if [[ "$ARG1" =~ ^leg-([0-9]+)$ ]]; then
     done
     if [ -z "${LEG_MEMBERS[compute]:-}" ]; then
         RUN_COMPUTE=false
+    fi
+    if [ -z "${LEG_MEMBERS[pxe]:-}" ]; then
+        RUN_PXE=false
     fi
     ARG1="all"
 fi
@@ -950,6 +966,20 @@ COMPUTEEOF
     echo "Compute platformd config: ${COMPUTE_PLATFORMD_CONFIG}"
 }
 
+# prepare_pxe_config writes the pxe target's platformd config: the shared
+# integration config plus the pxe: overlay test/integration/pxe ships, so
+# platformd builds its PXE backend on the integration bridge (#1896).
+prepare_pxe_config() {
+    PXE_PLATFORMD_CONFIG="/tmp/platformd-pxe-config.yaml"
+    mkdir -p /tmp/platformd-pxe/files /tmp/platformd-pxe/installs
+    {
+        cat "${PLATFORM_BUILD_DIR}/test/integration/config.yaml"
+        echo
+        cat "${PLATFORM_BUILD_DIR}/test/integration/pxe/platformd-pxe.yaml"
+    } > "${PXE_PLATFORMD_CONFIG}"
+    echo "PXE platformd config: ${PXE_PLATFORMD_CONFIG}"
+}
+
 # start_vbmc builds and starts the virtual BMC responder, exports the harness
 # environment variables, downloads the vBMC CA cert for daemon trust injection,
 # and generates a modified platformd config that trusts the vBMC HTTPS cert.
@@ -1438,6 +1468,11 @@ elif [ "$RUN_TARGET" = "compute" ]; then
     # tools and RPCs reach a VM orchestrator.
     prepare_compute_config
     start_platformd "${COMPUTE_PLATFORMD_CONFIG}" || abort_no_daemon
+elif [ "$RUN_TARGET" = "pxe" ]; then
+    # PXE target: platformd with the pxe: overlay, so the PXE backend is
+    # built and the PXE RPCs and CLI do not answer SERVICE_NOT_CONFIGURED.
+    prepare_pxe_config
+    start_platformd "${PXE_PLATFORMD_CONFIG}" || abort_no_daemon
 elif [ "$RUN_TARGET" = "proxy" ]; then
     # The proxy suite talks to the shared platformd and also runs gatewayd
     # itself, supervised, to kill its children under load.
@@ -1619,6 +1654,9 @@ if [ "$RUN_TARGET" = "all" ]; then
     DAEMON_FREE_TARGETS=()
     DAEMON_TARGETS=()
     for target in "${SELECTED_TARGETS[@]}"; do
+        if [ -n "${TARGET_OWN_DAEMON[$target]:-}" ]; then
+            continue
+        fi
         if [ -n "${TARGET_NO_DAEMON[$target]:-}" ]; then
             DAEMON_FREE_TARGETS+=("$target")
         else
@@ -1632,6 +1670,21 @@ if [ "$RUN_TARGET" = "all" ]; then
         run_test "$target"
         record_result "$target" "$?"
     done
+
+    # pxe next, on its own daemon: a fresh swtpm (tpm cleared the shared one)
+    # and platformd with the pxe: overlay, its iPXE HTTP server on its own
+    # port (#1896).
+    if [ "$RUN_PXE" = true ]; then
+        echo "=== pxe: restarting platformd with the pxe: overlay ==="
+        stop_platformd
+        if start_swtpm && prepare_pxe_config && start_platformd "${PXE_PLATFORMD_CONFIG}"; then
+            run_test pxe
+            record_result pxe "$?"
+        else
+            echo "--- FAIL: pxe (platformd did not start with the pxe: overlay) ---"
+            record_result pxe 1
+        fi
+    fi
 
     # compute last, on its own daemon: a fresh swtpm (tpm cleared the shared
     # one) and platformd on the local QEMU provider.

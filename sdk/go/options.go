@@ -81,6 +81,12 @@ type Options struct {
 	// with TLSConfig and TLSServerName, with ErrUnsupportedOption.
 	BearerToken string
 
+	// PXEWebhookKey is the HMAC-SHA256 key (pxe.ServiceConfig.WebhookSecret)
+	// the REST transport signs PXEService/WebhookComplete reports with, into
+	// the X-PXE-Webhook-Signature header the machine-facing route verifies.
+	// Empty sends the report unsigned, which an enabled webhook refuses.
+	PXEWebhookKey []byte
+
 	// Timeout is the connection timeout.
 	// Defaults to DefaultTimeout if not set.
 	Timeout time.Duration
@@ -200,6 +206,14 @@ func WithTLSServerName(name string) Option {
 func WithBearerToken(token string) Option {
 	return func(o *Options) {
 		o.BearerToken = token
+	}
+}
+
+// WithPXEWebhookKey sets the HMAC key the REST transport signs PXE
+// install-completion reports (PXEService/WebhookComplete) with.
+func WithPXEWebhookKey(key []byte) Option {
+	return func(o *Options) {
+		o.PXEWebhookKey = append([]byte(nil), key...)
 	}
 }
 

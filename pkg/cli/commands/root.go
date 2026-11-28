@@ -49,6 +49,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/profile"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/provision"
 	proxycmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/proxy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/sdn"
 	securebootcmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/secureboot"
@@ -200,6 +201,7 @@ func init() {
 	rootCmd.AddCommand(profile.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(provision.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(proxycmd.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(pxe.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(registry.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(appsvc.NewSchedulerCommand(getCommonFlags))
 	rootCmd.AddCommand(sdn.NewCommand(getCommonFlags))
