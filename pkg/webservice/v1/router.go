@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -31,7 +30,6 @@ import (
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
-	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
 	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
@@ -727,45 +725,6 @@ func (v1Router *Router) computeImagesRoutes() {
 			r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},
 	)
-}
-
-// bmcProfileTenantGate admits a BMC request only when the session's tenant
-// owns the device profile the path names, or is the system tenant. It
-// fails closed: no profile service, an unparsable or unknown profile, or a
-// profile with no tenant is refused, all with the same 403, before the
-// handler reaches the BMC.
-func (v1Router *Router) bmcProfileTenantGate(next http.Handler) http.Handler {
-	systemTenantID := v1Router.restHandlerRegistry.TenantID()
-	profiles := v1Router.restHandlerRegistry.DeviceProfileService()
-	forbid := func(w http.ResponseWriter, r *http.Request) {
-		v1Router.responseWriter.Error403(w, r, iammw.ErrForbidden{
-			Reason: "caller may not act on this BMC",
-		}, nil)
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		session, ok := iammw.GetSessionFromContext(r.Context())
-		if !ok || session == nil {
-			v1Router.responseWriter.Error401(w, r, iammw.ErrUnauthorized{Reason: "session required"})
-			return
-		}
-		caller := session.TenantID()
-		if systemTenantID != "" && caller == systemTenantID {
-			next.ServeHTTP(w, r)
-			return
-		}
-		id, err := strconv.ParseUint(mux.Vars(r)["profileID"], 10, 64)
-		if err != nil || profiles == nil || caller == "" {
-			forbid(w, r)
-			return
-		}
-		profile, err := profiles.Get(r.Context(), id)
-		if err != nil || profile == nil || profile.TenantID == "" || profile.TenantID != caller {
-			v1Router.logger.Debugf("bmc: tenant %q refused profile %d", caller, id)
-			forbid(w, r)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func (v1Router *Router) eabRoutes() {
