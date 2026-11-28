@@ -57,6 +57,10 @@ const (
 	// ipmiMaxUserSlot is the largest user ID representable in the 6-bit
 	// User ID field of NetFn 0x06 commands.
 	ipmiMaxUserSlot uint8 = 0x3F
+	// ipmiAnonymousUserSlot is IPMI user ID 1, the built-in null (anonymous)
+	// user: its name is fixed and Get User Name reports it empty, so it is
+	// never free for a created account.
+	ipmiAnonymousUserSlot uint8 = 1
 )
 
 // Set User Access change bits (Table 22-22 byte 1).
@@ -221,9 +225,17 @@ func (m *ipmiUserManager) ListUsers(_ context.Context) ([]User, error) {
 // It first reads the slot's name and refuses a populated slot with
 // ErrSlotOccupied, writing nothing, so a rollback never touches an
 // existing account.
+//
+// It refuses slot 1, the built-in anonymous user, with ErrInvalidConfig
+// before any command: its empty name does not mean the slot is free, and a
+// rollback there would disable the anonymous user and revoke its channel
+// access.
 func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memguard.MemoryEnclave) error {
 	if err := validateSlot(u.Slot); err != nil {
 		return err
+	}
+	if u.Slot == ipmiAnonymousUserSlot {
+		return ErrInvalidConfig{Field: "slot", Reason: "slot 1 is the built-in anonymous user; its name is fixed and it cannot hold a created account"}
 	}
 	if err := validateUsername(u.Username); err != nil {
 		return err
