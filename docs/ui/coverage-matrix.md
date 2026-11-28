@@ -67,13 +67,13 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `BMCService.ProvisionStatus` | `GET /bmc/{profileID:[0-9]+}/provision` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
 | `BMCService.GetWebCertificate` | `GET /bmc/{profileID:[0-9]+}/cert` | `(dashboard)/devices/bmc/page.tsx` | - | `bmc.spec.ts` | covered |
 | `BMCService.ReplaceWebCertificate` | `PUT /bmc/{profileID:[0-9]+}/cert` | - | - | - | missing |
-| `BMCService.EnrollBMC` | `POST /bmc/{profileID:[0-9]+}/enroll` | - | - | - | missing |
-| `BMCService.RestoreFactoryCert` | `POST /bmc/{profileID:[0-9]+}/cert/restore` | - | - | - | missing |
-| `BMCService.ListUsers` | `GET /bmc/{profileID:[0-9]+}/users` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
-| `BMCService.CreateUser` | `POST /bmc/{profileID:[0-9]+}/users` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
-| `BMCService.DeleteUser` | `DELETE /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
-| `BMCService.SetUserPassword` | `PUT /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
-| `BMCService.SetUserPrivilege` | `PUT /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege` | `(dashboard)/devices/bmc/accounts/page.tsx` | - | `bmc-accounts.spec.ts` | covered |
+| `BMCService.EnrollBMC` | - | - | - | - | missing |
+| `BMCService.RestoreFactoryCert` | - | - | - | - | missing |
+| `BMCService.ListUsers` | `GET /bmc/{profileID:[0-9]+}/users` | - | - | - | missing |
+| `BMCService.CreateUser` | `POST /bmc/{profileID:[0-9]+}/users` | - | - | - | missing |
+| `BMCService.DeleteUser` | `DELETE /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}` | - | - | - | missing |
+| `BMCService.SetUserPassword` | `PUT /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password` | - | - | - | missing |
+| `BMCService.SetUserPrivilege` | `PUT /bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege` | - | - | - | missing |
 
 ## CAService (`ca.proto`)
 

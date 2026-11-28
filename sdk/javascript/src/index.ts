@@ -85,7 +85,6 @@ export {
   DNSService,
   NTPService,
   BMCService,
-  BMCCertService,
   CapabilitiesService,
   CAPABILITY_REASON_NOT_CONFIGURED,
   CAPABILITY_REASON_UNIMPLEMENTED,
@@ -172,19 +171,6 @@ export type {
   BMCProvisionResult,
 } from './services/bmc-service.js';
 
-export type {
-  BMCPrivilegeName,
-  BMCUser,
-  CreateBMCUserRequest,
-  BMCStatusOK,
-} from './services/bmc-service.js';
-export type {
-  BMCEnrollOptions,
-  BMCCertMeta,
-  BMCCeremonyStep,
-  BMCEnrollResult,
-  BMCRestoreResult,
-} from './services/bmc-cert-service.js';
 export type {
   SwitchPortMode,
   SwitchPortStatus,
