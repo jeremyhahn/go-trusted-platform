@@ -257,6 +257,66 @@ func TestClient_ListPorts(t *testing.T) {
 	})
 }
 
+// A failed read of one listed port must not shrink the strict listing to a
+// partial list with a nil error (#2081 Codex round 8).
+func TestClient_ListPortsStrictPropagatesPortReadError(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("port select fails", func(t *testing.T) {
+		client, server := setupPortTest(t)
+		defer server.Close()
+		defer client.Close()
+		_, err := client.AddPort(ctx, "br-port-test", "eth-strict1")
+		require.NoError(t, err)
+
+		server.mu.RLock()
+		for _, db := range server.databases {
+			db.mu.Lock()
+			delete(db.tables, portTable)
+			db.mu.Unlock()
+		}
+		server.mu.RUnlock()
+
+		ports, err := client.ListPorts(ctx, "br-port-test")
+		require.NoError(t, err)
+		assert.Empty(t, ports)
+
+		_, err = client.ListPortsStrict(ctx, "br-port-test")
+		require.Error(t, err)
+	})
+
+	t.Run("listed port has no row", func(t *testing.T) {
+		client, server := setupPortTest(t)
+		defer server.Close()
+		defer client.Close()
+		port, err := client.AddPort(ctx, "br-port-test", "eth-strict2")
+		require.NoError(t, err)
+		require.NotNil(t, port)
+
+		server.mu.RLock()
+		for _, db := range server.databases {
+			db.mu.RLock()
+			if tbl, ok := db.tables[portTable]; ok {
+				tbl.mu.Lock()
+				for uuid, row := range tbl.rows {
+					if row["name"] == "eth-strict2" {
+						delete(tbl.rows, uuid)
+					}
+				}
+				tbl.mu.Unlock()
+			}
+			db.mu.RUnlock()
+		}
+		server.mu.RUnlock()
+
+		_, err = client.ListPorts(ctx, "br-port-test")
+		require.NoError(t, err)
+
+		_, err = client.ListPortsStrict(ctx, "br-port-test")
+		require.Error(t, err)
+	})
+}
+
 func TestClient_UpdatePort(t *testing.T) {
 	client, server := setupPortTest(t)
 	defer server.Close()

@@ -2219,6 +2219,79 @@ func TestService_QuarantinePendingSurvivesDaemonRestart(t *testing.T) {
 	}
 }
 
+// A discovered device already sits on the quarantine VLAN, so after a failed
+// quarantine write only a durable intent marker tells it apart from a fresh
+// registration. A restarted daemon must still refuse the widening moves
+// (#2081 Codex round 8).
+func TestService_QuarantineIntentSurvivesRestartOnQuarantineVLAN(t *testing.T) {
+	ctx := context.Background()
+	restart := func(t *testing.T, svc *service, store *failingDeviceStore, sw *fakeSwitch) *service {
+		t.Helper()
+		store.mu.Lock()
+		store.failPut = nil
+		store.mu.Unlock()
+		restarted := &service{
+			logger:       logging.DefaultLogger(),
+			stateManager: reloadFrom(t, store),
+			vlanManager:  newSwitchVLAN(t, sw),
+			config:       svc.config,
+		}
+		restarted.initialized.Store(true)
+		return restarted
+	}
+	cases := []struct {
+		name  string
+		widen func(s *service, id string) error
+	}{
+		{"boot", func(s *service, id string) error {
+			return s.UpdateDeviceState(ctx, id, StateBooting, "pxe boot")
+		}},
+		{"authorize", func(s *service, id string) error {
+			return s.AuthorizeDevice(ctx, id, 200)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sw := &fakeSwitch{tags: map[string]int64{}}
+			svc, _, store, id := newStoreBackedService(t, StateQuarantined)
+			svc.vlanManager = newSwitchVLAN(t, sw)
+			setStoredDevice(t, svc, store, id, StateDiscovered, svc.config.QuarantineVLAN,
+				func(d *DeviceInfo) bool { return d.State == StateQuarantined })
+			device, err := svc.stateManager.Get(id)
+			require.NoError(t, err)
+			port := device.PortID
+
+			require.Error(t, svc.QuarantineDevice(ctx, id, "posture failed"))
+			require.Equal(t, int64(svc.config.QuarantineVLAN), sw.tag(port))
+
+			restarted := restart(t, svc, store, sw)
+			err = tc.widen(restarted, id)
+			var refused ErrInvalidStateTransition
+			require.ErrorAs(t, err, &refused)
+			assert.Equal(t, int64(svc.config.QuarantineVLAN), sw.tag(port),
+				"the widening move must not reconnect the device")
+			stored, err := reloadFrom(t, store).Get(id)
+			require.NoError(t, err)
+			assert.Equal(t, StateDiscovered, stored.State)
+		})
+	}
+
+	t.Run("unmarked registration still boots", func(t *testing.T) {
+		sw := &fakeSwitch{tags: map[string]int64{}}
+		svc, _, store, id := newStoreBackedService(t, StateQuarantined)
+		svc.vlanManager = newSwitchVLAN(t, sw)
+		setStoredDevice(t, svc, store, id, StateDiscovered, svc.config.QuarantineVLAN, nil)
+		device, err := svc.stateManager.Get(id)
+		require.NoError(t, err)
+		sw.mu.Lock()
+		sw.tags[device.PortID] = int64(svc.config.QuarantineVLAN)
+		sw.mu.Unlock()
+
+		restarted := restart(t, svc, store, sw)
+		require.NoError(t, restarted.UpdateDeviceState(ctx, id, StateBooting, "pxe boot"))
+	})
+}
+
 // A failed transition write must not consume the retry (#2081 Codex P1).
 func TestService_RetryDevice_FailedTransitionWriteKeepsRetry(t *testing.T) {
 	svc, _, store, id := newStoreBackedService(t, StateQuarantined)

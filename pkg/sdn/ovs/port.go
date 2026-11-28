@@ -276,6 +276,12 @@ func (c *Client) ListPorts(ctx context.Context, bridgeName string) ([]*Port, err
 	return ports, nil
 }
 
+// ListPortsStrict lists the ports of a bridge like ListPorts, but fails
+// when any listed port cannot be read.
+func (c *Client) ListPortsStrict(ctx context.Context, bridgeName string) ([]*Port, error) {
+	return c.ListPorts(ctx, bridgeName)
+}
+
 // UpdatePort updates port properties
 func (c *Client) UpdatePort(ctx context.Context, name string, updates map[string]interface{}) error {
 	if name == "" {

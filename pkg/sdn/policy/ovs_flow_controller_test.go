@@ -15,6 +15,7 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -444,6 +445,9 @@ type portUpdateRecorder struct {
 	err     error
 	ports   map[string][]*ovs.Port
 	listErr error
+	// strictErr fails only the strict listing, which reports a failed
+	// read of an individual port (#2081 Codex round 8).
+	strictErr error
 }
 
 func (r *portUpdateRecorder) ListPorts(_ context.Context, bridge string) ([]*ovs.Port, error) {
@@ -451,6 +455,13 @@ func (r *portUpdateRecorder) ListPorts(_ context.Context, bridge string) ([]*ovs
 		return nil, r.listErr
 	}
 	return r.ports[bridge], nil
+}
+
+func (r *portUpdateRecorder) ListPortsStrict(ctx context.Context, bridge string) ([]*ovs.Port, error) {
+	if r.strictErr != nil {
+		return nil, r.strictErr
+	}
+	return r.ListPorts(ctx, bridge)
 }
 
 func TestOVSFlowController_PortOnBridge(t *testing.T) {
@@ -507,6 +518,21 @@ func TestOVSFlowController_PortAccessVLAN(t *testing.T) {
 	failing := &OVSFlowController{client: &portUpdateRecorder{listErr: assert.AnError}}
 	_, ok, err = failing.PortAccessVLAN(ctx, "br0", "tap0")
 	assert.ErrorIs(t, err, assert.AnError)
+	assert.False(t, ok)
+}
+
+// A failed read of one port is an error, never "port not found": the
+// caller would treat the unknown placement as permission to widen (#2081
+// Codex round 8).
+func TestOVSFlowController_PortAccessVLANPropagatesStrictError(t *testing.T) {
+	ctx := context.Background()
+	readErr := errors.New("port row read failed")
+	c := &OVSFlowController{client: &portUpdateRecorder{
+		ports:     map[string][]*ovs.Port{"br0": {}},
+		strictErr: readErr,
+	}}
+	_, ok, err := c.PortAccessVLAN(ctx, "br0", "tap0")
+	assert.ErrorIs(t, err, readErr)
 	assert.False(t, ok)
 }
 
