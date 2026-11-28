@@ -188,8 +188,11 @@ func TestRegisterInvitedUser_MirrorFailureLeavesInvitationPending(t *testing.T) 
 	mirror := &fakeIAMMirror{failFor: map[string]error{invitation.Email: assert.AnError}}
 	svc, userService, invitationService := newMirroredInvitedRegistration(t, mirror, invitation)
 	userService.On("Delete", mock.Anything, mock.AnythingOfType("uint64")).Return(nil)
+	user := newTestUser(invitation.Email)
+	invitationService.On("GetByToken", mock.Anything, invitation.Token).Return(invitation, nil)
+	userService.On("Get", mock.Anything, user.ID).Return(user, nil)
 
-	_, err = svc.RegisterInvitedUser(context.Background(), newTestUser(invitation.Email), invitation.Token)
+	_, err = svc.RegisterInvitedUser(context.Background(), user, invitation.Token)
 	var mirrorErr ErrIAMMirrorFailed
 	require.ErrorAs(t, err, &mirrorErr)
 	assert.Equal(t, "tenant-a", mirrorErr.TenantID)
@@ -792,8 +795,10 @@ func TestRegisterInvitedUser_RollbackOutlivesACanceledRequest(t *testing.T) {
 					deleteCtxErr = dctx.Err()
 					_, deleteHasDeadline = dctx.Deadline()
 				}).Return(nil)
+			user := newTestUser(invitation.Email)
+			userService.On("Get", mock.Anything, user.ID).Return(user, nil)
 
-			result, err := svc.RegisterInvitedUser(ctx, newTestUser(invitation.Email), invitation.Token)
+			result, err := svc.RegisterInvitedUser(ctx, user, invitation.Token)
 
 			assert.Nil(t, result)
 			require.Error(t, err)
