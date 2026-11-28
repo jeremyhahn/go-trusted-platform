@@ -15,7 +15,6 @@ package quicbaas
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
@@ -363,18 +362,13 @@ func (d *DeviceProfileDAO) FindByExactMAC(ctx context.Context, mac string) (*ent
 // 1. Exact EK serial match
 // 2. Exact MAC address match
 // 3. Prefix match rules (MAC prefix, serial prefix, model)
-// Returns ErrNotFoundByIndex if no matching profile is found. Only a step
-// that finds no record falls through to the next; a storage failure at any
-// step is returned as is.
+// Returns ErrNotFoundByIndex if no matching profile is found.
 func (d *DeviceProfileDAO) FindConfigForDevice(ctx context.Context, ekSerial, mac string) (*entities.DeviceProfile, error) {
 	// Try exact EK serial match first
 	if ekSerial != "" {
 		profile, err := d.FindByEKSerial(ctx, ekSerial)
 		if err == nil {
 			return profile, nil
-		}
-		if !isProfileNotFound(err) {
-			return nil, err
 		}
 	}
 
@@ -384,9 +378,6 @@ func (d *DeviceProfileDAO) FindConfigForDevice(ctx context.Context, ekSerial, ma
 		if err == nil {
 			return profile, nil
 		}
-		if !isProfileNotFound(err) {
-			return nil, err
-		}
 	}
 
 	// Fall back to prefix match rules using MAC
@@ -395,16 +386,7 @@ func (d *DeviceProfileDAO) FindConfigForDevice(ctx context.Context, ekSerial, ma
 		if err == nil {
 			return profile, nil
 		}
-		if !isProfileNotFound(err) {
-			return nil, err
-		}
 	}
 
 	return nil, ErrNotFoundByIndex{EntityType: entityTypeDeviceProfile, IndexField: "ConfigForDevice", Value: "no match"}
-}
-
-// isProfileNotFound reports whether a profile lookup step found no record,
-// as opposed to failing in storage.
-func isProfileNotFound(err error) bool {
-	return errors.As(err, &ErrNotFoundByIndex{}) || errors.Is(err, datastore.ErrRecordNotFound)
 }

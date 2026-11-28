@@ -30,7 +30,7 @@ import (
 // requires, and connects the SDK's QUIC adapter as a caller holding scopes.
 func connectPXEQUIC(t *testing.T, server platformv1.PXEServiceServer, scopes ...string) grpc.ClientConnInterface {
 	t.Helper()
-	validator := &quicScopeValidator{scopes: scopes, tenant: pxeSDKSystemTenant}
+	validator := &quicScopeValidator{scopes: scopes}
 	handler, err := NewQUICServiceHandler(logging.DefaultLogger(),
 		WithQUICAuthMiddleware(quic.NewAuthMiddleware(quic.WithQUICTokenValidator(validator))))
 	if err != nil {

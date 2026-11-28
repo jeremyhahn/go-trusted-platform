@@ -689,54 +689,6 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 			}
 			match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBVlanVid, raw, mask)
 
-		case "vlan_tci":
-			// The 802.1Q TCI, value[/mask]. Its CFI bit (0x1000) is what
-			// OpenFlow 1.3 calls OFPVID_PRESENT and its low 12 bits are the
-			// VID, so the VID and CFI bits map onto OXM VLAN_VID as they
-			// are: vlan_tci=0x0000/0x1fff (an untagged frame) is
-			// VLAN_VID=OFPVID_NONE. The PCP bits (0xe000) become an exact
-			// VLAN_PCP on a tagged match; OXM has no masked PCP, so a
-			// partial PCP mask, or a PCP on a frame not known to be
-			// tagged, is refused rather than dropped. The one exception
-			// is PCP 0 with the CFI bit masked and clear: the frame is
-			// known untagged and its TCI reads 0. PCP 0 without the CFI
-			// bit in the mask is refused too, since dropping it would
-			// leave a rule that matches every frame (#1896 F49).
-			tci, tciMask, err := parseValueMask(value, 16)
-			if err != nil {
-				return &MessageError{Msg: fmt.Sprintf("invalid vlan_tci: %s", value)}
-			}
-			pcpMask := tciMask & 0xe000
-			tagged := tciMask&0x1000 != 0 && tci&0x1000 != 0
-			matchPCP := false
-			switch {
-			case pcpMask == 0:
-			case pcpMask == 0xe000 && tagged:
-				matchPCP = true
-			case pcpMask == 0xe000 && tciMask&0x1000 != 0 && tci&0xf000 == 0:
-				// A known untagged frame's TCI reads 0, PCP included.
-			default:
-				return &MessageError{Msg: fmt.Sprintf("unsupported vlan_tci PCP match: %s", value)}
-			}
-			// tagged needs the CFI bit in the mask, so a PCP match always
-			// has a VLAN_VID to follow, as its OXM prerequisite.
-			vidMask := tciMask & 0x1fff
-			if vidMask == 0 {
-				break
-			}
-			raw := make([]byte, 2)
-			openflow.ByteOrder.PutUint16(raw, uint16(tci&vidMask))
-			var mask []byte
-			if vidMask != 0x1fff {
-				mask = make([]byte, 2)
-				openflow.ByteOrder.PutUint16(mask, uint16(vidMask))
-			}
-			match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBVlanVid, raw, mask)
-			if matchPCP {
-				match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBVlanPcp,
-					[]byte{byte(tci >> 13)}, nil)
-			}
-
 		case "nw_src":
 			// Check for CIDR notation (e.g., 192.168.1.0/24)
 			if strings.Contains(value, "/") {
@@ -777,13 +729,27 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 			match.AddIPProto(uint8(proto))
 
 		case "tp_src":
-			if err := addTransportPortMatch(match, "tp_src", value, ipProto); err != nil {
-				return err
+			port, err := strconv.ParseUint(value, 10, 16)
+			if err != nil {
+				return &MessageError{Msg: fmt.Sprintf("invalid tp_src: %s", value)}
+			}
+			// Use correct method based on protocol (17=UDP, 6=TCP)
+			if ipProto == 17 {
+				match.AddUDPSrc(uint16(port))
+			} else {
+				match.AddTCPSrc(uint16(port))
 			}
 
 		case "tp_dst":
-			if err := addTransportPortMatch(match, "tp_dst", value, ipProto); err != nil {
-				return err
+			port, err := strconv.ParseUint(value, 10, 16)
+			if err != nil {
+				return &MessageError{Msg: fmt.Sprintf("invalid tp_dst: %s", value)}
+			}
+			// Use correct method based on protocol (17=UDP, 6=TCP)
+			if ipProto == 17 {
+				match.AddUDPDst(uint16(port))
+			} else {
+				match.AddTCPDst(uint16(port))
 			}
 
 		case "ct_state":
@@ -927,48 +893,6 @@ func parseValueMask(spec string, bits int) (uint64, uint64, error) {
 		return 0, 0, err
 	}
 	return value, mask, nil
-}
-
-// addTransportPortMatch adds a tp_src or tp_dst match (key) to match. The
-// value is a port, or value/mask in any base (tp_dst=0x0400/0xfc00, as OVS
-// takes them); the field is UDP's when ipProto is 17 and TCP's otherwise. A
-// zero mask, or a value with bits outside its mask, is refused.
-func addTransportPortMatch(match *openflow.Match, key, value string, ipProto uint8) error {
-	port, mask, err := parseValueMask(value, 16)
-	if err != nil || mask == 0 || port&^mask != 0 {
-		return &MessageError{Msg: fmt.Sprintf("invalid %s: %s", key, value)}
-	}
-	src := key == "tp_src"
-	if mask == 0xffff {
-		switch {
-		case ipProto == 17 && src:
-			match.AddUDPSrc(uint16(port))
-		case ipProto == 17:
-			match.AddUDPDst(uint16(port))
-		case src:
-			match.AddTCPSrc(uint16(port))
-		default:
-			match.AddTCPDst(uint16(port))
-		}
-		return nil
-	}
-	var field uint8
-	switch {
-	case ipProto == 17 && src:
-		field = uint8(openflow.OFPXMTOFBUDPSrc)
-	case ipProto == 17:
-		field = uint8(openflow.OFPXMTOFBUDPDst)
-	case src:
-		field = uint8(openflow.OFPXMTOFBTCPSrc)
-	default:
-		field = uint8(openflow.OFPXMTOFBTCPDst)
-	}
-	raw := make([]byte, 2)
-	openflow.ByteOrder.PutUint16(raw, uint16(port))
-	rawMask := make([]byte, 2)
-	openflow.ByteOrder.PutUint16(rawMask, uint16(mask))
-	match.AddField(openflow.OFPXMCOpenflowBasic, field, raw, rawMask)
-	return nil
 }
 
 // ctStateBits maps ct_state bit names from the ovs-ofctl match grammar to
@@ -1163,16 +1087,10 @@ func formatBasicMatchField(field openflow.OXMField) string {
 			return fmt.Sprintf("nw_proto=%d", field.Value[0])
 		}
 	case openflow.OFPXMTOFBTCPSrc, openflow.OFPXMTOFBUDPSrc:
-		if field.HasMask && len(field.Value) == 2 && len(field.Mask) == 2 {
-			return fmt.Sprintf("tp_src=0x%04x/0x%04x", openflow.ByteOrder.Uint16(field.Value), openflow.ByteOrder.Uint16(field.Mask))
-		}
 		if len(field.Value) == 2 {
 			return fmt.Sprintf("tp_src=%d", openflow.ByteOrder.Uint16(field.Value))
 		}
 	case openflow.OFPXMTOFBTCPDst, openflow.OFPXMTOFBUDPDst:
-		if field.HasMask && len(field.Value) == 2 && len(field.Mask) == 2 {
-			return fmt.Sprintf("tp_dst=0x%04x/0x%04x", openflow.ByteOrder.Uint16(field.Value), openflow.ByteOrder.Uint16(field.Mask))
-		}
 		if len(field.Value) == 2 {
 			return fmt.Sprintf("tp_dst=%d", openflow.ByteOrder.Uint16(field.Value))
 		}

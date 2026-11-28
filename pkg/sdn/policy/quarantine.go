@@ -71,9 +71,8 @@
 package policy
 
 import (
+	"fmt"
 	"net"
-
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 )
 
 const (
@@ -418,6 +417,6 @@ func (g *QuarantineFlowGenerator) generateDefaultDropRule(portID string) FlowRul
 		Priority: g.generator.BasePriority + priorityDropOffset,
 		Match:    g.generator.buildMatch(match),
 		Actions:  "drop",
-		Cookie:   zoneflows.QuarantineCookie,
+		Cookie:   fmt.Sprintf("quarantine:%s", portID),
 	}
 }

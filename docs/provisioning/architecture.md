@@ -114,28 +114,14 @@ machine boots (provisioning zone: enrollment traffic only)
    │
    ├─ PollSession → config delivered
    ├─ install (SignDigest for Secure Boot; FIDO2 unlock enrolled)
-   ├─ IDevID enrolment (fingerprint recorded)
-   ├─ WebhookComplete (caller's mTLS leaf verified against the
-   │                   recorded IDevID fingerprint, ruling 673)
+   ├─ WebhookComplete
    │
-   └─ port authenticates → production zone
+   └─ IDevID enrolment → port authenticates → production zone
                                             → attestation
 ```
 
-The IDevID fingerprint recorded at enrolment is advisory until the webhook:
-a re-enrolment before install completion replaces the recorded fingerprint;
-once the install-complete webhook has presented it, the fingerprint is binding
-and a later enrolment does not change it (owner ruling 1234).
-
 Two states have no forward path without an external decision: **pending**
 (needs fulfilment) and **quarantined** (needs an operator).
-
-A state transition that moves the device's VLAN fails closed. When the SDN
-flow manager cannot enforce the new VLAN, the transition is not recorded:
-the device keeps its earlier state, and the RPC that asked for the
-transition (for example `UpdateState`) returns the
-enforcement error. A device is never recorded in a state whose zone it is
-not in.
 
 ## What this feature deliberately does not do
 
@@ -146,8 +132,6 @@ not in.
 - **It does not establish trust.** It gets a machine to the point where
   attestation can.
 - **It does not put a Secure Boot signing key on the machine.**
-- **It does not keep PXE device administration API-only.** The
-  `platformctl pxe` group ([cli.md](cli.md) §5) registers, removes, looks up
-  by MAC, lists and inspects devices, sets their state and enrolment,
-  authorizes, quarantines and retries them, reads their events, and shows,
-  starts and stops the PXE service.
+- **It does not offer PXE device lifecycle management from the CLI** — no
+  `platformctl pxe` group exists ([cli.md](cli.md) §5), which is a gap rather
+  than a decision.

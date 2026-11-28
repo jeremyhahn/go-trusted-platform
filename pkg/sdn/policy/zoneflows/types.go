@@ -56,9 +56,8 @@ type FlowRule struct {
 }
 
 // ZoneFlowConfig is the aggregate configuration for the zone flow generators.
-// The provisioning server address lists are allowlists: an empty list opens
-// no allowance (fail closed), the same rule as the boot ports, because a
-// destination-unrestricted allow would outrank the inter-zone denies.
+// All IP slices default to "allow all" when empty, matching the provisioning
+// and quarantine generator conventions.
 type ZoneFlowConfig struct {
 	// BridgeName is the OVS bridge that receives the flows.
 	BridgeName string
@@ -82,13 +81,13 @@ type ZoneFlowConfig struct {
 
 // ProvisioningConfig configures the provisioning zone flow generator.
 type ProvisioningConfig struct {
-	// ACMEServerIPs are the allowed ACME/CA server addresses. Empty = no allowance (fail closed).
+	// ACMEServerIPs are the allowed ACME/CA server addresses. Empty = allow all.
 	ACMEServerIPs []net.IP
 
-	// DNSServerIPs are the allowed DNS server addresses. Empty = no allowance (fail closed).
+	// DNSServerIPs are the allowed DNS server addresses. Empty = allow all.
 	DNSServerIPs []net.IP
 
-	// PackageRepoIPs are the allowed package repository addresses. Empty = no allowance (fail closed).
+	// PackageRepoIPs are the allowed package repository addresses. Empty = allow all.
 	PackageRepoIPs []net.IP
 
 	// Gateway is the gateway for the provisioning network.
@@ -96,15 +95,6 @@ type ProvisioningConfig struct {
 
 	// AllowICMP enables ICMP within the provisioning zone.
 	AllowICMP bool
-
-	// BootHTTPPorts are the TCP ports the PXE boot server serves boot
-	// scripts and payloads on (the iPXE HTTP port); each is allowed at
-	// TFTP priority, both families, like the TFTP rule.
-	BootHTTPPorts []uint16
-
-	// BootServerIPs are the only destinations the boot ports
-	// (BootHTTPPorts) are open to; empty means the boot ports stay closed.
-	BootServerIPs []net.IP
 }
 
 // QuarantineConfig configures the quarantine zone flow generator.

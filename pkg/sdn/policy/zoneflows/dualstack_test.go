@@ -137,9 +137,9 @@ func TestCompileMatrixRules_DualStackGolden(t *testing.T) {
 		assert.Contains(t, got, w)
 	}
 	// control-plane → backup dns permits exist per family and per port.
-	assert.Contains(t, got, FlowRule{Table: 0, Priority: 210, Match: "dl_vlan=100,dl_type=0x0800,nw_proto=17,nw_dst=10.0.200.0/24,tp_dst=53", Actions: "normal"})
-	assert.Contains(t, got, FlowRule{Table: 0, Priority: 210, Match: "dl_vlan=100,dl_type=0x86dd,nw_proto=17,ipv6_dst=2001:db8:200::/64,tp_dst=53", Actions: "normal"})
-	assert.Contains(t, got, FlowRule{Table: 0, Priority: 210, Match: "dl_vlan=100,dl_type=0x86dd,nw_proto=6,ipv6_dst=2001:db8:200::/64,tp_dst=443", Actions: "normal"})
+	assert.Contains(t, got, FlowRule{Table: 0, Priority: 100, Match: "dl_vlan=100,dl_type=0x0800,nw_proto=17,nw_dst=10.0.200.0/24,tp_dst=53", Actions: "normal"})
+	assert.Contains(t, got, FlowRule{Table: 0, Priority: 100, Match: "dl_vlan=100,dl_type=0x86dd,nw_proto=17,ipv6_dst=2001:db8:200::/64,tp_dst=53", Actions: "normal"})
+	assert.Contains(t, got, FlowRule{Table: 0, Priority: 100, Match: "dl_vlan=100,dl_type=0x86dd,nw_proto=6,ipv6_dst=2001:db8:200::/64,tp_dst=443", Actions: "normal"})
 }
 
 func TestCompileStatefulMatrixRules_DualStack(t *testing.T) {

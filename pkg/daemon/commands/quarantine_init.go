@@ -16,14 +16,12 @@ package commands
 import (
 	"context"
 	"log/slog"
-	"net"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
@@ -236,7 +234,7 @@ func initSDNPolicy(a *app.App, slogger *slog.Logger) *sdnPolicyComponents {
 	// observed and logged, and the terminal stays normal.
 	terminal := pipelineTerminalForBridge(context.Background(), concreteClient, bridgeName, slogger)
 
-	zfm, err := newSharedZoneFlowManager(policy.ZoneFlowManagerConfig{
+	zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
 		BridgeName:     bridgeName,
 		FlowController: fc,
 		PortController: fc,
@@ -276,25 +274,6 @@ func initSDNPolicy(a *app.App, slogger *slog.Logger) *sdnPolicyComponents {
 		ZoneFlowManager: zfm,
 		ResolvedZones:   resolvedZones,
 	}
-}
-
-// newSharedZoneFlowManager builds the zone flow manager initSDNPolicy
-// shares with the policy engine, the quarantine loop and the PXE backend.
-// It compiles the inter-zone matrix of cfg.Zones into cfg.Matrix: the
-// AllowTo paths of the resolved zones are part of enforcement, and a
-// manager with the zero matrix denies every inter-zone pair on every port
-// it moves (#1896 F48).
-func newSharedZoneFlowManager(cfg policy.ZoneFlowManagerConfig) (*policy.ZoneFlowManager, error) {
-	if cfg.GeneratorSet == nil {
-		// Quarantined nodes resolve through the per-VRF host-services address only.
-		cfg.GeneratorSet = zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
-			BridgeName: cfg.BridgeName,
-			Terminal:   cfg.Terminal,
-			Quarantine: zoneflows.QuarantineConfig{DNSServerIP: net.IP(netplan.HostServices4.AsSlice())},
-		})
-	}
-	cfg.Matrix = zone.CompileMatrix(cfg.Zones)
-	return policy.NewZoneFlowManager(cfg)
 }
 
 // wireQuarantineObserver constructs the QuarantineManager on the shared SDN

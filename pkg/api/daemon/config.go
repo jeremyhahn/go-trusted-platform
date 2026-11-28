@@ -25,11 +25,9 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
@@ -38,17 +36,6 @@ import (
 type Config struct {
 	// Application instance
 	App *app.App
-
-	// PXE is the optional `pxe:` section (#1694), off by default: nil or
-	// enabled: false builds no PXE backend, and every PXE RPC answers
-	// SERVICE_NOT_CONFIGURED. An invalid enabled section fails daemon start.
-	PXE *pxe.DaemonConfig `yaml:"pxe,omitempty" json:"pxe,omitempty"`
-
-	// PXEFlowManager is the SDN zone flow manager the PXE backend's VLAN
-	// integration moves devices with (quarantine, provisioning, authorized).
-	// serve hands over the attestation SDN policy's manager; an enabled
-	// `pxe:` section without one fails daemon start.
-	PXEFlowManager *policy.ZoneFlowManager `yaml:"-" json:"-"`
 
 	// Logger for daemon operations
 	Logger *logging.Logger

@@ -21,8 +21,6 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -407,109 +405,41 @@ func TestServiceConfig_WithAllFieldsSet(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestServiceConfig_WebhookSecretMessageNamesTheHMAC: the secret is now the
-// key the webhook verifies every report with (#240), so the message says
-// what it is for instead of warning that it protects nothing.
-func TestServiceConfig_WebhookSecretMessageNamesTheHMAC(t *testing.T) {
+// TestServiceConfig_WebhookSecretMessageSaysItIsNotEnforced guards the honesty
+// of the validation message, not the validation.
+//
+// The requirement itself is a placeholder: WebhookSecret is read nowhere but
+// the check that demands it, and POST /api/v1/pxe/webhook/complete
+// authenticates no caller (#238). An operator who sets a secret because the
+// platform refused to start without one has been told the endpoint is
+// protected. It is not.
+//
+// So the message must keep saying so. If someone shortens it back to a bare
+// "WebhookSecret is required" -- a reasonable-looking tidy-up -- the false
+// assurance returns, and nothing else in the tree would notice. That is what
+// this test exists to stop.
+//
+// Delete this test only together with the requirement, or when the secret is
+// actually enforced.
+func TestServiceConfig_WebhookSecretMessageSaysItIsNotEnforced(t *testing.T) {
 	cfg := testServiceConfig()
 	cfg.BridgeName = "br-int"
 	cfg.WebhookEnabled = true
 	cfg.WebhookSecret = ""
 
 	err := cfg.Validate()
-	require.Error(t, err)
+	assert.Error(t, err)
 
 	msg := err.Error()
-	assert.Contains(t, msg, "HMAC")
-	assert.NotContains(t, msg, "not yet enforced")
-}
-
-// TestDaemonPXEConfigDefaultsOff pins the daemon's pxe: section (#1694): no
-// section or enabled: false names no backend, a valid enabled section builds
-// a ServiceConfig that passes Validate, and an invalid enabled section is a
-// typed error, never a silent fallback to no backend.
-func TestDaemonPXEConfigDefaultsOff(t *testing.T) {
-	plan, err := netplan.New(netplan.Environment{ID: 4}, zone.Defaults())
-	require.NoError(t, err)
-
-	t.Run("no section", func(t *testing.T) {
-		var section *DaemonConfig
-		cfg, err := section.ToServiceConfig(plan)
-		require.NoError(t, err)
-		assert.Nil(t, cfg)
-	})
-
-	t.Run("zero value and enabled false", func(t *testing.T) {
-		for _, section := range []*DaemonConfig{{}, {Enabled: false, BridgeName: "br-pxe"}} {
-			cfg, err := section.ToServiceConfig(plan)
-			require.NoError(t, err)
-			assert.Nil(t, cfg)
-		}
-	})
-
-	t.Run("valid enabled section", func(t *testing.T) {
-		section := &DaemonConfig{
-			Enabled:           true,
-			BridgeName:        "br-pxe",
-			DefaultISORef:     "iso/custom:1",
-			MaxRetries:        5,
-			InstallTimeout:    time.Hour,
-			EnrollmentTimeout: 2 * time.Minute,
-			WebhookEnabled:    true,
-			WebhookSecret:     "s3cret",
-			LocalFilesDir:     "/srv/pxe/files",
-			InstallsDir:       "/srv/pxe/installs",
-			FirmwareDir:       "/srv/pxe/firmware",
-			FirmwareOffline:   true,
-			BootEntries:       []ipxe.BootEntry{{Name: "default", Kernel: "http://example.com/kernel"}},
-		}
-		cfg, err := section.ToServiceConfig(plan)
-		require.NoError(t, err)
-		require.NotNil(t, cfg)
-		require.NoError(t, cfg.Validate())
-		quarantine, err := plan.MustZone(zone.ZoneQuarantine)
-		require.NoError(t, err)
-		assert.Equal(t, quarantine.VLAN, cfg.QuarantineVLAN)
-		assert.Equal(t, "br-pxe", cfg.BridgeName)
-		assert.Equal(t, "iso/custom:1", cfg.DefaultISORef)
-		assert.Equal(t, 5, cfg.MaxRetries)
-		assert.Equal(t, time.Hour, cfg.InstallTimeout)
-		assert.Equal(t, 2*time.Minute, cfg.EnrollmentTimeout)
-		assert.True(t, cfg.WebhookEnabled)
-		assert.Equal(t, "s3cret", cfg.WebhookSecret)
-		assert.Equal(t, "/srv/pxe/files", cfg.IPXEConfig.LocalFilesDir)
-		assert.Equal(t, "/srv/pxe/installs", cfg.IPXEConfig.InstallsDir)
-		assert.Equal(t, "/srv/pxe/firmware", cfg.IPXEConfig.FirmwareDir)
-		assert.True(t, cfg.IPXEConfig.FirmwareOffline)
-		assert.Len(t, cfg.IPXEConfig.BootEntries, 1)
-	})
-
-	t.Run("enabled section keeps the defaults it does not name", func(t *testing.T) {
-		cfg, err := (&DaemonConfig{Enabled: true, BridgeName: "br-pxe"}).ToServiceConfig(plan)
-		require.NoError(t, err)
-		require.NotNil(t, cfg)
-		assert.Equal(t, DefaultISORef, cfg.DefaultISORef)
-		assert.Equal(t, DefaultMaxRetries, cfg.MaxRetries)
-		assert.Equal(t, DefaultInstallTimeout, cfg.InstallTimeout)
-		assert.Equal(t, DefaultEnrollmentTimeout, cfg.EnrollmentTimeout)
-	})
-
-	t.Run("invalid enabled section", func(t *testing.T) {
-		cfg, err := (&DaemonConfig{Enabled: true}).ToServiceConfig(plan)
-		require.Error(t, err)
-		assert.Nil(t, cfg)
-		assert.True(t, errors.Is(err, ErrInvalidConfig), "missing bridge-name: %v", err)
-
-		cfg, err = (&DaemonConfig{Enabled: true, BridgeName: "br-pxe", WebhookEnabled: true}).ToServiceConfig(plan)
-		require.Error(t, err)
-		assert.Nil(t, cfg)
-		assert.True(t, errors.Is(err, ErrInvalidConfig), "webhook without a secret: %v", err)
-	})
-
-	t.Run("enabled section without a network plan", func(t *testing.T) {
-		cfg, err := (&DaemonConfig{Enabled: true, BridgeName: "br-pxe"}).ToServiceConfig(nil)
-		assert.Nil(t, cfg)
-		var want ErrNetworkPlanRequired
-		assert.True(t, errors.As(err, &want), "got %v", err)
-	})
+	for _, want := range []string{
+		"not yet enforced",
+		"authenticates no caller",
+		"#238",
+	} {
+		assert.Containsf(t, msg, want,
+			"the validation message must not imply the webhook is protected; "+
+				"it is missing %q. See #238 -- if the secret is now genuinely "+
+				"enforced, remove this test with the placeholder, do not weaken it",
+			want)
+	}
 }

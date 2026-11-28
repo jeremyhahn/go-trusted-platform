@@ -537,7 +537,7 @@ func TestApplyPortClassFlows_HypervisorTrunk(t *testing.T) {
 	joined := fmt.Sprint(flows)
 	// Tagged zones match their VLAN; the native zone (405) arrives untagged
 	// in the flow tables, so its template matches untagged frames instead.
-	for _, vid := range []string{"dl_vlan=401", "dl_vlan=404", "dl_vlan=406", "in_port=1,vlan_tci=0x0000/0x1fff"} {
+	for _, vid := range []string{"dl_vlan=401", "dl_vlan=404", "dl_vlan=406", "in_port=eth0,vlan_tci=0x0000/0x1fff"} {
 		assert.Contains(t, joined, vid)
 	}
 	assert.NotContains(t, joined, "dl_vlan=405", "the native zone never arrives tagged")
@@ -670,8 +670,7 @@ func TestApplyZoneFlows_AccessPortMatchesUntagged(t *testing.T) {
 	// Each recorded flow reads "p=<priority> <match> -> <actions>".
 	var portTemplate, portMatrix int
 	for _, f := range flows {
-		// The fake's GetOFPort numbers every port 1.
-		if !strings.Contains(f, " in_port=1,") {
+		if !strings.Contains(f, " in_port=eth0,") {
 			continue
 		}
 		assert.Contains(t, f, "vlan_tci=0x0000/0x1fff", f)

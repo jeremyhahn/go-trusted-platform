@@ -133,11 +133,6 @@ type DeviceInfo struct {
 	// CertificateSerial is the serial number of the certificate after enrollment
 	CertificateSerial string `json:"certificate_serial,omitempty" yaml:"certificate_serial,omitempty"`
 
-	// IDevIDFingerprint is the lower-case hex SHA-256 of the device's IDevID
-	// certificate (DER), stored at enrolment. The install-completion webhook
-	// verifies its caller's mTLS leaf against it (ruling 70, ruling 673).
-	IDevIDFingerprint string `json:"idevid_fingerprint,omitempty" yaml:"idevid_fingerprint,omitempty"`
-
 	// CurrentVLAN is the VLAN the device is currently assigned to
 	CurrentVLAN uint16 `json:"current_vlan" yaml:"current_vlan"`
 

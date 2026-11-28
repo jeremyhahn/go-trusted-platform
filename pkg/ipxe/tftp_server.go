@@ -111,10 +111,6 @@ func (s *TFTPServer) Start(ctx context.Context, bound chan<- struct{}) error {
 
 	// Create TFTP server with read handler
 	s.server = tftp.NewServer(s.readHandler, nil)
-	// Serve every transfer from the listening port, not a fresh ephemeral
-	// one, so the provisioning zone opens UDP 69 to the boot server and
-	// nothing else.
-	s.server.EnableSinglePort()
 	s.server.SetTimeout(tftpTimeout)
 
 	s.logger.Info("TFTP server starting",

@@ -647,7 +647,6 @@ func TestHTTPServer_handleProxy_ServerReturnsError(t *testing.T) {
 	pool := x509.NewCertPool()
 	pool.AddCert(testServer.Certificate())
 	cfg.ProxyCACertPool = pool
-	cfg.proxyAllowPrivateDestinations = true
 	server := NewHTTPServer(cfg, logging.DefaultLogger())
 
 	// Extract host from test server URL

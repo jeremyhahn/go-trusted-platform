@@ -19,7 +19,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -200,47 +199,6 @@ func TestIntegrationRunner_ISOVMTestsRunInTheirOwnTarget(t *testing.T) {
 		out, err := runIntegrationRunner(t, "go-test-args", c.target)
 		require.NoError(t, err, out)
 		require.Equal(t, c.want, strings.Fields(out), "go test arguments of %s", c.target)
-	}
-}
-
-// TestIntegrationRunner_PXERunsInALegOnItsOwnDaemon pins the pxe leg
-// (#1896): pxe is in ALL_TARGETS and in exactly one leg, a leg without tpm,
-// and it runs after the shared-daemon suites on a platformd restarted with
-// the pxe: overlay, never on the shared daemon, which carries no pxe: section.
-func TestIntegrationRunner_PXERunsInALegOnItsOwnDaemon(t *testing.T) {
-	listing, err := runIntegrationRunner(t, "legs")
-	require.NoError(t, err, listing)
-	lines := strings.Split(strings.TrimSpace(listing), "\n")
-	require.NotEmpty(t, lines)
-	all := strings.Fields(lines[0])
-	require.NotEmpty(t, all)
-	require.Equal(t, "all", all[0])
-	require.Contains(t, all[1:], "pxe", "pxe is in ALL_TARGETS")
-
-	var pxeLegs []string
-	for _, line := range lines[1:] {
-		fields := strings.Fields(line)
-		if len(fields) == 0 || !slices.Contains(fields[1:], "pxe") {
-			continue
-		}
-		pxeLegs = append(pxeLegs, fields[0])
-		require.NotContains(t, fields[1:], "tpm", "%s runs pxe and tpm, which clears the daemon's swtpm", fields[0])
-	}
-	require.Len(t, pxeLegs, 1, "pxe is in exactly one leg")
-
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), integrationRunnerPath))
-	require.NoError(t, err)
-	script := string(data)
-	require.Equal(t, "1", runnerMapEntry(script, "TARGET_OWN_DAEMON", "pxe"),
-		"pxe is a TARGET_OWN_DAEMON suite, kept off the shared daemon")
-	require.Contains(t, script, `if [ -n "${TARGET_OWN_DAEMON[$target]:-}" ]; then`,
-		"the shared-daemon loop skips the TARGET_OWN_DAEMON suites")
-
-	_, block, found := strings.Cut(script, "\n    if [ \"$RUN_PXE\" = true ]; then\n")
-	require.True(t, found, "the runner has a RUN_PXE block")
-	block, _, _ = strings.Cut(block, "\n    fi\n")
-	for _, step := range []string{"stop_platformd", "prepare_pxe_config", `start_platformd "${PXE_PLATFORMD_CONFIG}"`, "run_test pxe", "record_result pxe"} {
-		require.Contains(t, block, step, "the RUN_PXE block runs %s", step)
 	}
 }
 

@@ -16,7 +16,6 @@ package zoneflows
 import (
 	"fmt"
 	"net"
-	"slices"
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
@@ -54,11 +53,8 @@ const (
 	prioEastWest     = 100            // intra-zone east-west (per doc: priority=100)
 	prioMatrixDeny   = 200            // inter-zone deny flows
 	prioMatrixAllow  = 100            // inter-zone allow flows
-	// prioMatrixServiceAllow is a service-scoped pair's permits: above
-	// the pair's destination deny at prioMatrixDeny (#1896).
-	prioMatrixServiceAllow = 210
-	prioDefaultDrop        = prioBase - 100 // 900 — provisioning default drop
-	prioQDropDefault       = prioBase + 100 // 1100 — quarantine default drop (per doc: priority=100 relative to base)
+	prioDefaultDrop  = prioBase - 100 // 900 — provisioning default drop
+	prioQDropDefault = prioBase + 100 // 1100 — quarantine default drop (per doc: priority=100 relative to base)
 )
 
 // GeneratorSet holds per-zone generators selected by map dispatch.
@@ -104,61 +100,6 @@ var eastWestZones = []zone.Zone{
 // rules are returned; user-defined zones without a built-in template return
 // an empty slice (only matrix rules apply at that point, emitted separately by
 // CompileMatrixRules).
-// AddProvisioningBootHTTPPorts adds TCP ports to the provisioning
-// template's boot-server allowances; zero and already-listed ports are
-// skipped. It is not safe for concurrent use with Generate: the caller
-// serialises the two (ZoneFlowManager holds its lock across both).
-func (gs *GeneratorSet) AddProvisioningBootHTTPPorts(ports ...uint16) {
-	for _, p := range ports {
-		if p == 0 || slices.Contains(gs.cfg.Provisioning.BootHTTPPorts, p) {
-			continue
-		}
-		gs.cfg.Provisioning.BootHTTPPorts = append(gs.cfg.Provisioning.BootHTTPPorts, p)
-	}
-}
-
-// SetProvisioningBootServers replaces the addresses the provisioning
-// template's boot ports are open to; nil addresses are skipped, and an empty
-// list leaves the boot ports closed. It is not safe for concurrent use with
-// Generate: the caller serialises the two (ZoneFlowManager holds its lock
-// across both).
-func (gs *GeneratorSet) SetProvisioningBootServers(ips ...net.IP) {
-	servers := make([]net.IP, 0, len(ips))
-	for _, ip := range ips {
-		if ip == nil {
-			continue
-		}
-		servers = append(servers, ip)
-	}
-	gs.cfg.Provisioning.BootServerIPs = servers
-}
-
-// ProvisioningBootServers returns a copy of the addresses the provisioning
-// template's boot ports are open to. Like SetProvisioningBootServers it is
-// not safe for concurrent use with Generate or the setters.
-func (gs *GeneratorSet) ProvisioningBootServers() []net.IP {
-	return append([]net.IP(nil), gs.cfg.Provisioning.BootServerIPs...)
-}
-
-// SetProvisioningServers replaces the ACME (TCP 443) and DNS (port 53)
-// server addresses the provisioning template opens; nil addresses are
-// skipped, and an empty list leaves that service closed (fail closed). It is
-// not safe for concurrent use with Generate: the caller serialises the two
-// (ZoneFlowManager holds its lock across both).
-func (gs *GeneratorSet) SetProvisioningServers(acme, dns []net.IP) {
-	keep := func(ips []net.IP) []net.IP {
-		out := make([]net.IP, 0, len(ips))
-		for _, ip := range ips {
-			if ip != nil {
-				out = append(out, ip)
-			}
-		}
-		return out
-	}
-	gs.cfg.Provisioning.ACMEServerIPs = keep(acme)
-	gs.cfg.Provisioning.DNSServerIPs = keep(dns)
-}
-
 func (gs *GeneratorSet) Generate(portID string, z zone.Zone, in Ingress) []FlowRule {
 	gen, ok := gs.generators[z]
 	if !ok || gen == nil {
@@ -252,32 +193,24 @@ func compileMatrix(cfg MatrixRuleConfig, onlyFrom zone.Zone, ingress func(Networ
 					continue
 				}
 
-				deny := FlowRule{
-					Table:    0,
-					Priority: prioMatrixDeny,
-					Match:    fmt.Sprintf("%s,%s", in, f.ipMatch(f.toDst(toSubnet))),
-					Actions:  "drop",
-				}
 				if !verdict.Allowed {
 					// Emit a deny rule for this (from→to) pair.
-					flows = append(flows, deny)
+					flows = append(flows, FlowRule{
+						Table:    0,
+						Priority: prioMatrixDeny,
+						Match:    fmt.Sprintf("%s,%s", in, f.ipMatch(f.toDst(toSubnet))),
+						Actions:  "drop",
+					})
 					continue
 				}
 
-				// Allowed pair with a service scope: per-service permits
-				// above the matrix deny, then the destination deny, so
-				// only the listed services reach the destination and a
-				// template catch-all below 200 forwards nothing else
-				// (#1896). Pairs without a service scope (nil/empty
-				// Services) need no additional matrix rule — the
-				// template's normal action covers them.
-				if len(verdict.Services) == 0 {
-					continue
-				}
+				// Allowed pair with a service scope: emit per-service permit
+				// rules. Pairs without a service scope (nil/empty Services)
+				// need no additional matrix rule — the template's normal
+				// action covers them.
 				for _, svc := range verdict.Services {
-					flows = append(flows, serviceFlowRules(f, in, toSubnet, svc, prioMatrixServiceAllow)...)
+					flows = append(flows, serviceFlowRules(f, in, toSubnet, svc, prioMatrixAllow)...)
 				}
-				flows = append(flows, deny)
 			}
 		}
 	}
@@ -307,13 +240,6 @@ const (
 // DefaultPolicyAllow is the MatrixRuleConfig.DefaultPolicy value that makes
 // the conntrack verdict table-miss continue the pipeline instead of dropping.
 const DefaultPolicyAllow = "allow"
-
-// QuarantineCookie tags the quarantine default-drop rule. The switch takes
-// only a numeric cookie, so it sits in the 0xF1BE owner family next to the
-// gateway pipeline (0x0000), firewall (0x0001), NAT (0x0002), load
-// balancer (0x0003), NAT64 (0x0004), overlay (0x0005, 0x0006), the ovs
-// generation tests (0x0007, 0x0008) and perf (0x00FF) owners.
-const QuarantineCookie = "0xF1BE000900000000"
 
 // CompileStatefulMatrixRules derives the conntrack-based stateful firewall
 // rule set from the compiled zone.Matrix. It emits rules for the ct
@@ -462,26 +388,14 @@ func serviceFlowRules(f family, ingress string, toSubnet, service string, priori
 
 	switch service {
 	case "dhcp":
-		// Unicast DHCP only toward the destination zone: the permit sits
-		// above the matrix denies, so an unscoped match would open the
-		// server port toward every denied zone too (#1896). A client
-		// without a lease sends to the all-servers broadcast (DHCPv4) or
-		// multicast group (DHCPv6), which no zone subnet contains.
-		client, server, bcast := portDHCPClient, portDHCPServer, "255.255.255.255"
-		if f.name == ipv6.name {
-			client, server, bcast = portDHCP6Client, portDHCP6Server, "ff02::1:2"
-		}
-		ports := fmt.Sprintf("nw_proto=17,tp_src=%d,tp_dst=%d", client, server)
-		for _, dst := range []string{toSubnet, bcast} {
-			flows = append(flows,
-				FlowRule{
-					Table:    0,
-					Priority: priority,
-					Match:    fmt.Sprintf("%s,%s", ingress, f.ipMatch(ports, f.toDst(dst))),
-					Actions:  "normal",
-				},
-			)
-		}
+		flows = append(flows,
+			FlowRule{
+				Table:    0,
+				Priority: priority,
+				Match:    fmt.Sprintf("%s,%s", ingress, f.dhcpMatch()),
+				Actions:  "normal",
+			},
+		)
 	case "dns":
 		for _, p := range []uint16{portDNS, portDNSAlt1, portDNSAlt2} {
 			flows = append(flows,
@@ -515,7 +429,7 @@ func serviceFlowRules(f family, ingress string, toSubnet, service string, priori
 			FlowRule{
 				Table:    0,
 				Priority: priority,
-				Match:    fmt.Sprintf("%s,%s", ingress, f.ipMatch("nw_proto=17", f.toDst(toSubnet), fmt.Sprintf("tp_dst=%d", portTFTP))),
+				Match:    fmt.Sprintf("%s,%s", ingress, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portTFTP))),
 				Actions:  "normal",
 			},
 		)
@@ -561,9 +475,7 @@ func (gs *GeneratorSet) quarantine(portID string, in Ingress) []FlowRule {
 		})
 	}
 
-	// DNS only to the configured server; none configured opens nothing
-	// (fail closed): an allow with no destination at prioDNS would outrank
-	// the inter-zone denies at prioMatrixDeny.
+	// DNS (to configured server, or any server in both families)
 	cfg := gs.cfg.Quarantine
 	if cfg.DNSServerIP != nil {
 		f := familyOf(cfg.DNSServerIP)
@@ -573,6 +485,15 @@ func (gs *GeneratorSet) quarantine(portID string, in Ingress) []FlowRule {
 			Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=17", f.toDst(cfg.DNSServerIP.String()), fmt.Sprintf("tp_dst=%d", portDNS))),
 			Actions:  "normal",
 		})
+	} else {
+		for _, f := range families {
+			flows = append(flows, FlowRule{
+				Table:    0,
+				Priority: prioDNS,
+				Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portDNS))),
+				Actions:  "normal",
+			})
+		}
 	}
 
 	// Remediation servers (auth + remediation): HTTPS only by default
@@ -622,7 +543,7 @@ func (gs *GeneratorSet) quarantine(portID string, in Ingress) []FlowRule {
 		Priority: prioQDropDefault,
 		Match:    matchInVLAN(portID, in, ""),
 		Actions:  "drop",
-		Cookie:   QuarantineCookie,
+		Cookie:   fmt.Sprintf("quarantine:%s", portID),
 	})
 
 	return flows
@@ -663,42 +584,25 @@ func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 
 	cfg := gs.cfg.Provisioning
 
-	// DNS, only to the configured DNS servers; none configured opens nothing.
+	// DNS
 	flows = append(flows, gs.serverRules(portID, in, prioDNS, "nw_proto=17",
 		cfg.DNSServerIPs, []uint16{portDNS, portDNSAlt1, portDNSAlt2})...)
 
-	// TFTP (PXE boot), only to the boot servers SetProvisioningBootServers
-	// set; none configured opens nothing, so the inter-zone denies hold on
-	// UDP 69.
-	flows = append(flows, gs.serverRules(portID, in, prioTFTP, "nw_proto=17", cfg.BootServerIPs, []uint16{portTFTP})...)
-
-	// TFTP transfers ride port 69 too: the PXE TFTP server runs in
-	// single-port mode, so no other UDP port to a boot server opens.
-
-	// PXE boot server ports (iPXE boot script and payloads, NBD), each only
-	// to a boot server in its own family. A destination-unrestricted allow
-	// at this priority would outrank the matrix deny at prioMatrixDeny, so
-	// the ports are open only to the boot server, and with no boot server
-	// they stay closed.
-	for _, p := range cfg.BootHTTPPorts {
-		for _, ip := range cfg.BootServerIPs {
-			f := familyOf(ip)
-			flows = append(flows, FlowRule{
-				Table:    0,
-				Priority: prioTFTP,
-				Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=6", f.toDst(ip.String()), fmt.Sprintf("tp_dst=%d", p))),
-				Actions:  "normal",
-			})
-		}
+	// TFTP (PXE boot), both families.
+	for _, f := range families {
+		flows = append(flows, FlowRule{
+			Table:    0,
+			Priority: prioTFTP,
+			Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portTFTP))),
+			Actions:  "normal",
+		})
 	}
 
-	// ACME / HTTPS, only to the configured ACME servers; none configured
-	// opens nothing.
+	// ACME / HTTPS
 	flows = append(flows, gs.serverRules(portID, in, prioACME, "nw_proto=6",
 		cfg.ACMEServerIPs, []uint16{portHTTPS, portHTTPSAlt1, portHTTPSAlt2})...)
 
-	// Package repos (HTTP + HTTPS), only to the configured repositories;
-	// none configured opens nothing.
+	// Package repos (HTTP + HTTPS)
 	flows = append(flows, gs.serverRules(portID, in, prioPackageRepo, "nw_proto=6",
 		cfg.PackageRepoIPs, []uint16{portHTTP, portHTTPS})...)
 
@@ -726,16 +630,24 @@ func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 }
 
 // serverRules emits the "reach these servers on these ports" allowances a
-// provisioning-style template uses. Each address gets rules in its own family
-// only. With no server addresses configured it emits nothing: the ports stay
-// closed (fail closed, like the boot ports), because a destination-unrestricted
-// allow at these priorities would outrank the inter-zone denies at
-// prioMatrixDeny and forward traffic to a zone the matrix denies.
+// provisioning-style template uses. With no server addresses configured the
+// ports are open to any destination in both families; with addresses, each
+// address gets rules in its own family only.
 func (gs *GeneratorSet) serverRules(portID string, in Ingress, priority int, proto string, servers []net.IP, ports []uint16) []FlowRule {
-	if len(servers) == 0 {
-		return nil
-	}
 	var flows []FlowRule
+	if len(servers) == 0 {
+		for _, f := range families {
+			for _, p := range ports {
+				flows = append(flows, FlowRule{
+					Table:    0,
+					Priority: priority,
+					Match:    matchInVLAN(portID, in, f.ipMatch(proto, fmt.Sprintf("tp_dst=%d", p))),
+					Actions:  "normal",
+				})
+			}
+		}
+		return flows
+	}
 	for _, ip := range servers {
 		f := familyOf(ip)
 		for _, p := range ports {

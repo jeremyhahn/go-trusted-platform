@@ -28,7 +28,6 @@ import (
 	"regexp"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -616,35 +615,10 @@ func (s *HTTPServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if s.config.ProxyCACertPool != nil {
 		tlsCfg.RootCAs = s.config.ProxyCACertPool
 	}
-	// Internal destinations stay refused unless the operator named this
-	// exact URL as a boot asset; a host or prefix match is not enough.
-	allowPrivate := s.config.proxyAllowPrivateDestinations || s.configuredBootAssetURL(targetURL)
-	dialer := &net.Dialer{
-		Timeout: 30 * time.Second,
-		// Control runs for every resolved address, so names that resolve inside are refused too.
-		Control: func(network, address string, _ syscall.RawConn) error {
-			host, _, err := net.SplitHostPort(address)
-			if err != nil {
-				return fmt.Errorf("proxy destination %q: %w", address, err)
-			}
-			ip := net.ParseIP(host)
-			if ip == nil {
-				return fmt.Errorf("proxy destination %q is not an IP address", address)
-			}
-			if !allowPrivate && proxyDestinationBlocked(ip) {
-				return fmt.Errorf("proxy destination %s is not allowed", ip)
-			}
-			return nil
-		},
-	}
 	client := &http.Client{
 		Timeout: 5 * time.Minute, // Large files like kernels/initrds
 		Transport: &http.Transport{
 			TLSClientConfig: tlsCfg,
-			DialContext:     dialer.DialContext,
-		},
-		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
-			return fmt.Errorf("proxy refuses redirect to %s", req.URL.Redacted())
 		},
 	}
 
@@ -669,21 +643,6 @@ func (s *HTTPServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		s.logger.Errorf("error streaming proxy response: %v", err)
 	}
-}
-
-// sharedAddressSpace is the 100.64.0.0/10 carrier-grade NAT range.
-var sharedAddressSpace = &net.IPNet{IP: net.IPv4(100, 64, 0, 0).To4(), Mask: net.CIDRMask(10, 32)}
-
-// proxyDestinationBlocked reports whether the proxy must not dial ip.
-func proxyDestinationBlocked(ip net.IP) bool {
-	return ip.IsLoopback() ||
-		ip.IsPrivate() ||
-		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() ||
-		ip.IsMulticast() ||
-		ip.IsUnspecified() ||
-		sharedAddressSpace.Contains(ip)
 }
 
 // generateNetbootScript generates a boot script for network boot scenarios.
@@ -792,38 +751,6 @@ func (s *HTTPServer) proxyURL(originalURL string) string {
 	// Convert https://host/path to http://server:port/proxy/https/host/path
 	stripped := strings.TrimPrefix(originalURL, "https://")
 	return fmt.Sprintf("%s/proxy/https/%s", s.config.ExternalURL, stripped)
-}
-
-// configuredBootAssetURL reports whether target is exactly an https:// URL
-// the operator configured in a BootEntry: its Kernel, its Initrd, or an
-// https:// token in its Args (split as proxyArgsURLs splits them).
-func (s *HTTPServer) configuredBootAssetURL(target string) bool {
-	if !strings.HasPrefix(target, "https://") {
-		return false
-	}
-	for i := range s.config.BootEntries {
-		entry := &s.config.BootEntries[i]
-		if entry.Kernel == target || entry.Initrd == target {
-			return true
-		}
-		args := entry.Args
-		for {
-			idx := strings.Index(args, "https://")
-			if idx == -1 {
-				break
-			}
-			args = args[idx:]
-			end := strings.IndexAny(args, " \t\n")
-			if end == -1 {
-				end = len(args)
-			}
-			if args[:end] == target {
-				return true
-			}
-			args = args[end:]
-		}
-	}
-	return false
 }
 
 // maxInstallLogUploadBytes caps install-log uploads. 16 MiB is plenty for a

@@ -265,14 +265,6 @@ type OVSPortController interface {
 	GetOFPort(ctx context.Context, portName string) (int32, error)
 }
 
-// PortBridgeChecker is implemented by a port controller that can tell
-// whether a port is on a given bridge. OpenFlow port numbers are per
-// bridge, so the zone flow manager checks membership before it resolves a
-// port's number and refuses a port that is not on its bridge.
-type PortBridgeChecker interface {
-	PortOnBridge(ctx context.Context, bridgeName, portName string) (bool, error)
-}
-
 // CertificateValidator defines the interface for certificate validation
 type CertificateValidator interface {
 	// ValidateCertificate validates a certificate and returns any errors
