@@ -3591,7 +3591,51 @@ func TestSupervisor_AFailedExitHookFailsTheOperatorStop(t *testing.T) {
 	err := supervisor.StopService(ctx, gateway.ServiceVPNWireGuard)
 	var hookErr *ErrExitHook
 	require.ErrorAs(t, err, &hookErr)
-	assert.Equal(t, 1, rec.callCount())
+	assert.Positive(t, rec.callCount(), "the stop ran the hook")
+}
+
+// A hub cleanup that fails after an operator stop stays owed and is retried
+// while the service stays stopped, until it succeeds (Codex #2336 round 18).
+func TestSupervisor_AFailedStopCleanupIsRetriedWhileTheServiceStaysStopped(t *testing.T) {
+	supervisor, launcher, rec := newHookedSupervisor(t, 2, nil)
+	ctx := testContext(t)
+	startWireGuard(t, ctx, supervisor, launcher)
+
+	err := supervisor.StopService(ctx, gateway.ServiceVPNWireGuard)
+	var hookErr *ErrExitHook
+	require.ErrorAs(t, err, &hookErr, "the failed cleanup fails the stop")
+	require.Eventually(t, func() bool { return rec.callCount() >= 3 }, 5*time.Second, time.Millisecond,
+		"the owed cleanup is retried while the service stays stopped")
+	assert.Never(t, func() bool { return rec.callCount() > 3 }, 100*time.Millisecond, 10*time.Millisecond,
+		"a succeeded cleanup is not retried")
+	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceVPNWireGuard), "nothing is owed once the retry succeeded")
+	assert.Equal(t, 3, rec.callCount(), "the second stop owes no cleanup")
+	assert.Equal(t, 1, launcher.launchCount(), "a stopped process is not relaunched")
+}
+
+// A later stop finds no child but still owes the failed cleanup: it runs the
+// fenced hook and reports its outcome rather than success (Codex #2336
+// round 18).
+func TestSupervisor_AStopThatFindsNoChildRunsTheOwedCleanup(t *testing.T) {
+	rec := &exitHookRecorder{failures: 1}
+	supervisor, launcher, clock := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = 7 * time.Millisecond
+		c.OnChildExit = rec.hook
+	})
+	rec.launcher = launcher
+	held := clock.holdDelay(7 * time.Millisecond)
+	t.Cleanup(func() { close(held.release) })
+	ctx := testContext(t)
+	startWireGuard(t, ctx, supervisor, launcher)
+
+	var hookErr *ErrExitHook
+	require.ErrorAs(t, supervisor.StopService(ctx, gateway.ServiceVPNWireGuard), &hookErr)
+	require.Equal(t, 1, rec.callCount())
+	held.awaitEntered(t, ctx)
+	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceVPNWireGuard), "the owed cleanup ran and succeeded")
+	assert.Equal(t, 2, rec.callCount(), "the stop that found no child ran the hook")
+	assert.Never(t, func() bool { return rec.callCount() > 2 }, 100*time.Millisecond, 10*time.Millisecond,
+		"the cancelled background retry does not run")
 }
 
 func TestSupervisor_OnChildExitRetriedPastTheRestartBudget(t *testing.T) {
