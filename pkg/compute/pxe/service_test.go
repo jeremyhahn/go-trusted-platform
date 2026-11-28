@@ -17,12 +17,14 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/stretchr/testify/assert"
@@ -2409,85 +2411,148 @@ func TestService_UpdateDeviceState_FailedVLANWriteKeepsState(t *testing.T) {
 	assert.Equal(t, provisioningVLAN, reloaded.CurrentVLAN)
 }
 
-// restoreFailingPort is a recordingPort whose flow installs fail once fail
-// is set, while deletes keep succeeding. It records each
-// flow operation in order.
+// restoreFailingPort is a recordingPort that tracks the live flows. Once
+// fail is set, installs of anything but a port drop-all fail; with
+// failDrop set the drop-all fails too. Deletes keep succeeding and remove
+// the port's in_port rules, as ovs-ofctl del-flows in_port=N does. It
+// records each flow operation in order.
 type restoreFailingPort struct {
 	recordingPort
-	mu   sync.Mutex
-	fail bool
-	ops  []string
+	mu       sync.Mutex
+	fail     bool
+	failDrop bool
+	ops      []string
+	live     []zoneflows.FlowRule
 }
 
 var errFlowInstall = errors.New("flow install failed")
 
-func (p *restoreFailingPort) InstallFlows(string, []zoneflows.FlowRule) error {
+// isPortDropAll reports whether rules is a single highest-priority drop of
+// all of a port's traffic.
+func isPortDropAll(rules []zoneflows.FlowRule) bool {
+	return len(rules) == 1 && rules[0].Priority == 65535 && rules[0].Actions == "drop" &&
+		strings.HasPrefix(rules[0].Match, "in_port=") && !strings.Contains(rules[0].Match, ",")
+}
+
+func (p *restoreFailingPort) InstallFlows(_ string, rules []zoneflows.FlowRule) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.fail {
+	drop := isPortDropAll(rules)
+	if p.fail && (!drop || p.failDrop) {
 		p.ops = append(p.ops, "install-failed")
 		return errFlowInstall
 	}
-	p.ops = append(p.ops, "install")
+	if drop {
+		p.ops = append(p.ops, "install-drop")
+	} else {
+		p.ops = append(p.ops, "install")
+	}
+	p.live = append(p.live, rules...)
 	return nil
 }
 
-func (p *restoreFailingPort) DeleteFlowsByPort(string, string) error {
+func (p *restoreFailingPort) DeleteFlowsByPort(_ string, ofPort string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.ops = append(p.ops, "delete")
+	kept := p.live[:0]
+	for _, r := range p.live {
+		onPort := false
+		for _, f := range strings.Split(r.Match, ",") {
+			if f == "in_port="+ofPort {
+				onPort = true
+			}
+		}
+		if !onPort {
+			kept = append(kept, r)
+		}
+	}
+	p.live = kept
 	return nil
 }
 
 // TestService_UpdateDeviceState_QuarantineRestoreFailureDropsAll: a
 // discovered-to-booting move installs provisioning flows, then the state
 // write fails and every quarantine restore fails too. Through the real
-// zone flow manager, which may roll the failed quarantine install back to
-// the provisioning placement, the service must end with the port's flows
-// removed (drop-all) and return the error (#2081 Codex round 11).
+// zone flow manager, on a bridge whose base pipeline forwards unmatched
+// traffic to NORMAL, the service must end with a highest-priority in_port
+// drop rule on the port (a flow delete alone would leave the device the
+// base pipeline's access) and return the error (#2081 Codex rounds 11, 14).
+// When the drop rule cannot be installed either, the error says so.
 func TestService_UpdateDeviceState_QuarantineRestoreFailureDropsAll(t *testing.T) {
-	svc, _, store, id := newStoreBackedService(t, StateQuarantined)
-	port := &restoreFailingPort{}
-	zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
-		BridgeName: "br-fabric", FlowController: port, PortController: port, Plan: testNetPlan,
-	})
-	require.NoError(t, err)
-	svc.vlanManager = NewVLANIntegrationWrapper(WithFlowManager(zfm))
-	// The booting write fails, and from then on every flow install fails:
-	// the provisioning move succeeds, every quarantine restore does not.
-	setStoredDevice(t, svc, store, id, StateDiscovered, svc.config.QuarantineVLAN,
-		func(d *DeviceInfo) bool {
-			if d.State != StateBooting {
-				return false
-			}
+	for _, failDrop := range []bool{false, true} {
+		name := "drop installed"
+		if failDrop {
+			name = "drop fails"
+		}
+		t.Run(name, func(t *testing.T) {
+			svc, _, store, id := newStoreBackedService(t, StateQuarantined)
+			port := &restoreFailingPort{}
+			base, err := gateway.BasePipelineRules(gateway.TerminalNormal)
+			require.NoError(t, err)
+			require.NotEmpty(t, base)
+			require.NoError(t, port.InstallFlows("br-fabric", base))
+			zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+				BridgeName: "br-fabric", FlowController: port, PortController: port, Plan: testNetPlan,
+			})
+			require.NoError(t, err)
+			svc.vlanManager = NewVLANIntegrationWrapper(WithFlowManager(zfm))
+			// The booting write fails, and from then on every flow install
+			// but the drop-all fails: the provisioning move succeeds, every
+			// quarantine restore does not.
+			setStoredDevice(t, svc, store, id, StateDiscovered, svc.config.QuarantineVLAN,
+				func(d *DeviceInfo) bool {
+					if d.State != StateBooting {
+						return false
+					}
+					port.mu.Lock()
+					port.fail = true
+					port.failDrop = failDrop
+					port.mu.Unlock()
+					return true
+				})
+
 			port.mu.Lock()
-			port.fail = true
+			port.ops = nil
 			port.mu.Unlock()
-			return true
+
+			err = svc.UpdateDeviceState(context.Background(), id, StateBooting, "pxe boot")
+			require.Error(t, err)
+			assert.ErrorIs(t, err, errFlowInstall, "the failed restore is returned")
+
+			port.mu.Lock()
+			ops := append([]string(nil), port.ops...)
+			live := append([]zoneflows.FlowRule(nil), port.live...)
+			port.mu.Unlock()
+			require.NotEmpty(t, ops)
+			assert.Contains(t, ops, "install", "the provisioning flows are installed")
+			assert.GreaterOrEqual(t, countOps(ops, "install-failed"), 2,
+				"the quarantine restore is tried again after it fails")
+			for _, r := range base {
+				assert.Contains(t, live, r, "the base pipeline stays on the bridge")
+			}
+
+			got, gErr := svc.stateManager.Get(id)
+			require.NoError(t, gErr)
+			assert.Equal(t, StateDiscovered, got.State)
+			assert.Equal(t, svc.config.QuarantineVLAN, got.CurrentVLAN)
+
+			drop := zoneflows.FlowRule{Priority: 65535, Match: "in_port=1", Actions: "drop", Cookie: zoneflows.QuarantineCookie}
+			if failDrop {
+				assert.ErrorContains(t, err, "failed to block port", "the failed drop install is reported")
+				assert.Equal(t, "install-failed", ops[len(ops)-1], "%v", ops)
+				return
+			}
+			assert.Equal(t, "install-drop", ops[len(ops)-1],
+				"a port whose quarantine cannot be restored ends with a drop-all installed, not a delete: %v", ops)
+			assert.Contains(t, live, drop, "the highest-priority in_port drop rule is live")
+			for _, r := range live {
+				if r != drop && strings.Contains(r.Match, "in_port=1") {
+					assert.Less(t, r.Priority, drop.Priority, "the drop-all outranks rule %v", r)
+				}
+			}
 		})
-
-	port.mu.Lock()
-	port.ops = nil
-	port.mu.Unlock()
-
-	err = svc.UpdateDeviceState(context.Background(), id, StateBooting, "pxe boot")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, errFlowInstall, "the failed restore is returned")
-
-	port.mu.Lock()
-	ops := append([]string(nil), port.ops...)
-	port.mu.Unlock()
-	require.NotEmpty(t, ops)
-	assert.Contains(t, ops, "install", "the provisioning flows are installed")
-	assert.GreaterOrEqual(t, countOps(ops, "install-failed"), 2,
-		"the quarantine restore is tried again after it fails")
-	assert.Equal(t, "delete", ops[len(ops)-1],
-		"a port whose quarantine cannot be restored ends with its flows dropped: %v", ops)
-
-	got, err := svc.stateManager.Get(id)
-	require.NoError(t, err)
-	assert.Equal(t, StateDiscovered, got.State)
-	assert.Equal(t, svc.config.QuarantineVLAN, got.CurrentVLAN)
+	}
 }
 
 func countOps(ops []string, op string) int {

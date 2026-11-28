@@ -142,6 +142,54 @@ func TestZoneFlowManager_RemoveFlows_UsesOpenFlowPortNumber(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestZoneFlowManager_DropPort: DropPort deletes the port's rules and then
+// installs a drop-all that outranks every other rule, so the bridge's base
+// pipeline never forwards the port's traffic; a failed install is an error
+// (#2081 Codex round 14).
+func TestZoneFlowManager_DropPort(t *testing.T) {
+	t.Run("installs the drop rule", func(t *testing.T) {
+		ctx := context.Background()
+		ctrl, m := newPartialInstallZFM(t)
+		require.NoError(t, m.ApplyZoneFlows(ctx, "tap0", zone.ZoneProvisioning))
+		require.NotEmpty(t, portRules(ctrl))
+
+		require.NoError(t, m.DropPort(ctx, "tap0"))
+
+		require.Equal(t, []zoneflows.FlowRule{{
+			Table:    0,
+			Priority: 65535,
+			Match:    "in_port=7",
+			Actions:  "drop",
+			Cookie:   zoneflows.QuarantineCookie,
+		}}, portRules(ctrl), "only the drop-all is left on the port")
+		got, err := m.GetPortZone("tap0")
+		require.NoError(t, err)
+		require.Equal(t, zone.ZoneQuarantine, got, "the port is recorded as quarantined")
+
+		// A later placement replaces the drop-all.
+		require.NoError(t, m.ApplyZoneFlows(ctx, "tap0", zone.ZoneProvisioning))
+		for _, r := range portRules(ctrl) {
+			require.False(t, r.Match == "in_port=7" && r.Actions == "drop" && r.Priority == 65535,
+				"the drop-all is removed by the next placement")
+		}
+	})
+	t.Run("install failure is an error", func(t *testing.T) {
+		ctx := context.Background()
+		ctrl, m := newPartialInstallZFM(t)
+		require.NoError(t, m.ApplyZoneFlows(ctx, "tap0", zone.ZoneProvisioning))
+
+		ctrl.failInstalls = 1
+		require.Error(t, m.DropPort(ctx, "tap0"))
+		got, err := m.GetPortZone("tap0")
+		require.NoError(t, err)
+		require.Equal(t, zone.ZoneQuarantine, got)
+	})
+	t.Run("invalid port", func(t *testing.T) {
+		_, m := newPartialInstallZFM(t)
+		require.ErrorIs(t, m.DropPort(context.Background(), ""), ErrInvalidPortID)
+	})
+}
+
 func TestZoneFlowManager_NoOpenFlowPort_Errors(t *testing.T) {
 	lookupErr := errors.New("no such interface")
 	cases := map[string]*ofPortController{
