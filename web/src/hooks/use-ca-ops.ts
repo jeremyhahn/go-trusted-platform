@@ -2,8 +2,7 @@
 
 // CAService operations for the CA pages (#2041, epic #1665): GetCAInfo,
 // VerifyCertificate and SignCSR through the SDK client.
-import { createPlatformClient } from "trusted-platform-sdk";
-import { useApi, useCA, useMutation, usePlatformClient } from "@/hooks";
+import { useApi, useCA, useMutation } from "@/hooks";
 
 export interface CACertView {
   serial?: string;
@@ -87,25 +86,26 @@ export interface SignCSRInput {
 }
 
 /**
- * SignCSR needs a token with the ca:sign-csr scope, which the browser
- * session does not carry: the request goes through a client that sends the
- * pasted token as its bearer.
+ * Why the console cannot sign a CSR: POST /v1/ca/sign-csr needs a platform
+ * token with the ca:sign-csr scope, and the server's platform-token
+ * middleware accepts only DPoP-bound tokens. The console has no DPoP key or
+ * proof, so a bearer-only request is always refused.
+ */
+export const SIGN_CSR_UNAVAILABLE_REASON =
+  "Signing a CSR needs a DPoP-bound platform token, and the console cannot send a DPoP proof yet";
+
+/**
+ * SignCSR is unavailable from the console (SIGN_CSR_UNAVAILABLE_REASON):
+ * the hook reports available: false with the reason, and sign/signAsync
+ * fail without sending a request.
  */
 export function useSignCSR<K = unknown>(options?: { onSuccess?: (data: unknown, input: SignCSRInput & { key?: K }) => void }) {
-  const { baseUrl } = usePlatformClient();
-  const signAsync = (input: SignCSRInput & { key?: K }) => {
-    const days = input.validDays;
-    return createPlatformClient({
-      baseUrl,
-      credentials: "include",
-      headers: { Authorization: `Bearer ${input.token.trim()}` },
-    }).ca.signCSR({
-      csrPem: input.csrPem.trim(),
-      ...(typeof days === "number" && Number.isFinite(days) && days > 0 ? { validDays: days } : {}),
-    });
-  };
+  const signAsync: (input: SignCSRInput & { key?: K }) => Promise<unknown> = () =>
+    Promise.reject(new Error(SIGN_CSR_UNAVAILABLE_REASON));
   const mutation = useMutation(signAsync, { onSuccess: options?.onSuccess });
   return {
+    available: false as boolean,
+    reason: SIGN_CSR_UNAVAILABLE_REASON as string | undefined,
     sign: (input: SignCSRInput & { key?: K }) => mutation.mutate(input),
     signAsync,
     reset: () => mutation.reset(),

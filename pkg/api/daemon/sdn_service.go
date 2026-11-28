@@ -1324,7 +1324,15 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 			if prior != nil && prior.enabled {
 				// The prior rules were accepted when stored, so every one
 				// encodes; one that did not would add no flow here.
+				// A prior flow whose entry another cookie now holds (a raw
+				// add at a rule the new set drops replaced it) is no longer
+				// the policy's to write: restoring it would overwrite that
+				// owner's flow, so only empty or still-owned entries return.
 				priorFlows, _ := s.policyFlows(policyID, prior.bridgeNames, prior.rules, prior.priority)
+				priorFlows, heldErr := s.unheldPolicyFlows(rbCtx, client, priorFlows, policyFlowCookie(policyID))
+				if heldErr != nil {
+					rollbackErr = errors.Join(rollbackErr, heldErr)
+				}
 				if reErr := s.restorePolicyFlows(rbCtx, client, priorFlows); reErr != nil {
 					rollbackErr = errors.Join(rollbackErr, reErr)
 				}
@@ -1891,6 +1899,51 @@ func (s *SDNService) restorePolicyFlows(ctx context.Context, client ovs.ClientIn
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// unheldPolicyFlows returns the flows whose entry (bridge, table, priority,
+// canonical match) is empty or held only by flows carrying cookie: a flow
+// whose entry another owner now holds is dropped, so a rollback restore
+// never overwrites it. A flow whose entry cannot be read is dropped too,
+// and the read errors are returned joined.
+func (s *SDNService) unheldPolicyFlows(ctx context.Context, client ovs.ClientInterface, flows []policyFlow, cookie uint64) ([]policyFlow, error) {
+	var kept []policyFlow
+	var errs []error
+	for _, flow := range flows {
+		filter := fmt.Sprintf("table=%d", flow.mod.Table)
+		if flow.mod.Match != "" {
+			filter += "," + flow.mod.Match
+		}
+		installed, err := client.GetFlowStats(ctx, flow.bridge, filter)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("read installed flows on bridge %s rule %s: %v", flow.bridge, flow.ruleID, err))
+			continue
+		}
+		want := flowKey(flow)
+		held := false
+		for _, fl := range installed {
+			if fl == nil || flowCookieIs(fl.Cookie, cookie) {
+				continue
+			}
+			theirs := policyFlow{bridge: flow.bridge, mod: &ovs.FlowMod{Table: fl.Table, Priority: fl.Priority, Match: fl.Match}}
+			if flowKey(theirs) == want {
+				held = true
+				break
+			}
+		}
+		if !held {
+			kept = append(kept, flow)
+		}
+	}
+	return kept, errors.Join(errs...)
+}
+
+// flowCookieIs reports whether an installed flow's cookie, as the switch
+// renders it (hex with or without 0x), is cookie.
+func flowCookieIs(rendered string, cookie uint64) bool {
+	v := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(rendered)), "0x")
+	n, err := strconv.ParseUint(v, 16, 64)
+	return err == nil && n == cookie
 }
 
 // removePolicyFlows deletes each flow by its exact table, priority and match

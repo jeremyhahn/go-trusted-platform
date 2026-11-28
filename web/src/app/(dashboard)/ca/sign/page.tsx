@@ -38,6 +38,9 @@ export default function SignCSRPage() {
   const inputKey = (csr: string, tok: string, days: string) => `${csr}\n${tok}\n${days}`;
 
   const signMutation = useSignCSR<string>({ onSuccess: (_data, req) => setSignedFor(req.key ?? null) });
+  // The hook reports why the console cannot sign (no DPoP proof); submit
+  // stays disabled and the reason is shown.
+  const signAvailable = signMutation.available !== false;
 
   const clearResult = () => {
     signMutation.reset();
@@ -46,6 +49,7 @@ export default function SignCSRPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!signAvailable) return;
     clearResult();
     const days = Number.parseInt(validDays, 10);
     signMutation.sign({
@@ -122,10 +126,18 @@ export default function SignCSRPage() {
             </div>
             <div>
               <Gated op="POST /api/v1/ca/sign-csr">
-                <Button type="submit" disabled={!csrPem.trim() || !token.trim() || signMutation.isLoading}>
+                <Button
+                  type="submit"
+                  disabled={!signAvailable || !csrPem.trim() || !token.trim() || signMutation.isLoading}
+                >
                   Sign CSR
                 </Button>
               </Gated>
+              {!signAvailable && signMutation.reason && (
+                <p data-testid="sign-unavailable" className="mt-2 text-sm text-muted-foreground">
+                  {signMutation.reason}
+                </p>
+              )}
             </div>
           </form>
         </CardContent>
