@@ -297,6 +297,20 @@ func TestCreateUser_964(t *testing.T) {
 			t.Errorf("Operation = %q", e.Operation)
 		}
 	})
+
+	t.Run("invalid_config_is_400", func(t *testing.T) {
+		svc := &mockBMCService{createUserFn: func(context.Context, uint64, bmcpkg.User, string) error {
+			return bmcpkg.ErrInvalidConfig{Field: "password", Reason: "password exceeds 20 bytes"}
+		}}
+		rw := serveBMC(t, svc, http.MethodPost, route, "/bmc/5/users",
+			`{"username":"u","password":"p","privilege":"user"}`, pick)
+		if rw.lastStatus != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rw.lastStatus)
+		}
+		if e := assertErrAs[bmcpkg.ErrInvalidConfig](t, rw.lastErr); e.Field != "password" {
+			t.Errorf("Field = %q, want password", e.Field)
+		}
+	})
 }
 
 func TestDeleteUser_964(t *testing.T) {

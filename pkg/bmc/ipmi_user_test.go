@@ -24,11 +24,14 @@ import (
 
 // mockSender records IPMI commands and returns canned responses keyed by
 // (netFn, cmd). Optionally returns a fixed error to simulate transport
-// failure.
+// failure. Get User Name answers an empty 16-byte name unless a test sets
+// another response.
 type mockSender struct {
 	calls     []mockCall
 	responses map[uint16][]byte
 	err       error
+	// cmdErr fails only the listed commands (after recording the call).
+	cmdErr map[byte]error
 }
 
 type mockCall struct {
@@ -47,6 +50,9 @@ func (m *mockSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
+	if e, ok := m.cmdErr[cmd]; ok {
+		return nil, e
+	}
 	if r, ok := m.responses[key(netFn, cmd)]; ok {
 		return append([]byte(nil), r...), nil
 	}
@@ -54,7 +60,7 @@ func (m *mockSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
 }
 
 func newMock() *mockSender {
-	return &mockSender{responses: map[uint16][]byte{}}
+	return &mockSender{responses: map[uint16][]byte{key(netFnApp, cmdGetUserName): make([]byte, ipmiMaxUsernameLen)}}
 }
 
 func (m *mockSender) lastCall(t *testing.T) mockCall {
@@ -237,6 +243,19 @@ func TestListUsers_LaterSlotAccessError(t *testing.T) {
 	}
 }
 
+func TestListUsers_ShortNameResponse(t *testing.T) {
+	stages := []stage{
+		{netFnApp, cmdGetUserAccess, 1, []byte{0x01, 0x40, 0x00, 0x04}},
+		{netFnApp, cmdGetUserName, 1, []byte{}},
+	}
+	s := &stagedSender{stages: stages, t: t}
+	_, err := newUM(s).ListUsers(context.Background())
+	var short ErrIPMIShortResponse
+	if !errors.As(err, &short) {
+		t.Fatalf("ListUsers = %v, want ErrIPMIShortResponse (an empty answer is not an empty slot)", err)
+	}
+}
+
 // --- CreateUser ---
 
 func TestCreateUser_HappyPath(t *testing.T) {
@@ -254,17 +273,21 @@ func TestCreateUser_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if len(m.calls) != 3 {
-		t.Fatalf("want 3 calls, got %d", len(m.calls))
+	// probe, name, password set, access, then enable for an Enabled user.
+	if len(m.calls) != 5 {
+		t.Fatalf("want 5 calls, got %d", len(m.calls))
 	}
-	if m.calls[0].cmd != cmdSetUserName {
-		t.Errorf("call[0] = 0x%02x, want SetUserName", m.calls[0].cmd)
+	if m.calls[0].cmd != cmdGetUserName {
+		t.Errorf("call[0] = 0x%02x, want GetUserName", m.calls[0].cmd)
 	}
-	if m.calls[1].cmd != cmdSetUserPassword {
-		t.Errorf("call[1] = 0x%02x, want SetUserPassword", m.calls[1].cmd)
+	if m.calls[1].cmd != cmdSetUserName {
+		t.Errorf("call[1] = 0x%02x, want SetUserName", m.calls[1].cmd)
 	}
-	if m.calls[2].cmd != cmdSetUserAccess {
-		t.Errorf("call[2] = 0x%02x, want SetUserAccess", m.calls[2].cmd)
+	if m.calls[2].cmd != cmdSetUserPassword {
+		t.Errorf("call[2] = 0x%02x, want SetUserPassword", m.calls[2].cmd)
+	}
+	if m.calls[3].cmd != cmdSetUserAccess {
+		t.Errorf("call[3] = 0x%02x, want SetUserAccess", m.calls[3].cmd)
 	}
 	// User management commands live in the App network function.
 	for i, c := range m.calls {
@@ -273,19 +296,19 @@ func TestCreateUser_HappyPath(t *testing.T) {
 		}
 	}
 	// SetUserName payload: byte 0 = slot, bytes 1.. = name
-	if m.calls[0].data[0] != 2 {
-		t.Errorf("name slot = %d, want 2", m.calls[0].data[0])
+	if m.calls[1].data[0] != 2 {
+		t.Errorf("name slot = %d, want 2", m.calls[1].data[0])
 	}
-	if string(m.calls[0].data[1:6]) != "alice" {
-		t.Errorf("name = %q, want alice", m.calls[0].data[1:6])
+	if string(m.calls[1].data[1:6]) != "alice" {
+		t.Errorf("name = %q, want alice", m.calls[1].data[1:6])
 	}
 	// SetUserAccess: flags should include change | ipmi-msg | link-auth, channel=1
 	wantFlags := suaChangeBits | suaIPMIMsgEnable | suaLinkAuthEnable | 0x01
-	if m.calls[2].data[0] != wantFlags {
-		t.Errorf("SUA flags = 0x%02x, want 0x%02x", m.calls[2].data[0], wantFlags)
+	if m.calls[3].data[0] != wantFlags {
+		t.Errorf("SUA flags = 0x%02x, want 0x%02x", m.calls[3].data[0], wantFlags)
 	}
-	if m.calls[2].data[2] != byte(PrivilegeAdministrator) {
-		t.Errorf("priv byte = 0x%02x, want 0x%02x", m.calls[2].data[2], byte(PrivilegeAdministrator))
+	if m.calls[3].data[2] != byte(PrivilegeAdministrator) {
+		t.Errorf("priv byte = 0x%02x, want 0x%02x", m.calls[3].data[2], byte(PrivilegeAdministrator))
 	}
 }
 
@@ -326,8 +349,9 @@ func TestCreateUser_OversizedPasswordWritesNothing(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateUser: %v", err)
 		}
-		if len(m.calls) != 3 {
-			t.Fatalf("want 3 calls, got %d", len(m.calls))
+		// Slot probe, name, password, channel access and enable.
+		if len(m.calls) != 5 {
+			t.Fatalf("want 5 calls, got %d", len(m.calls))
 		}
 	})
 }
@@ -344,28 +368,34 @@ func TestCreateUser_DisabledFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	// 2 calls (no password)
-	if len(m.calls) != 2 {
-		t.Fatalf("want 2 calls, got %d", len(m.calls))
+	// probe, name, access, disable (no password)
+	if len(m.calls) != 4 {
+		t.Fatalf("want 4 calls, got %d", len(m.calls))
 	}
-	flags := m.calls[1].data[0]
+	flags := m.calls[2].data[0]
 	if flags&suaIPMIMsgEnable != 0 || flags&suaLinkAuthEnable != 0 {
 		t.Errorf("disabled user should have IPMI/link-auth bits clear, got 0x%02x", flags)
 	}
 	if flags&suaChangeBits == 0 {
 		t.Error("change-bits flag must be set")
 	}
+	if c := m.calls[3]; c.cmd != cmdSetUserPassword || len(c.data) != 2 || c.data[0] != 3 || c.data[1] != pwdOpDisable {
+		t.Errorf("call 3 = cmd 0x%02x data %x, want Set User Password disable {03 00}", c.cmd, c.data)
+	}
 }
 
 func TestCreateUser_HonorsExplicitChannel(t *testing.T) {
 	m := newMock()
 	um := newUM(m)
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
 	if err := um.CreateUser(context.Background(), User{
 		Slot: 4, Username: "x", Enabled: true, Privilege: PrivilegeUser, Channel: 0x0E,
-	}, nil); err != nil {
+	}, pwd); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	flags := m.calls[1].data[0]
+	// Calls: probe, name, password, access, enable.
+	flags := m.calls[3].data[0]
 	if flags&0x0F != 0x0E {
 		t.Errorf("channel nibble = 0x%x, want 0x0E", flags&0x0F)
 	}
@@ -395,6 +425,38 @@ func TestCreateUser_InvalidUsername(t *testing.T) {
 	}
 }
 
+// An empty or NUL-containing name decodes as an empty slot, so ListUsers
+// hides the account and the occupied-slot guard lets a later create
+// overwrite it. CreateUser refuses both before any BMC write.
+func TestCreateUser_RefusesEmptyOrNULUsernameWritesNothing(t *testing.T) {
+	cases := []struct {
+		name     string
+		username string
+	}{
+		{name: "empty", username: ""},
+		{name: "leading_nul", username: "\x00admin"},
+		{name: "embedded_nul", username: "ad\x00min"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMock()
+			err := newUM(m).CreateUser(context.Background(), User{
+				Slot: 5, Username: tc.username, Enabled: true, Privilege: PrivilegeOperator,
+			}, memguard.NewMemoryEnclave([]byte("s3cret")))
+			var cfgErr ErrInvalidConfig
+			if !errors.As(err, &cfgErr) {
+				t.Fatalf("err = %v, want ErrInvalidConfig", err)
+			}
+			if cfgErr.Field != "username" {
+				t.Errorf("Field = %q, want username", cfgErr.Field)
+			}
+			if len(m.calls) != 0 {
+				t.Fatalf("want no BMC write, got %d calls (first cmd 0x%02x)", len(m.calls), m.calls[0].cmd)
+			}
+		})
+	}
+}
+
 func TestCreateUser_InvalidPrivilege(t *testing.T) {
 	um := newUM(newMock())
 	err := um.CreateUser(context.Background(), User{
@@ -420,9 +482,10 @@ func TestCreateUser_NameSendError(t *testing.T) {
 
 func TestCreateUser_PasswordSendError(t *testing.T) {
 	stages := []stage{
+		{netFnApp, cmdGetUserName, 2, make([]byte, ipmiMaxUsernameLen)},
 		{netFnApp, cmdSetUserName, 0, nil},
 	}
-	s := &stagedSender{stages: stages, t: t, errAfter: 1, errVal: errors.New("pwd-fail")}
+	s := &stagedSender{stages: stages, t: t, errAfter: 2, errVal: errors.New("pwd-fail")}
 	um := newUM(s)
 	pwd := memguard.NewMemoryEnclave([]byte("p"))
 	defer pwd.Destroy()
@@ -434,8 +497,690 @@ func TestCreateUser_PasswordSendError(t *testing.T) {
 	}
 }
 
+func TestCreateUser_EnablesUser(t *testing.T) {
+	m := newMock()
+	um := newUM(m)
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
+	if err := um.CreateUser(context.Background(), User{
+		Slot: 5, Username: "bob", Enabled: true, Privilege: PrivilegeOperator,
+	}, pwd); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	setIdx, enableIdx := -1, -1
+	for i, c := range m.calls {
+		if c.cmd != cmdSetUserPassword || len(c.data) < 2 {
+			continue
+		}
+		switch c.data[1] & 0x03 {
+		case pwdOpSet:
+			setIdx = i
+		case pwdOpEnable:
+			enableIdx = i
+			if c.data[0]&ipmiMaxUserSlot != 5 {
+				t.Errorf("enable slot = %d, want 5", c.data[0]&ipmiMaxUserSlot)
+			}
+		}
+	}
+	if setIdx < 0 {
+		t.Fatal("no pwdOpSet call")
+	}
+	if enableIdx < 0 {
+		t.Fatal("an Enabled user got no pwdOpEnable call")
+	}
+	if enableIdx < setIdx {
+		t.Errorf("pwdOpEnable (call %d) precedes pwdOpSet (call %d)", enableIdx, setIdx)
+	}
+}
+
+func TestCreateUser_DisabledUserNotEnabled(t *testing.T) {
+	m := newMock()
+	um := newUM(m)
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
+	if err := um.CreateUser(context.Background(), User{
+		Slot: 5, Username: "bob", Enabled: false, Privilege: PrivilegeUser,
+	}, pwd); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	for i, c := range m.calls {
+		if c.cmd == cmdSetUserPassword && len(c.data) >= 2 && c.data[1]&0x03 == pwdOpEnable {
+			t.Errorf("call %d enables a disabled user", i)
+		}
+	}
+}
+
+// statefulUserSender models a BMC's per-slot user name and global enable
+// flag. Set User Name and Set User Access do not touch the global enable
+// flag, as on a real BMC: only Set User Password ops 01b/00b change it.
+type statefulUserSender struct {
+	names   map[uint8]string
+	enabled map[uint8]bool
+	calls   []mockCall
+}
+
+func newStatefulUserSender() *statefulUserSender {
+	return &statefulUserSender{names: map[uint8]string{}, enabled: map[uint8]bool{}}
+}
+
+func (s *statefulUserSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
+	cp := append([]byte(nil), data...)
+	s.calls = append(s.calls, mockCall{netFn: netFn, cmd: cmd, data: cp})
+	switch cmd {
+	case cmdGetUserName:
+		resp := make([]byte, ipmiMaxUsernameLen)
+		copy(resp, s.names[data[0]&ipmiMaxUserSlot])
+		return resp, nil
+	case cmdSetUserName:
+		s.names[data[0]&ipmiMaxUserSlot] = trimNullPadded(data[1:])
+	case cmdSetUserPassword:
+		if len(data) >= 2 {
+			slot := data[0] & ipmiMaxUserSlot
+			switch data[1] & 0x03 {
+			case pwdOpEnable:
+				s.enabled[slot] = true
+			case pwdOpDisable:
+				s.enabled[slot] = false
+			}
+		}
+	}
+	return nil, nil
+}
+
+func TestCreateUser_RecreatedDisabledSlotIsDisabled(t *testing.T) {
+	s := newStatefulUserSender()
+	um := newUM(s)
+	ctx := context.Background()
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
+	if err := um.CreateUser(ctx, User{
+		Slot: 4, Username: "alice", Enabled: true, Privilege: PrivilegeAdministrator,
+	}, pwd); err != nil {
+		t.Fatalf("CreateUser enabled: %v", err)
+	}
+	if !s.enabled[4] {
+		t.Fatal("an enabled create left the slot disabled")
+	}
+	if err := um.DeleteUser(ctx, 4); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if s.names[4] != "" {
+		t.Fatalf("DeleteUser left name %q", s.names[4])
+	}
+	// IPMI behaviour: DeleteUser clears the name and channel access but
+	// leaves the slot's global enable flag set.
+	if !s.enabled[4] {
+		t.Fatal("model: DeleteUser should leave the global enable flag set")
+	}
+	if err := um.CreateUser(ctx, User{
+		Slot: 4, Username: "bob", Enabled: false, Privilege: PrivilegeUser,
+	}, nil); err != nil {
+		t.Fatalf("CreateUser disabled: %v", err)
+	}
+	if s.names[4] != "bob" {
+		t.Fatalf("name = %q, want bob", s.names[4])
+	}
+	if s.enabled[4] {
+		t.Error("a disabled create left the reused slot globally enabled")
+	}
+}
+
+func TestCreateUser_LongPasswordWritesNothing(t *testing.T) {
+	m := newMock()
+	um := newUM(m)
+	pwd := memguard.NewMemoryEnclave([]byte("abcdefghijklmnopqrstu")) // 21 bytes
+	defer pwd.Destroy()
+	err := um.CreateUser(context.Background(), User{
+		Slot: 2, Username: "x", Privilege: PrivilegeUser, Enabled: true,
+	}, pwd)
+	var cfgErr ErrInvalidConfig
+	if !errors.As(err, &cfgErr) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+	if len(m.calls) != 0 {
+		t.Fatalf("want no BMC write, got %d calls (first cmd 0x%02x)", len(m.calls), m.calls[0].cmd)
+	}
+}
+
+// TestCreateUser_EnabledWithoutPasswordWritesNothing pins that an Enabled
+// user with no password is refused before any IPMI write: the slot keeps its
+// old password state, so enabling it could activate an old or blank one.
+func TestCreateUser_EnabledWithoutPasswordWritesNothing(t *testing.T) {
+	cases := []struct {
+		name string
+		pwd  *memguard.MemoryEnclave
+	}{
+		{name: "nil", pwd: nil},
+		{name: "empty", pwd: memguard.NewMemoryEnclave([]byte{})},
+		{name: "all_nul", pwd: memguard.NewMemoryEnclave([]byte{0})},
+		{name: "embedded_nul", pwd: memguard.NewMemoryEnclave([]byte("ab\x00cd"))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMock()
+			err := newUM(m).CreateUser(context.Background(), User{
+				Slot: 5, Username: "bob", Enabled: true, Privilege: PrivilegeOperator,
+			}, tc.pwd)
+			var cfgErr ErrInvalidConfig
+			if !errors.As(err, &cfgErr) {
+				t.Fatalf("err = %v, want ErrInvalidConfig", err)
+			}
+			if cfgErr.Field != "password" {
+				t.Errorf("Field = %q, want password", cfgErr.Field)
+			}
+			if len(m.calls) != 0 {
+				t.Fatalf("want no BMC write, got %d calls (first cmd 0x%02x)", len(m.calls), m.calls[0].cmd)
+			}
+		})
+	}
+	t.Run("disabled_name_only_succeeds", func(t *testing.T) {
+		m := newMock()
+		if err := newUM(m).CreateUser(context.Background(), User{
+			Slot: 5, Username: "bob", Enabled: false, Privilege: PrivilegeOperator,
+		}, nil); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		disables := 0
+		for _, c := range m.calls {
+			if c.cmd != cmdSetUserPassword {
+				continue
+			}
+			if len(c.data) == 2 && c.data[0] == 5 && c.data[1] == pwdOpDisable {
+				disables++
+				continue
+			}
+			t.Fatalf("disabled name-only user sent a password write (data %x)", c.data)
+		}
+		if disables != 1 {
+			t.Fatalf("disabled name-only user sent %d disables, want 1", disables)
+		}
+	})
+}
+
+func TestCreateUser_PartialFailureLeavesTheSlot(t *testing.T) {
+	m := newMock()
+	pwdErr := errors.New("pwd-fail")
+	m.cmdErr = map[byte]error{cmdSetUserPassword: pwdErr}
+	um := newUM(m)
+	pwd := memguard.NewMemoryEnclave([]byte("p"))
+	defer pwd.Destroy()
+	u := User{Slot: 2, Username: "x", Privilege: PrivilegeUser, Enabled: true}
+	err := um.CreateUser(context.Background(), u, pwd)
+	if !errors.Is(err, pwdErr) {
+		t.Fatalf("err = %v, want the password error", err)
+	}
+	failIdx := -1
+	for i, c := range m.calls {
+		if c.cmd == cmdSetUserPassword {
+			failIdx = i
+			break
+		}
+	}
+	if failIdx < 0 {
+		t.Fatal("no SetUserPassword call")
+	}
+	for i, c := range m.calls[failIdx+1:] {
+		switch c.cmd {
+		case cmdSetUserName, cmdSetUserAccess, cmdSetUserPassword:
+			t.Errorf("call[%d] = 0x%02x: a failed create wrote the slot after the password failure", failIdx+1+i, c.cmd)
+		}
+	}
+}
+
+// lostEnableSender records every call and fails only the Set User Password
+// enable operation, as when the BMC applies the enable but its UDP response
+// is lost. Get User Name returns an empty name; reReadErr, when set, fails
+// every Get User Name after the first (the probe).
+type lostEnableSender struct {
+	calls     []mockCall
+	enableErr error
+	reReadErr error
+	gets      int
+}
+
+func (s *lostEnableSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
+	cp := append([]byte(nil), data...)
+	s.calls = append(s.calls, mockCall{netFn: netFn, cmd: cmd, data: cp})
+	if cmd == cmdGetUserName {
+		s.gets++
+		if s.gets > 1 && s.reReadErr != nil {
+			return nil, s.reReadErr
+		}
+		return make([]byte, ipmiMaxUsernameLen), nil
+	}
+	if cmd == cmdSetUserPassword && len(data) >= 2 && data[1]&0x03 == pwdOpEnable {
+		return nil, s.enableErr
+	}
+	return nil, nil
+}
+
+// TestCreateUser_LostEnableResponseLeavesTheSlot: the enable may have been
+// applied, but the slot's ownership cannot be proven, so it is left for the
+// operator (Tenant ruling, Codex #2199 round 17).
+func TestCreateUser_LostEnableResponseLeavesTheSlot(t *testing.T) {
+	s := &lostEnableSender{enableErr: errors.New("enable response lost")}
+	um := newUM(s)
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
+	u := User{Slot: 4, Username: "eve", Privilege: PrivilegeAdministrator, Enabled: true}
+	err := um.CreateUser(context.Background(), u, pwd)
+	if !errors.Is(err, s.enableErr) {
+		t.Fatalf("err = %v, want the enable error", err)
+	}
+	enableIdx := -1
+	for i, c := range s.calls {
+		if c.cmd == cmdSetUserPassword && len(c.data) >= 2 && c.data[1]&0x03 == pwdOpEnable {
+			enableIdx = i
+		}
+	}
+	if enableIdx < 0 {
+		t.Fatal("no enable call")
+	}
+	for i, c := range s.calls[enableIdx+1:] {
+		switch c.cmd {
+		case cmdSetUserName, cmdSetUserAccess, cmdSetUserPassword:
+			t.Errorf("call[%d] = 0x%02x: a failed create wrote the slot after the lost enable", enableIdx+1+i, c.cmd)
+		}
+	}
+}
+
+func TestCreateUser_FailedReReadIsJoined(t *testing.T) {
+	s := &lostEnableSender{
+		enableErr: errors.New("enable response lost"),
+		reReadErr: errors.New("re-read failed"),
+	}
+	um := newUM(s)
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
+	u := User{Slot: 6, Username: "mal", Privilege: PrivilegeOperator, Enabled: true}
+	err := um.CreateUser(context.Background(), u, pwd)
+	if !errors.Is(err, s.enableErr) {
+		t.Errorf("err = %v, want the enable error", err)
+	}
+	if !errors.Is(err, s.reReadErr) {
+		t.Errorf("err = %v, want the re-read error", err)
+	}
+}
+
+// lostNameSender applies every write but loses the response to the first
+// (non-zero) Set User Name, as a BMC whose UDP reply is dropped does: the
+// name is stored in name and Get User Name returns it.
+type lostNameSender struct {
+	calls   []mockCall
+	nameErr error
+	name    string
+}
+
+func (s *lostNameSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
+	cp := append([]byte(nil), data...)
+	s.calls = append(s.calls, mockCall{netFn: netFn, cmd: cmd, data: cp})
+	if cmd == cmdGetUserName {
+		resp := make([]byte, ipmiMaxUsernameLen)
+		copy(resp, s.name)
+		return resp, nil
+	}
+	if cmd == cmdSetUserName && len(data) >= 2 {
+		for _, b := range data[1:] {
+			if b != 0 {
+				s.name = trimNullPadded(data[1:])
+				return nil, s.nameErr
+			}
+		}
+	}
+	return nil, nil
+}
+
+// TestCreateUser_LostNameResponseLeavesTheSlot: a name write whose response
+// was lost is not rolled back; the slot shows the name, so ErrSlotOccupied
+// is joined and nothing more is written (Codex #2199 round 17).
+func TestCreateUser_LostNameResponseLeavesTheSlot(t *testing.T) {
+	s := &lostNameSender{nameErr: errors.New("name response lost")}
+	um := newUM(s)
+	u := User{Slot: 4, Username: "eve", Privilege: PrivilegeAdministrator, Enabled: false}
+	err := um.CreateUser(context.Background(), u, nil)
+	if !errors.Is(err, s.nameErr) {
+		t.Fatalf("err = %v, want the name error", err)
+	}
+	var occ ErrSlotOccupied
+	if !errors.As(err, &occ) || occ.Slot != 4 {
+		t.Errorf("err = %v, want ErrSlotOccupied{Slot: 4} joined", err)
+	}
+	want := []byte{cmdGetUserName, cmdSetUserName, cmdGetUserName}
+	if len(s.calls) != len(want) {
+		t.Fatalf("got %d calls, want %d (probe, failed name write, re-read)", len(s.calls), len(want))
+	}
+	for i, c := range s.calls {
+		if c.cmd != want[i] {
+			t.Errorf("call[%d] = 0x%02x, want 0x%02x", i, c.cmd, want[i])
+		}
+	}
+	if s.name != "eve" {
+		t.Errorf("slot name = %q, want eve (left as the BMC holds it)", s.name)
+	}
+}
+
+// A create aimed at a slot that already holds an account must not touch it,
+// even when the manager is called without Service.CreateUser (the CLI): a
+// rejected name write would otherwise roll the existing account back.
+func TestCreateUser_OccupiedSlotSurvivesRejectedName(t *testing.T) {
+	m := newMock()
+	m.responses[key(netFnApp, cmdGetUserName)] = append([]byte("admin"), make([]byte, 11)...)
+	m.cmdErr = map[byte]error{cmdSetUserName: errors.New("duplicate name")}
+	err := newUM(m).CreateUser(context.Background(), User{
+		Slot: 2, Username: "admin", Privilege: PrivilegeAdministrator, Enabled: false,
+	}, nil)
+	var occ ErrSlotOccupied
+	if !errors.As(err, &occ) || occ.Slot != 2 {
+		t.Fatalf("err = %v, want ErrSlotOccupied{Slot: 2}", err)
+	}
+	for i, c := range m.calls {
+		switch c.cmd {
+		case cmdSetUserName, cmdSetUserAccess, cmdSetUserPassword:
+			t.Errorf("call[%d] = 0x%02x: the occupied account was written", i, c.cmd)
+		}
+	}
+	if len(m.calls) == 0 || m.calls[0].cmd != cmdGetUserName || len(m.calls[0].data) == 0 || m.calls[0].data[0] != 2 {
+		t.Fatal("first call is not the Get User Name probe of slot 2")
+	}
+}
+
+// TestCreateUser_RefusesTheAnonymousSlot: slot 1 is the built-in anonymous
+// user, which Get User Name reports as empty. A create aimed at it is refused
+// before any command, so a rejected fixed-name write can never roll the
+// anonymous user back (Codex #2199 round 15).
+func TestCreateUser_RefusesTheAnonymousSlot(t *testing.T) {
+	m := newMock() // Get User Name answers an empty name, as the anonymous slot does
+	m.cmdErr = map[byte]error{cmdSetUserName: errors.New("fixed name")}
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
+	err := newUM(m).CreateUser(context.Background(), User{
+		Slot: 1, Username: "alice", Privilege: PrivilegeAdministrator, Enabled: true,
+	}, pwd)
+	var cfgErr ErrInvalidConfig
+	if !errors.As(err, &cfgErr) || cfgErr.Field != "slot" {
+		t.Fatalf("CreateUser into slot 1 = %v, want ErrInvalidConfig on slot", err)
+	}
+	for i, c := range m.calls {
+		switch c.cmd {
+		case cmdSetUserName, cmdSetUserAccess, cmdSetUserPassword:
+			t.Errorf("call[%d] = 0x%02x: the anonymous user was written", i, c.cmd)
+		}
+	}
+	if len(m.calls) != 0 {
+		t.Errorf("want no IPMI command, got %d", len(m.calls))
+	}
+}
+
+// interleavedNameSender is a second manager's view of the shared simulated
+// BMC bmc. On its first non-empty Set User Name it runs before (the other
+// manager's whole create), then fails that write with nameErr without
+// applying it, as a BMC whose reply is lost after a racing create does.
+type interleavedNameSender struct {
+	bmc     *statefulUserSender
+	before  func()
+	nameErr error
+	calls   []mockCall
+}
+
+func (s *interleavedNameSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
+	cp := append([]byte(nil), data...)
+	s.calls = append(s.calls, mockCall{netFn: netFn, cmd: cmd, data: cp})
+	if cmd == cmdSetUserName && len(data) >= 2 && s.before != nil {
+		named := false
+		for _, b := range data[1:] {
+			if b != 0 {
+				named = true
+				break
+			}
+		}
+		if named {
+			f := s.before
+			s.before = nil
+			f()
+			return nil, s.nameErr
+		}
+	}
+	return s.bmc.Send(netFn, cmd, data)
+}
+
+// TestCreateUser_RollbackSparesAnotherManagersAccount: two managers share
+// one simulated BMC; both probe slot 3 empty, the first completes its
+// create, the second's name write then fails. Its rollback must not
+// disable, revoke or clear the first manager's account (Codex #2199 round
+// 16).
+func TestCreateUser_RollbackSparesAnotherManagersAccount(t *testing.T) {
+	shared := newStatefulUserSender()
+	first := newUM(shared)
+	pwdA := memguard.NewMemoryEnclave([]byte("alice-pw"))
+	defer pwdA.Destroy()
+	pwdB := memguard.NewMemoryEnclave([]byte("bob-pw"))
+	defer pwdB.Destroy()
+	var firstErr error
+	second := &interleavedNameSender{
+		bmc:     shared,
+		nameErr: errors.New("name response lost"),
+		before: func() {
+			firstErr = first.CreateUser(context.Background(), User{
+				Slot: 3, Username: "alice", Privilege: PrivilegeAdministrator, Enabled: true,
+			}, pwdA)
+		},
+	}
+	err := newUM(second).CreateUser(context.Background(), User{
+		Slot: 3, Username: "bob", Privilege: PrivilegeOperator, Enabled: true,
+	}, pwdB)
+	if firstErr != nil {
+		t.Fatalf("first CreateUser: %v", firstErr)
+	}
+	if !errors.Is(err, second.nameErr) {
+		t.Fatalf("err = %v, want the name error", err)
+	}
+	var occ ErrSlotOccupied
+	if !errors.As(err, &occ) || occ.Slot != 3 {
+		t.Errorf("err = %v, want ErrSlotOccupied{Slot: 3} joined", err)
+	}
+	if shared.names[3] != "alice" {
+		t.Errorf("slot 3 name = %q, want alice", shared.names[3])
+	}
+	if !shared.enabled[3] {
+		t.Error("the first manager's account was disabled")
+	}
+	idx := -1
+	for i, c := range second.calls {
+		if c.cmd == cmdSetUserName {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatal("the second manager sent no Set User Name")
+	}
+	for i, c := range second.calls[idx+1:] {
+		switch c.cmd {
+		case cmdSetUserName, cmdSetUserAccess, cmdSetUserPassword:
+			t.Errorf("call[%d] = 0x%02x: the second manager wrote the first manager's slot", idx+1+i, c.cmd)
+		}
+	}
+}
+
+// TestCreateUser_SameUsernameRaceLeavesTheOtherAccount: two managers share
+// one simulated BMC and create the same username in slot 3. Both probe it
+// empty, the first completes, and the second's name write then fails. A name
+// re-read cannot tell the two writes apart, so the second must not disable,
+// revoke or clear the first manager's account (Codex #2199 round 17).
+func TestCreateUser_SameUsernameRaceLeavesTheOtherAccount(t *testing.T) {
+	shared := newStatefulUserSender()
+	first := newUM(shared)
+	pwdA := memguard.NewMemoryEnclave([]byte("alice-pw"))
+	defer pwdA.Destroy()
+	pwdB := memguard.NewMemoryEnclave([]byte("bob-pw"))
+	defer pwdB.Destroy()
+	var firstErr error
+	second := &interleavedNameSender{
+		bmc:     shared,
+		nameErr: errors.New("name response lost"),
+		before: func() {
+			firstErr = first.CreateUser(context.Background(), User{
+				Slot: 3, Username: "alice", Privilege: PrivilegeAdministrator, Enabled: true,
+			}, pwdA)
+		},
+	}
+	err := newUM(second).CreateUser(context.Background(), User{
+		Slot: 3, Username: "alice", Privilege: PrivilegeOperator, Enabled: true,
+	}, pwdB)
+	if firstErr != nil {
+		t.Fatalf("first CreateUser: %v", firstErr)
+	}
+	if !errors.Is(err, second.nameErr) {
+		t.Fatalf("err = %v, want the name error", err)
+	}
+	var occ ErrSlotOccupied
+	if !errors.As(err, &occ) || occ.Slot != 3 {
+		t.Errorf("err = %v, want ErrSlotOccupied{Slot: 3} joined", err)
+	}
+	if shared.names[3] != "alice" {
+		t.Errorf("slot 3 name = %q, want alice", shared.names[3])
+	}
+	if !shared.enabled[3] {
+		t.Error("the first manager's account was disabled")
+	}
+	idx := -1
+	for i, c := range second.calls {
+		if c.cmd == cmdSetUserName {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatal("the second manager sent no Set User Name")
+	}
+	for i, c := range second.calls[idx+1:] {
+		switch c.cmd {
+		case cmdSetUserName, cmdSetUserAccess, cmdSetUserPassword:
+			t.Errorf("call[%d] = 0x%02x: the second manager wrote the first manager's slot", idx+1+i, c.cmd)
+		}
+	}
+}
+
+// A failed probe returns its error and writes nothing.
+func TestCreateUser_NameProbeErrorWritesNothing(t *testing.T) {
+	m := newMock()
+	probeErr := errors.New("probe lost")
+	m.cmdErr = map[byte]error{cmdGetUserName: probeErr}
+	err := newUM(m).CreateUser(context.Background(), User{
+		Slot: 3, Username: "admin", Privilege: PrivilegeAdministrator, Enabled: false,
+	}, nil)
+	if !errors.Is(err, probeErr) {
+		t.Fatalf("err = %v, want the probe error", err)
+	}
+	if len(m.calls) != 1 {
+		t.Fatalf("want only the probe, got %d calls", len(m.calls))
+	}
+}
+
+// A Get User Name answer shorter than the 16-byte name field is refused, so a
+// truncated or empty answer is never read as an empty slot and nothing is
+// written or rolled back.
+func TestCreateUser_ShortNameProbeWritesNothing(t *testing.T) {
+	cases := []struct {
+		name string
+		resp []byte
+	}{
+		{"no_data", nil},
+		{"empty", []byte{}},
+		{"fifteen_zero_bytes", make([]byte, 15)},
+		{"truncated_name", []byte("adm")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMock()
+			m.responses[key(netFnApp, cmdGetUserName)] = tc.resp
+			err := newUM(m).CreateUser(context.Background(), User{
+				Slot: 2, Username: "bob", Privilege: PrivilegeUser, Enabled: false,
+			}, nil)
+			var short ErrIPMIShortResponse
+			if !errors.As(err, &short) {
+				t.Fatalf("err = %v, want ErrIPMIShortResponse", err)
+			}
+			if short.Command != "Get User Name" || short.Got != len(tc.resp) || short.Want != ipmiMaxUsernameLen {
+				t.Errorf("short = %+v, want Get User Name got %d want %d", short, len(tc.resp), ipmiMaxUsernameLen)
+			}
+			if len(m.calls) != 1 {
+				t.Fatalf("want only the probe, got %d calls", len(m.calls))
+			}
+		})
+	}
+}
+
+// cancelOnNameSender cancels the create's context once the name is written,
+// as a caller that disconnects mid-create would.
+type cancelOnNameSender struct {
+	*mockSender
+	cancel context.CancelFunc
+}
+
+func (s cancelOnNameSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
+	resp, err := s.mockSender.Send(netFn, cmd, data)
+	if cmd == cmdSetUserName {
+		s.cancel()
+	}
+	return resp, err
+}
+
+// TestCreateUser_CancelledContextStopsWrites: a create whose context ends
+// writes nothing more, so a caller that timed out or disconnected cannot
+// leave an account created and enabled behind it (Codex #2199 round 18).
+func TestCreateUser_CancelledContextStopsWrites(t *testing.T) {
+	user := User{Slot: 3, Username: "carol", Privilege: PrivilegeOperator, Enabled: true}
+
+	t.Run("cancelled_before_create", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		mock := newMock()
+		m := newUM(mock)
+		pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+		err := m.CreateUser(ctx, user, pwd)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CreateUser err = %v, want context.Canceled", err)
+		}
+		for _, c := range mock.calls {
+			switch c.cmd {
+			case cmdSetUserName, cmdSetUserPassword, cmdSetUserAccess:
+				t.Errorf("cancelled create wrote command %#x", c.cmd)
+			}
+		}
+	})
+
+	t.Run("cancelled_after_name_write", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		mock := newMock()
+		m := newUM(cancelOnNameSender{mockSender: mock, cancel: cancel})
+		pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+		err := m.CreateUser(ctx, user, pwd)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CreateUser err = %v, want context.Canceled", err)
+		}
+		named := false
+		for _, c := range mock.calls {
+			switch c.cmd {
+			case cmdSetUserName:
+				named = true
+			case cmdSetUserPassword, cmdSetUserAccess:
+				if named {
+					t.Errorf("create wrote command %#x after its context was cancelled", c.cmd)
+				}
+			}
+		}
+		if !named {
+			t.Fatal("the name was never written; the test did not reach the cancel")
+		}
+	})
+}
+
 // --- SetUserPassword ---
 
+// wantEnableFrame asserts c is the 2-byte Set User Password enable-user
+// frame for slot.
 func TestSetUserPassword(t *testing.T) {
 	m := newMock()
 	um := newUM(m)
@@ -445,7 +1190,13 @@ func TestSetUserPassword(t *testing.T) {
 	if err := um.SetUserPassword(context.Background(), 5, pwd); err != nil {
 		t.Fatalf("SetUserPassword: %v", err)
 	}
-	c := m.lastCall(t)
+	if len(m.calls) != 1 {
+		t.Fatalf("calls = %d, want the password set only (no enable)", len(m.calls))
+	}
+	c := m.calls[0]
+	if len(c.data) == 2 && c.data[1] == pwdOpEnable {
+		t.Fatal("SetUserPassword sent an enable frame")
+	}
 	if c.cmd != cmdSetUserPassword {
 		t.Errorf("cmd = 0x%02x, want SetUserPassword", c.cmd)
 	}
@@ -476,7 +1227,16 @@ func TestSetUserPassword_LongPasswordSets20ByteFlag(t *testing.T) {
 	if err := um.SetUserPassword(context.Background(), 5, pwd); err != nil {
 		t.Fatalf("SetUserPassword: %v", err)
 	}
-	c := m.lastCall(t)
+	if len(m.calls) != 1 {
+		t.Fatalf("calls = %d, want the password set only (no enable)", len(m.calls))
+	}
+	c := m.calls[0]
+	if len(c.data) == 2 && c.data[1] == pwdOpEnable {
+		t.Fatal("SetUserPassword sent an enable frame")
+	}
+	if c.data[1] != pwdOpSet {
+		t.Errorf("op = 0x%02x, want pwdOpSet", c.data[1])
+	}
 	if c.data[0]&0x80 == 0 {
 		t.Error("expected 20-byte password form (bit 7 = 1)")
 	}
@@ -535,6 +1295,89 @@ func TestSetUserPassword_TransportError(t *testing.T) {
 	defer pwd.Destroy()
 	if err := um.SetUserPassword(context.Background(), 5, pwd); err == nil {
 		t.Error("expected transport error")
+	}
+}
+
+// TestSetUserPassword_KeepsDisabledAccountDisabled: a globally disabled
+// account that keeps channel access stays disabled through a password reset
+// (Codex #2199 round 23).
+func TestSetUserPassword_KeepsDisabledAccountDisabled(t *testing.T) {
+	s := newStatefulUserSender()
+	um := newUM(s)
+	ctx := context.Background()
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
+	if err := um.CreateUser(ctx, User{
+		Slot: 4, Username: "alice", Enabled: true, Privilege: PrivilegeAdministrator,
+	}, pwd); err != nil {
+		t.Fatalf("CreateUser enabled: %v", err)
+	}
+	if err := um.DeleteUser(ctx, 4); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if err := um.CreateUser(ctx, User{
+		Slot: 4, Username: "bob", Enabled: false, Privilege: PrivilegeUser,
+	}, nil); err != nil {
+		t.Fatalf("CreateUser disabled: %v", err)
+	}
+	if err := um.SetUserPrivilege(ctx, 4, 0, PrivilegeUser); err != nil {
+		t.Fatalf("SetUserPrivilege: %v", err)
+	}
+	if s.enabled[4] {
+		t.Fatal("setup: the account is globally enabled before the reset")
+	}
+	before := len(s.calls)
+	next := memguard.NewMemoryEnclave([]byte("s3cret"))
+	defer next.Destroy()
+	if err := um.SetUserPassword(ctx, 4, next); err != nil {
+		t.Fatalf("SetUserPassword: %v", err)
+	}
+	if s.enabled[4] {
+		t.Error("a password reset re-enabled a globally disabled account")
+	}
+	for _, c := range s.calls[before:] {
+		if c.cmd == cmdSetUserPassword && len(c.data) >= 2 && c.data[1]&0x03 == pwdOpEnable {
+			t.Errorf("password reset sent an enable frame % x", c.data)
+		}
+	}
+}
+
+// TestSetUserPassword_FailedSetSendsNoEnable: when the password write fails,
+// the slot is never enabled, so a stale or blank password is not activated.
+func TestSetUserPassword_FailedSetSendsNoEnable(t *testing.T) {
+	m := newMock()
+	m.err = errors.New("transport")
+	um := newUM(m)
+	pwd := memguard.NewMemoryEnclave([]byte("x"))
+	defer pwd.Destroy()
+	if err := um.SetUserPassword(context.Background(), 5, pwd); err == nil {
+		t.Fatal("expected transport error")
+	}
+	for _, c := range m.calls {
+		if c.cmd == cmdSetUserPassword && len(c.data) >= 2 && c.data[1]&0x03 == pwdOpEnable {
+			t.Errorf("a failed password set was followed by an enable: % x", c.data)
+		}
+	}
+}
+
+// TestSetUserPassword_RefusesNULPasswordWritesNothing: IPMI zero-pads the
+// password field, so a NUL byte would store a truncated or blank secret; the
+// reset refuses it before any write (Codex #2199 round 23).
+func TestSetUserPassword_RefusesNULPasswordWritesNothing(t *testing.T) {
+	nul := string([]byte{0})
+	for _, p := range []string{nul, strings.Repeat(nul, 4), "ab" + nul + "cd", "abcd" + nul} {
+		m := newMock()
+		um := newUM(m)
+		pwd := memguard.NewMemoryEnclave([]byte(p))
+		err := um.SetUserPassword(context.Background(), 5, pwd)
+		pwd.Destroy()
+		var cfg ErrInvalidConfig
+		if !errors.As(err, &cfg) || cfg.Field != "password" {
+			t.Errorf("password %q: err = %v, want ErrInvalidConfig on password", p, err)
+		}
+		if len(m.calls) != 0 {
+			t.Errorf("password %q: calls = %d, want no writes", p, len(m.calls))
+		}
 	}
 }
 

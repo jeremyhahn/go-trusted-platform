@@ -776,12 +776,19 @@ func (h *handler) writeBMCError(w http.ResponseWriter, r *http.Request, profileI
 	}
 	var slotOccupied bmcpkg.ErrSlotOccupied
 	if errors.As(err, &slotOccupied) {
-		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{Code: http.StatusConflict, Error: slotOccupied.Error(), Success: false})
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{Code: http.StatusConflict, Error: err.Error(), Success: false})
 		return
 	}
 	var connAccount bmcpkg.ErrConnectionAccount
 	if errors.As(err, &connAccount) {
 		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{Code: http.StatusConflict, Error: connAccount.Error(), Success: false})
+		return
+	}
+	// A config refusal (oversized password, bad slot, an Enabled user with
+	// no password) is the caller's input, not a server fault.
+	var invalidConfig bmcpkg.ErrInvalidConfig
+	if errors.As(err, &invalidConfig) {
+		h.responseWriter.Error400(w, r, invalidConfig)
 		return
 	}
 

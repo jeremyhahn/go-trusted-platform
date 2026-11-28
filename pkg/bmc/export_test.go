@@ -16,7 +16,6 @@ package bmc
 import (
 	"context"
 	"log/slog"
-	"sync"
 )
 
 // TestRMCPSession is a test-only wrapper exposing a minimal view over
@@ -57,8 +56,24 @@ func (t *TestRMCPSession) K2() []byte { return t.inner.k2 }
 // pre-handshake.
 func (t *TestRMCPSession) BMCSessionID() uint32 { return t.inner.bmcSessionID }
 
-// UserLockCount reports how many user-slot mutexes the service holds.
-func (s *Service) UserLockCount() int { return len(s.userLocks) }
+// HoldUserLock takes the profile's CreateUser lock for an external test and
+// returns its release.
+func HoldUserLock(s *Service, profileID uint64) (release func()) {
+	release, _ = s.lockUsers(context.Background(), profileID)
+	return release
+}
 
-// UserLockFor returns the mutex serializing user-slot writes on a profile.
-func (s *Service) UserLockFor(profileID uint64) *sync.Mutex { return s.userLock(profileID) }
+// UserLockCount returns the number of user lock stripes currently held.
+func UserLockCount(s *Service) int {
+	n := 0
+	for _, ch := range s.userLockStripes() {
+		n += len(ch)
+	}
+	return n
+}
+
+// UserLockCount reports how many user-slot lock stripes the service holds.
+func (s *Service) UserLockCount() int { return len(s.userLockStripes()) }
+
+// UserLockFor returns the lock stripe serializing user-slot writes on a profile.
+func (s *Service) UserLockFor(profileID uint64) chan struct{} { return s.userLock(profileID) }

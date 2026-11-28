@@ -663,6 +663,11 @@ func (s *BMCGRPCService) CreateUser(ctx context.Context, req *platformv1.BMCCrea
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	// An Enabled user with no password could activate the slot with its old
+	// or blank password state: refuse before the service is called.
+	if domainUser.Enabled && req.GetPassword() == "" {
+		return nil, status.Error(codes.InvalidArgument, bmc.ErrInvalidConfig{Field: "password", Reason: "an enabled user needs a password"}.Error())
+	}
 	if err := s.service.CreateUser(ctx, req.GetProfileId(), domainUser, req.GetPassword()); err != nil {
 		return nil, s.toGRPCError("create_user", err)
 	}
@@ -858,6 +863,19 @@ func (s *BMCGRPCService) toGRPCError(operation string, err error) error {
 	if errors.As(err, &profileNotFound) {
 		return status.Error(codes.NotFound, profileNotFound.Error())
 	}
+	// The message keeps the whole error, because a failed create joins its
+	// failure with ErrSlotOccupied and the operator needs both (REST does
+	// the same).
+	var slotOccupied bmc.ErrSlotOccupied
+	if errors.As(err, &slotOccupied) {
+		return status.Error(codes.AlreadyExists, err.Error())
+	}
+	// Checked before ErrInvalidConfig, which a connection-account refusal
+	// also matches.
+	var connAccount bmc.ErrConnectionAccount
+	if errors.As(err, &connAccount) {
+		return status.Error(codes.FailedPrecondition, connAccount.Error())
+	}
 	var nilConfig bmc.ErrNilConfig
 	if errors.As(err, &nilConfig) {
 		return status.Error(codes.InvalidArgument, nilConfig.Error())
@@ -889,14 +907,6 @@ func (s *BMCGRPCService) toGRPCError(operation string, err error) error {
 	var profileNoBMC baremetal.ErrProfileNoBMC
 	if errors.As(err, &profileNoBMC) {
 		return status.Error(codes.FailedPrecondition, profileNoBMC.Error())
-	}
-	var slotOccupied bmc.ErrSlotOccupied
-	if errors.As(err, &slotOccupied) {
-		return status.Error(codes.AlreadyExists, slotOccupied.Error())
-	}
-	var connAccount bmc.ErrConnectionAccount
-	if errors.As(err, &connAccount) {
-		return status.Error(codes.FailedPrecondition, connAccount.Error())
 	}
 
 	s.logger.Error("bmc grpc: operation failed",

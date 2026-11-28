@@ -302,6 +302,53 @@ func TestRunRestoreCore_DeviceLoad_Fails(t *testing.T) {
 	}
 }
 
+// TestRunRestoreCore_UnknownDeviceChangesNothing verifies an ID that names
+// no device fails before the BMC certificate, the pin or DNS is touched.
+func TestRunRestoreCore_UnknownDeviceChangesNothing(t *testing.T) {
+	core, _ := minimalRestoreCore(t)
+	rs := &inlineRestorer{cert: testIssuedCertificate()}
+	core.restorer = rs
+	pinDeleted, daneRemoved := false, false
+	core.pinDeleter = func(_ context.Context, _ string, _ int) error {
+		pinDeleted = true
+		return nil
+	}
+	core.daneUnpublish = func(_ context.Context, _ string, _ uint16, _ string) error {
+		daneRemoved = true
+		return nil
+	}
+	core.deviceLoader = func(_ context.Context, _ uint64) (*entities.Device, error) {
+		return nil, errors.New("device not found")
+	}
+
+	result, err := runRestoreCore(context.Background(), 42, "bmc.internal", "bmc.internal:443", "bmc-zone", core)
+	var devLoadErr ErrBMCEnrollDeviceLoad
+	if !errors.As(err, &devLoadErr) {
+		t.Fatalf("err = %T(%v), want ErrBMCEnrollDeviceLoad", err, err)
+	}
+	if rs.closed {
+		t.Error("the BMC certificate was restored for an unknown device")
+	}
+	if pinDeleted {
+		t.Error("the pin was deleted for an unknown device")
+	}
+	if daneRemoved {
+		t.Error("TLSA records were removed for an unknown device")
+	}
+	if result != nil && len(result.NewCertPEM) != 0 {
+		t.Error("result carries a new certificate for an unknown device")
+	}
+}
+
+// seedRestoreDevice stores a bare device with the given ID, so RestoreBMC
+// passes its first step (the device load) in an App harness.
+func seedRestoreDevice(t *testing.T, a *App, id uint64) {
+	t.Helper()
+	if err := a.saveDeviceForEnroll(context.Background(), &entities.Device{ID: id}); err != nil {
+		t.Fatalf("seed device %d: %v", id, err)
+	}
+}
+
 // TestRunRestoreCore_DeviceSave_Fails verifies ErrBMCEnrollDeviceSave is
 // returned when the device cannot be saved after the enrollment is cleared.
 func TestRunRestoreCore_DeviceSave_Fails(t *testing.T) {

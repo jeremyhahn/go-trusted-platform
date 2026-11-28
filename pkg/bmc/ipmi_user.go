@@ -14,9 +14,12 @@
 package bmc
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
 )
@@ -56,6 +59,10 @@ const (
 	// ipmiMaxUserSlot is the largest user ID representable in the 6-bit
 	// User ID field of NetFn 0x06 commands.
 	ipmiMaxUserSlot uint8 = 0x3F
+	// ipmiAnonymousUserSlot is IPMI user ID 1, the built-in null (anonymous)
+	// user: its name is fixed and Get User Name reports it empty, so it is
+	// never free for a created account.
+	ipmiAnonymousUserSlot uint8 = 1
 )
 
 // Set User Access change bits (Table 22-22 byte 1).
@@ -206,25 +213,109 @@ func (m *ipmiUserManager) ListUsers(_ context.Context) ([]User, error) {
 // The sequence follows the IPMI-recommended order: Set User Name, then
 // Set User Password (set), then Set User Access. Most BMCs reject access
 // changes on a slot with no name, so name first is required.
-func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memguard.MemoryEnclave) error {
+//
+// An Enabled user needs a password; a name-only entry (nil or empty
+// password) must be created with Enabled false. A disabled user is
+// explicitly disabled, because DeleteUser leaves a slot's global enable
+// flag set.
+//
+// When any write fails, CreateUser writes nothing more, because IPMI cannot
+// prove the slot holds this call's account (another caller may have written
+// the same username). It re-reads the slot name and returns the failure
+// joined with ErrSlotOccupied when the slot shows a name (the operator
+// inspects it with ListUsers and removes a leftover with DeleteUser), or
+// with the re-read error.
+//
+// It first reads the slot's name and refuses a populated slot with
+// ErrSlotOccupied, writing nothing, so a create never touches an
+// existing account.
+//
+// It refuses slot 1, the built-in anonymous user, with ErrInvalidConfig
+// before any command: its empty name does not mean the slot is free, and a
+// create there would overwrite the anonymous user's name and access.
+//
+// It checks ctx before every write and stops when ctx has ended: before the
+// name write it returns ctx.Err() with nothing written; after it, the stop
+// follows the failure path above.
+func (m *ipmiUserManager) CreateUser(ctx context.Context, u User, password *memguard.MemoryEnclave) error {
 	if err := validateSlot(u.Slot); err != nil {
 		return err
+	}
+	if u.Slot == ipmiAnonymousUserSlot {
+		return ErrInvalidConfig{Field: "slot", Reason: "slot 1 is the built-in anonymous user; its name is fixed and it cannot hold a created account"}
 	}
 	if err := validateUsername(u.Username); err != nil {
 		return err
 	}
+	// getUserName decodes an empty or NUL-led name as an empty slot, so such
+	// an account would be hidden from ListUsers and open to a later create.
+	// Refuse both here, before the first write; DeleteUser still writes an
+	// empty name through validateUsername.
+	if u.Username == "" {
+		return ErrInvalidConfig{Field: "username", Reason: "a username may not be empty"}
+	}
+	if strings.IndexByte(u.Username, 0) >= 0 {
+		return ErrInvalidConfig{Field: "username", Reason: "a username may not contain a NUL byte"}
+	}
 	if !u.Privilege.IsValid() {
 		return ErrInvalidConfig{Field: "privilege", Reason: "unrecognized privilege level"}
 	}
-	// Refuse an oversized password before the first BMC write: a refusal
-	// after setUserName would leave a named slot without password or access.
+	// Refuse an oversized password before the first write, so a refusal
+	// leaves the slot untouched.
 	if password != nil && password.Size() > ipmiMaxPasswordLen {
 		return ErrInvalidConfig{Field: "password", Reason: "password exceeds 20 bytes"}
 	}
-	if err := m.setUserName(u.Slot, u.Username); err != nil {
+	// IPMI keeps a slot's old password state (DeleteUser does not clear
+	// it), so enabling a slot with no password set could activate it with
+	// an old or blank one. Refuse before the first write.
+	if u.Enabled && (password == nil || password.Size() == 0) {
+		return ErrInvalidConfig{Field: "password", Reason: "an enabled user needs a password"}
+	}
+	// IPMI zero-pads the password field, so a NUL byte would store a
+	// truncated secret, and an all-NUL one a blank secret on an enabled user.
+	if password != nil {
+		if err := refuseNULPassword(password); err != nil {
+			return err
+		}
+	}
+	// Probe the slot before the first write: a slot that already holds an
+	// account is refused here, so a create only ever writes a slot it found
+	// empty. Callers that skip Service.CreateUser (the CLI) get the same
+	// check. A short answer is an error, not an empty slot.
+	name, err := m.getUserName(u.Slot)
+	if err != nil {
 		return err
 	}
+	if name != "" {
+		return ErrSlotOccupied{Slot: u.Slot}
+	}
+	// Nothing is written yet, so a context that has ended returns as is.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := m.setUserName(u.Slot, u.Username); err != nil {
+		// The BMC may have applied the name and lost only the response, and
+		// a name cannot show whose write it was, so the slot is left as it is.
+		return errors.Join(err, m.leaveFailedCreate(u))
+	}
+	if err := m.finishCreate(ctx, u, password); err != nil {
+		// A failed step may still have been applied on the BMC (an enable
+		// whose UDP response is lost), but nothing proves the slot is this
+		// call's, so it is not rolled back: the failure is returned with
+		// ErrSlotOccupied joined when the slot shows a name.
+		return errors.Join(err, m.leaveFailedCreate(u))
+	}
+	return nil
+}
+
+// finishCreate sets the password, the channel access and the IPMI enable
+// flag (set for an Enabled user, cleared otherwise) of a slot whose name
+// CreateUser has written. It stops before any write once ctx has ended.
+func (m *ipmiUserManager) finishCreate(ctx context.Context, u User, password *memguard.MemoryEnclave) error {
 	if password != nil && password.Size() > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := m.setUserPassword(u.Slot, pwdOpSet, password); err != nil {
 			return err
 		}
@@ -233,14 +324,55 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 	if channel == 0 {
 		channel = m.channel
 	}
-	return m.setUserAccess(u.Slot, channel, u.Privilege, u.Enabled)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := m.setUserAccess(u.Slot, channel, u.Privilege, u.Enabled); err != nil {
+		return err
+	}
+	// Set User Password operation 01b enables the user and 00b disables it;
+	// neither carries password data. The global enable flag survives
+	// DeleteUser, so a disabled create on a reused slot must clear it
+	// explicitly, and an enabled one must set it.
+	op := byte(pwdOpDisable)
+	if u.Enabled {
+		op = pwdOpEnable
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := m.sender.Send(netFnApp, cmdSetUserPassword, []byte{u.Slot & ipmiMaxUserSlot, op})
+	return err
 }
 
-// SetUserPassword changes the password of an existing slot.
+// leaveFailedCreate decides what a failed CreateUser reports and writes
+// nothing. IPMI has no compare-and-set or owner field on a user slot, so a
+// name read cannot prove this call wrote the slot: another manager (another
+// profile, daemon or CLI) may have created the same username there. The slot
+// is never rolled back and is left for the operator. A slot that shows any
+// name returns ErrSlotOccupied, an empty slot returns nil, and a failed
+// re-read returns its error.
+func (m *ipmiUserManager) leaveFailedCreate(u User) error {
+	name, err := m.getUserName(u.Slot)
+	if err != nil {
+		return err
+	}
+	if name != "" {
+		return ErrSlotOccupied{Slot: u.Slot}
+	}
+	return nil
+}
+
+// SetUserPassword writes the password of an existing slot only (Set User
+// Password, set password). It leaves the slot's IPMI global enable flag and
+// its channel access as they are, so a disabled account stays disabled.
 //
-// password must be non-nil and contain at least one byte. Empty passwords
-// are rejected since they are interpreted as "disable" by some BMCs and
-// "no change" by others; callers wanting to disable should call
+// It refuses a nil, empty, oversized or NUL-containing password with
+// ErrInvalidConfig before any write: IPMI zero-pads the password field, so a
+// NUL byte would store a truncated secret, and an all-NUL one a blank secret.
+//
+// Empty passwords are rejected since they are interpreted as "disable" by
+// some BMCs and "no change" by others; callers wanting to disable should call
 // SetUserPrivilege with PrivilegeNoAccess.
 func (m *ipmiUserManager) SetUserPassword(_ context.Context, slot uint8, password *memguard.MemoryEnclave) error {
 	if err := validateSlot(slot); err != nil {
@@ -249,7 +381,26 @@ func (m *ipmiUserManager) SetUserPassword(_ context.Context, slot uint8, passwor
 	if password == nil || password.Size() == 0 {
 		return ErrInvalidConfig{Field: "password", Reason: "password is required"}
 	}
+	if err := refuseNULPassword(password); err != nil {
+		return err
+	}
 	return m.setUserPassword(slot, pwdOpSet, password)
+}
+
+// refuseNULPassword returns ErrInvalidConfig when password contains a NUL
+// byte, which IPMI's zero-padded password field cannot carry.
+func refuseNULPassword(password *memguard.MemoryEnclave) error {
+	hasNUL := false
+	if err := password.Open(func(pw []byte) error {
+		hasNUL = bytes.IndexByte(pw, 0) >= 0
+		return nil
+	}); err != nil {
+		return err
+	}
+	if hasNUL {
+		return ErrInvalidConfig{Field: "password", Reason: "a password may not contain a NUL byte"}
+	}
+	return nil
 }
 
 // SetUserPrivilege updates the channel privilege of an existing slot and
@@ -322,13 +473,19 @@ func (m *ipmiUserManager) setUserAccess(slot, channel uint8, priv Privilege, ena
 	return err
 }
 
-// getUserName issues IPMI Get User Name for the given slot.
+// getUserName issues IPMI Get User Name for the given slot. The answer must
+// carry the full 16-byte name field; a shorter answer (a BMC may complete
+// successfully with no data) is ErrIPMIShortResponse, so callers never read
+// it as an empty slot.
 func (m *ipmiUserManager) getUserName(slot uint8) (string, error) {
 	resp, err := m.sender.Send(netFnApp, cmdGetUserName, []byte{slot & ipmiMaxUserSlot})
 	if err != nil {
 		return "", err
 	}
-	return trimNullPadded(resp), nil
+	if len(resp) < ipmiMaxUsernameLen {
+		return "", ErrIPMIShortResponse{Command: "Get User Name", Got: len(resp), Want: ipmiMaxUsernameLen}
+	}
+	return trimNullPadded(resp[:ipmiMaxUsernameLen]), nil
 }
 
 // setUserName issues IPMI Set User Name for the given slot. The name is

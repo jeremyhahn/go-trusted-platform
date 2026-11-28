@@ -225,6 +225,17 @@ func (e ErrConnectionAccount) Error() string {
 	return fmt.Sprintf("bmc: user slot %d is the connection account of profile %d; change it in the profile instead", e.Slot, e.ProfileID)
 }
 
+// As lets errors.As also match a connection-account refusal as
+// ErrInvalidConfig on the slot field, so callers that treat it as the
+// caller's input error keep working.
+func (e ErrConnectionAccount) As(target any) bool {
+	if t, ok := target.(*ErrInvalidConfig); ok {
+		*t = ErrInvalidConfig{Field: "slot", Reason: e.Error()}
+		return true
+	}
+	return false
+}
+
 // ErrSlotOccupied indicates a create on a BMC user slot that already holds
 // a user: creating there would overwrite the existing account.
 type ErrSlotOccupied struct {

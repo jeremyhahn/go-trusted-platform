@@ -138,6 +138,25 @@ func TestBMCUsersSDKRoundTrip_CreateUser(t *testing.T) {
 	assert.Equal(t, "s3cret-Pass", gotPassword)
 }
 
+func TestBMCUsersSDKRoundTrip_OccupiedSlotIsConflict(t *testing.T) {
+	svc := &mockBMCService{createUserFn: func(context.Context, uint64, bmcpkg.User, string) error {
+		return bmcpkg.ErrSlotOccupied{Slot: 4}
+	}}
+	client := newBMCUsersSDKClient(t, svc)
+
+	_, err := client.CreateUser(context.Background(), &platformv1.BMCCreateUserRequest{
+		ProfileId: 9,
+		User: &platformv1.BMCUser{
+			Slot:      4,
+			Username:  "operator1",
+			Privilege: platformv1.BMCUserPrivilege_BMC_USER_PRIVILEGE_OPERATOR,
+		},
+		Password: "s3cret-Pass",
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.AlreadyExists, status.Code(err))
+}
+
 func TestBMCUsersSDKRoundTrip_SetUserPrivilege(t *testing.T) {
 	var (
 		gotProfile    uint64
