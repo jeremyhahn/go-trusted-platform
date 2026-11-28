@@ -41,10 +41,6 @@ export interface RowAction<TData> {
   variant?: "default" | "destructive"
   separator?: boolean
   icon?: React.ComponentType<{ className?: string }>
-  /** Disables the action, e.g. when the server does not offer its op. */
-  disabled?: boolean
-  /** The action's tooltip, e.g. the reason it is disabled. */
-  title?: string
 }
 
 /**

@@ -2,7 +2,6 @@
 
 import * as React from "react";
 import { Moon, Sun, Monitor } from "lucide-react";
-import { useHydrated } from "@/hooks";
 import { useTheme } from "next-themes";
 
 import { Button } from "@/components/ui/button";
@@ -26,8 +25,12 @@ import {
  */
 export function ThemeToggle() {
   const { setTheme, theme } = useTheme();
-  // Prevent hydration mismatch: false on the server and during hydration.
-  const mounted = useHydrated();
+  const [mounted, setMounted] = React.useState(false);
+
+  // Prevent hydration mismatch
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
 
   if (!mounted) {
     return (

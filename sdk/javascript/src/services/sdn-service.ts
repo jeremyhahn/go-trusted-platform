@@ -39,20 +39,7 @@ import type {
   GetPortStatsResponse,
   GetFlowStatsResponse,
   SDNLabelSelector,
-  SetPortStateRequest,
-  SetPortStateResponse,
-  ApplyPolicyRequest,
-  ApplyPolicyResponse,
-  GetPolicyResponse,
-  ListPoliciesResponse,
-  SDNPolicyRuleMatch,
 } from '../types/sdn.js';
-
-/**
- * Match fields policyRuleMatch (pkg/api/daemon/sdn_service.go) ignores when it
- * builds a policy flow; applyPolicy refuses a rule that sets any of them.
- */
-const UNENFORCED_MATCH_FIELDS = ['interface', 'direction', 'dscp', 'application'] as const satisfies readonly (keyof SDNPolicyRuleMatch)[];
 
 /**
  * Builds the query parameters of an SDN list request under the proto field
@@ -191,23 +178,8 @@ export class SDNService extends BaseService {
    * @returns Port information
    */
   async getPort(bridgeId: string, portId: string): Promise<ApiResponse<GetPortResponse>> {
-    // The server routes GetPort at .../ports/{port}/state (#1745).
     return this.client.get<GetPortResponse>(
-      this.buildUrl(`/bridges/${this.encodePathSegment(bridgeId)}/ports/${this.encodePathSegment(portId)}/state`)
-    );
-  }
-
-  /**
-   * Set port state (admin state and rate limits)
-   *
-   * @param request - Port state request; the path names the bridge and port
-   * @returns The port after the change
-   */
-  async setPortState(request: SetPortStateRequest): Promise<ApiResponse<SetPortStateResponse>> {
-    const { bridgeId, portId, ...state } = request;
-    return this.client.put<SetPortStateResponse>(
-      this.buildUrl(`/bridges/${this.encodePathSegment(bridgeId)}/ports/${this.encodePathSegment(portId)}/state`),
-      state
+      this.buildUrl(`/bridges/${this.encodePathSegment(bridgeId)}/ports/${this.encodePathSegment(portId)}`)
     );
   }
 
@@ -279,102 +251,6 @@ export class SDNService extends BaseService {
     return this.client.delete<RevokePortAuthResponse>(
       this.buildUrl(`/bridges/${this.encodePathSegment(bridgeId)}/ports/${this.encodePathSegment(portId)}/auth`)
     );
-  }
-
-  // =========================================================================
-  // Policy Operations
-  // =========================================================================
-
-  /**
-   * Apply a policy
-   *
-   * @param request - Policy to apply
-   * @returns Applied policy
-   */
-  async applyPolicy(request: ApplyPolicyRequest): Promise<ApiResponse<ApplyPolicyResponse>> {
-    // The daemon installs flows on BRIDGE targets only and reports success for
-    // any other target type, so refuse those here rather than send a policy
-    // that silently does nothing on them.
-    for (const target of request.config.targets ?? []) {
-      if (target.type !== 'POLICY_TARGET_TYPE_BRIDGE') {
-        throw new RangeError(
-          `policy target type ${target.type} is not supported: only POLICY_TARGET_TYPE_BRIDGE is applied`
-        );
-      }
-      // The daemon installs flows from the target type and bridge ID only, so
-      // a zone or direction would not narrow them: the policy would apply
-      // across the whole bridge. Refuse it before sending.
-      for (const field of ['zone', 'direction'] as const) {
-        if (target[field]) {
-          throw new RangeError(
-            `policy target ${field} is not supported: the daemon does not enforce it`
-          );
-        }
-      }
-    }
-    // The daemon installs every rule before merely recording config.enabled,
-    // so a disabled policy would be active at once: refuse it before sending.
-    if (request.config.enabled === false) {
-      throw new RangeError(
-        'policy config enabled=false is not supported: the daemon installs the rules regardless'
-      );
-    }
-    // The daemon installs RATE_LIMIT and MIRROR rules as a plain forward, so
-    // such a policy would be reported active while limiting or mirroring
-    // nothing: refuse it before sending.
-    for (const rule of request.config.rules ?? []) {
-      if (rule.action === 'POLICY_RULE_ACTION_RATE_LIMIT' || rule.action === 'POLICY_RULE_ACTION_MIRROR') {
-        throw new RangeError(
-          `policy rule action ${rule.action} is not supported: the daemon does not enforce it`
-        );
-      }
-      // The daemon never reads the rule's log flag, so a rule asking to be
-      // logged would be installed and log nothing: refuse it before sending.
-      if (rule.log === true) {
-        throw new RangeError('policy rule log is not supported: the daemon does not enforce it');
-      }
-      // The daemon builds the flow from protocol, addresses, ports and VLAN
-      // only and drops these fields, so a rule scoped by one would apply
-      // across the whole bridge: refuse it before sending.
-      const match = rule.match;
-      if (match) {
-        for (const field of UNENFORCED_MATCH_FIELDS) {
-          const value = match[field];
-          if (value !== undefined && value !== null && value !== '' && value !== 0) {
-            throw new RangeError(
-              `policy rule match field ${field} is not supported: the daemon does not enforce it`
-            );
-          }
-        }
-      }
-    }
-    // An omitted enabled reaches the daemon as false, which then installs the
-    // rules yet records the policy as disabled: send it as enabled.
-    return this.client.post<ApplyPolicyResponse>(this.buildUrl('/policies'), {
-      ...request,
-      config: { ...request.config, enabled: true },
-    });
-  }
-
-  /**
-   * Get a policy by ID
-   *
-   * @param id - Policy ID
-   * @returns Policy
-   */
-  async getPolicy(id: string): Promise<ApiResponse<GetPolicyResponse>> {
-    return this.client.get<GetPolicyResponse>(
-      this.buildUrl(`/policies/${this.encodePathSegment(id)}`)
-    );
-  }
-
-  /**
-   * List policies
-   *
-   * @returns Policies
-   */
-  async listPolicies(): Promise<ApiResponse<ListPoliciesResponse>> {
-    return this.client.get<ListPoliciesResponse>(this.buildUrl('/policies'));
   }
 
   // =========================================================================

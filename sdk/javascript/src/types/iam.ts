@@ -457,11 +457,6 @@ export interface RevokeIAMTokenRequest {
  * Verify token request
  */
 export interface VerifyIAMTokenRequest {
-  /**
-   * The caller's tenant, sent as the tenant_id query the daemon's
-   * own-tenant guard checks on the flat IAM routes
-   */
-  tenantId: string;
   /** Token to verify */
   token: string;
 }
@@ -472,20 +467,16 @@ export interface VerifyIAMTokenRequest {
 export interface VerifyIAMTokenResponse {
   /** Whether valid */
   valid: boolean;
-  /** Why the token is not valid */
-  reason?: string;
   /** User ID */
   userId?: string;
   /** Tenant ID */
   tenantId?: string;
   /** Token scopes */
   scopes?: string[];
-  /** Roles bound to the token's subject */
-  roles?: string[];
   /** Expires at timestamp */
   expiresAt?: number;
-  /** Response timestamp (the REST answer carries none) */
-  timestamp?: string;
+  /** Response timestamp */
+  timestamp: string;
 }
 
 // =============================================================================

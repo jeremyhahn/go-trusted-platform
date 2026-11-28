@@ -53,38 +53,33 @@ export default function IDevIDDetailPage() {
     errors?: string[];
   } | null>(null);
 
-  // settleIDevID applies one certificate read from its promise callbacks, so
-  // the mount effect starts it without a synchronous setState; fetchIDevID
-  // adds the loading flag for a re-read.
-  const settleIDevID = () =>
-    idevidService
-      .getIDevIDInfo()
-      .then((response) => {
-        if (!response.data) {
-          throw new Error('Failed to fetch certificate');
-        }
+  const fetchIDevID = async () => {
+    setIsLoading(true);
+    try {
+      const response = await idevidService.getIDevIDInfo();
+
+      if (response.data) {
         // Map SDK response to detail format
         // The REST payload carries the IDevIDDetail fields, which differ
         // from the SDK/proto declaration (#445).
         setIDevID(response.data as unknown as IDevIDDetail);
-      })
-      .catch((error: unknown) => {
-        toast({
-          title: 'Error',
-          description: error instanceof Error ? error.message : 'Failed to fetch certificate',
-          variant: 'destructive',
-        });
-      })
-      .finally(() => setIsLoading(false));
-
-  const fetchIDevID = async () => {
-    setIsLoading(true);
-    await settleIDevID();
+      } else {
+        throw new Error('Failed to fetch certificate');
+      }
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to fetch certificate',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   useEffect(() => {
     if (idevIdId) {
-      void settleIDevID();
+      fetchIDevID();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idevIdId]);

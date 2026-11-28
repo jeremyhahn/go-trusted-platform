@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import {
   Crown,
   Mail,
@@ -9,7 +8,6 @@ import {
   MoreHorizontal,
   RefreshCw,
   Shield,
-  Trash2,
   User,
   X,
   AlertCircle,
@@ -36,7 +34,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { InvitationForm } from "@/components/features/tenant/invitation-form";
-import { Gated } from "@/components/features/capabilities/gated";
 import { useAuth } from "@/contexts/AuthContext";
 import { useApi, useIAM, useInvitation, useInvitationList, useToast } from "@/hooks";
 import type { SendInvitationInput } from "@/types/tenant";
@@ -59,23 +56,6 @@ const statusColors: Record<InvitationStatus, "secondary" | "default" | "destruct
   expired: "destructive",
   revoked: "outline",
 };
-
-// The dialog trigger hands its open handler and ref to its child: this
-// passes them on to the Button that Gated disables when the server does not
-// offer the send op (#2056).
-const SendInvitationTrigger = React.forwardRef<
-  HTMLButtonElement,
-  React.ComponentPropsWithoutRef<typeof Button> & { sending: boolean }
->(function SendInvitationTrigger({ sending, disabled, ...props }, ref) {
-  return (
-    <Gated op="POST /api/v1/invitations">
-      <Button ref={ref} {...props} disabled={disabled || sending}>
-        <MailPlus className="h-4 w-4 mr-2" />
-        {sending ? "Sending..." : "Send Invitation"}
-      </Button>
-    </Gated>
-  );
-});
 
 export default function InvitationsPage() {
   const { isLoading: authLoading, tenantId } = useAuth();
@@ -101,7 +81,7 @@ export default function InvitationsPage() {
   const [processingId, setProcessingId] = React.useState<string | null>(null);
 
   // Use SDK invitation hooks
-  const { create, revoke, remove } = useInvitation();
+  const { create, revoke, resend } = useInvitation();
   const {
     data: invitationsResponse,
     isLoading,
@@ -159,6 +139,28 @@ export default function InvitationsPage() {
     }
   };
 
+  const handleResend = async (invitation: Invitation) => {
+    setProcessingId(invitation.id);
+    try {
+      await resend.mutateAsync(invitation.id);
+      toast({
+        title: "Invitation resent",
+        description: `Invitation resent to ${invitation.email}`,
+        variant: "success",
+      });
+      void refetch();
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to resend invitation";
+      toast({
+        title: "Failed to resend invitation",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
   const handleCancel = async (id: string) => {
     if (!confirm("Are you sure you want to cancel this invitation?")) return;
 
@@ -183,30 +185,6 @@ export default function InvitationsPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Delete this invitation? The record is removed.")) return;
-
-    setProcessingId(id);
-    try {
-      await remove.mutateAsync(id);
-      toast({
-        title: "Invitation deleted",
-        description: "The invitation record has been removed",
-        variant: "success",
-      });
-      void refetch();
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to delete invitation";
-      toast({
-        title: "Failed to delete invitation",
-        description: errorMessage,
-        variant: "destructive",
-      });
-    } finally {
-      setProcessingId(null);
-    }
-  };
-
   const columns: ColumnDef<Invitation>[] = [
     {
       accessorKey: "email",
@@ -215,12 +193,7 @@ export default function InvitationsPage() {
         return (
           <div className="flex items-center gap-2">
             <Mail className="h-4 w-4 text-muted-foreground" />
-            <Link
-              href={`/tenant/invitations/${encodeURIComponent(row.original.id)}`}
-              className="font-medium hover:underline"
-            >
-              {row.original.email}
-            </Link>
+            <span className="font-medium">{row.original.email}</span>
           </div>
         );
       },
@@ -297,6 +270,7 @@ export default function InvitationsPage() {
       cell: ({ row }) => {
         const invitation = row.original;
         const isProcessing = processingId === invitation.id;
+        const canResend = invitation.status === "pending" || invitation.status === "expired";
         const canCancel = invitation.status === "pending";
 
         return (
@@ -314,27 +288,25 @@ export default function InvitationsPage() {
             <DropdownMenuContent align="end">
               <DropdownMenuLabel>Actions</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              {canCancel && (
-                <Gated op="POST /api/v1/invitations/{id:[0-9]+}/revoke">
-                  <DropdownMenuItem
-                    onClick={() => handleCancel(invitation.id)}
-                    className="text-destructive focus:text-destructive"
-                  >
-                    <X className="h-4 w-4 mr-2" />
-                    Cancel Invitation
-                  </DropdownMenuItem>
-                </Gated>
+              {canResend && (
+                <DropdownMenuItem onClick={() => handleResend(invitation)}>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Resend Invitation
+                </DropdownMenuItem>
               )}
-              {!canCancel && (
-                <Gated op="DELETE /api/v1/invitations/{id:[0-9]+}">
-                  <DropdownMenuItem
-                    onClick={() => handleDelete(invitation.id)}
-                    className="text-destructive focus:text-destructive"
-                  >
-                    <Trash2 className="h-4 w-4 mr-2" />
-                    Delete Invitation
-                  </DropdownMenuItem>
-                </Gated>
+              {canCancel && (
+                <DropdownMenuItem
+                  onClick={() => handleCancel(invitation.id)}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <X className="h-4 w-4 mr-2" />
+                  Cancel Invitation
+                </DropdownMenuItem>
+              )}
+              {!canResend && !canCancel && (
+                <DropdownMenuItem disabled>
+                  No actions available
+                </DropdownMenuItem>
               )}
             </DropdownMenuContent>
           </DropdownMenu>
@@ -389,7 +361,10 @@ export default function InvitationsPage() {
           rolesError={rolesError ? rolesError.message || "the role lookup failed" : null}
           onRetryRoles={() => void refetchRoles()}
           trigger={
-            <SendInvitationTrigger sending={create.isLoading} />
+            <Button disabled={create.isLoading}>
+              <MailPlus className="h-4 w-4 mr-2" />
+              {create.isLoading ? "Sending..." : "Send Invitation"}
+            </Button>
           }
         />
       </div>

@@ -584,13 +584,6 @@ export interface StopBundleResponse {
   stopped: boolean;
 }
 
-/** Answer of GET /bundles/{id}/state (the server's StateResponse). */
-export interface GetBundleStateResponse {
-  bundle_id: string;
-  running: boolean;
-  socket_path?: string;
-}
-
 /** Body of POST /bundles/{id}/quote */
 export interface QuoteBundleRequest {
   /** Nonce, base64 */

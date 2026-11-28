@@ -22,9 +22,7 @@ export const BASELINE_SOURCE_LABELS: Record<PCRBaselineSource, string> = {
 
 /** How the baseline was established, as a short label; the raw source when unknown. */
 export function baselineSourceLabel(source: string): string {
-  return Object.prototype.hasOwnProperty.call(BASELINE_SOURCE_LABELS, source)
-    ? BASELINE_SOURCE_LABELS[source as PCRBaselineSource]
-    : source;
+  return BASELINE_SOURCE_LABELS[source as PCRBaselineSource] ?? source;
 }
 
 /**

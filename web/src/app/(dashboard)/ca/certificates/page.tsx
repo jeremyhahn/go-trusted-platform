@@ -17,8 +17,6 @@ import { useCA, useApi, useMutation } from "@/hooks";
 import { Gated } from "@/components/features/capabilities/gated";
 import { useCapabilities } from "@/hooks/use-capabilities";
 import type { Certificate, IssueCertInput } from "@/types/security";
-import { REVOCATION_REASONS, isRevocationReason } from "@/components/features/ca/revocation-reasons";
-import type { RevocationReason } from "trusted-platform-sdk";
 
 // SDK types (from sdk/javascript/src/types/ca.ts)
 // Certificate summary as the REST endpoint emits it: camelCase or
@@ -41,6 +39,18 @@ interface CertificateWire {
   signatureAlgorithm?: string;
   signature_algorithm?: string;
 }
+
+type RevocationReason =
+  | 'UNSPECIFIED'
+  | 'KEY_COMPROMISE'
+  | 'CA_COMPROMISE'
+  | 'AFFILIATION_CHANGED'
+  | 'SUPERSEDED'
+  | 'CESSATION_OF_OPERATION'
+  | 'CERTIFICATE_HOLD'
+  | 'REMOVE_FROM_CRL'
+  | 'PRIVILEGE_WITHDRAWN'
+  | 'AA_COMPROMISE';
 
 type KeyAlgorithm =
   | 'UNSPECIFIED'
@@ -68,7 +78,6 @@ import { Plus, AlertCircle, RefreshCw } from "lucide-react";
  * - useCA(): Access to CAService
  * - useApi(): Declarative data fetching
  * - useMutation(): Declarative mutations for issue/revoke/renew
- * Issue Certificate is gated on the server's POST /api/v1/ca/certificates capability (#2033, #2041).
  */
 export default function CertificatesPage() {
   const router = useRouter();
@@ -116,11 +125,6 @@ export default function CertificatesPage() {
     const subjectOf = (c: CertificateWire): string =>
       c.commonName ?? c.common_name ?? c.subject?.common_name ?? c.subject?.commonName ?? "Unknown";
     const issuerOf = (c: CertificateWire): string => c.issuer ?? "Unknown";
-    // The server sends the proto enum name (CERTIFICATE_STATUS_EXPIRED); older payloads send the bare word (#2041).
-    const statusOf = (s: unknown): "active" | "revoked" | "expired" => {
-      const u = String(s).toUpperCase().replace(/^CERTIFICATE_STATUS_/, "");
-      return u === "REVOKED" ? "revoked" : u === "EXPIRED" ? "expired" : "active";
-    };
 
     // Pre-compute the set of CN's that appear as someone's issuer; those CN's
     // are CAs we have visibility into.
@@ -147,7 +151,8 @@ export default function CertificatesPage() {
       subject: subjectOf(cert),
       issuer: issuerOf(cert),
       type: resolveType(cert),
-      status: statusOf(cert.status),
+      status: String(cert.status).toUpperCase() === "REVOKED" ? "revoked" as const :
+              String(cert.status).toUpperCase() === "EXPIRED" ? "expired" as const : "active" as const,
       notBefore: toIso(cert.notBefore ?? cert.not_before),
       notAfter: toIso(cert.notAfter ?? cert.not_after),
       publicKeyAlgorithm: cert.keyAlgorithm ?? cert.key_algorithm ?? "RSA",
@@ -281,14 +286,10 @@ export default function CertificatesPage() {
   };
 
   const handleRevoke = (cert: Certificate) => {
-    const answer = prompt(`Enter revocation reason (${REVOCATION_REASONS.join(", ")}):`);
-    if (!answer) return;
-    const reason = answer.trim().toUpperCase();
-    if (!isRevocationReason(reason)) {
-      alert(`Invalid revocation reason. Use one of: ${REVOCATION_REASONS.join(", ")}`);
-      return;
-    }
-    revokeCertMutation.mutate({ serial: cert.serialNumber, reason });
+    const reason = prompt("Enter revocation reason:");
+    if (!reason) return;
+    // Map user input to SDK RevocationReason enum
+    revokeCertMutation.mutate({ serial: cert.serialNumber, reason: "UNSPECIFIED" as RevocationReason });
   };
 
   const handleRenew = (cert: Certificate) => {

@@ -6,9 +6,8 @@ import InvitationsPage from "./page";
 
 // The page normalises the server's protobuf status enum to the UI strings.
 // These rows pin that INVITATION_STATUS_REVOKED and the CANCELLED variant both
-// render as "Revoked" with no action, that a pending row keeps only cancel and
-// an expired row offers no action: no row offers resend, because the server
-// serves no resend route.
+// render as "Revoked" with no resend or cancel action, and that a pending row
+// keeps both actions.
 const invitations = [
   {
     id: "inv-pending",
@@ -34,20 +33,12 @@ const invitations = [
     createdAt: "2026-11-01T00:00:00Z",
     expiresAt: "2099-11-04T00:00:00Z",
   },
-  {
-    id: "inv-expired",
-    email: "expired-invitee",
-    role: "member",
-    status: "INVITATION_STATUS_EXPIRED",
-    createdAt: "2026-11-01T00:00:00Z",
-    expiresAt: "2026-11-04T00:00:00Z",
-  },
 ];
 
 // Hook results are stable objects: a fresh `data` per render would re-key the
 // page's memoised rows and the table on every pass.
 const mutation = { mutateAsync: vi.fn(), isLoading: false };
-const invitationHooks = { create: mutation, revoke: mutation, resend: mutation, remove: mutation };
+const invitationHooks = { create: mutation, revoke: mutation, resend: mutation };
 const listResult = { data: { invitations }, isLoading: false, error: null, refetch: vi.fn() };
 const toastResult = { toast: vi.fn() };
 const authResult = { isLoading: false, tenantId: "tenant-1" };
@@ -83,16 +74,6 @@ function useApiStub<T>(fetcher: () => Promise<{ data: T }>) {
   return { ...state, refetch };
 }
 
-// The server offers every op here: the gates have their own test.
-vi.mock("@/hooks/use-capabilities", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/hooks/use-capabilities")>()),
-  useCapabilities: () => ({
-    loading: false,
-    error: undefined,
-    capability: () => ({ enabled: true }),
-  }),
-}));
-
 vi.mock("@/contexts/AuthContext", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/contexts/AuthContext")>()),
   useAuth: () => authResult,
@@ -109,7 +90,7 @@ vi.mock("@/hooks", async (importOriginal) => ({
 
 // The Radix menu's portal and popper do not settle in jsdom once opened, so
 // the row menu renders its items inline: which items the page puts in it is
-// still decided by the page's own per-status logic.
+// still decided by the page's own canResend/canCancel logic.
 vi.mock("@/components/ui/dropdown-menu", async (importOriginal) => {
   const Pass = ({ children }: { children?: React.ReactNode }) => <>{children}</>;
   const Item = ({ children }: { children?: React.ReactNode }) => (
@@ -149,22 +130,15 @@ describe("InvitationsPage status mapping", () => {
       render(<InvitationsPage />);
       const row = rowFor(email);
       expect(within(row).getByText("Revoked")).toBeTruthy();
-      expect(menuItems(row)).toEqual(["Delete Invitation"]);
+      expect(menuItems(row)).toEqual(["No actions available"]);
     },
   );
 
-  it("offers only cancel on a pending invitation: the server serves no resend route", () => {
+  it("keeps resend and cancel on a pending invitation", () => {
     render(<InvitationsPage />);
     const row = rowFor("pending-invitee");
     expect(within(row).getByText("Pending")).toBeTruthy();
-    expect(menuItems(row)).toEqual(["Cancel Invitation"]);
-    expect(within(row).queryByText(/resend/i)).toBeNull();
-  });
-
-  it("offers no action on an expired invitation", () => {
-    render(<InvitationsPage />);
-    const row = rowFor("expired-invitee");
-    expect(menuItems(row)).toEqual(["Delete Invitation"]);
+    expect(menuItems(row)).toEqual(["Resend Invitation", "Cancel Invitation"]);
   });
 });
 

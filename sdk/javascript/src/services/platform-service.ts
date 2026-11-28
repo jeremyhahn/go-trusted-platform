@@ -28,50 +28,7 @@ import type {
   GetMetricsRequest,
   GetMetricsResponse,
   ReloadConfigResponse,
-  DaemonStatusResponse,
-  DaemonServiceInfo,
-  ListDaemonServicesResponse,
-  DaemonServiceAction,
-  DaemonServiceActionResponse,
 } from '../types/platform.js';
-
-/**
- * Which listener's route layout the platform service speaks for getStatus
- * and the service-management methods. The webservice listener serves them
- * under /api/v1/platform; the daemon REST listener registers /api/v1/status
- * and /api/v1/services (pkg/api/daemon/rest_service.go).
- */
-export type PlatformRouteLayout = 'webservice' | 'daemon';
-
-/**
- * Platform service options
- */
-export interface PlatformServiceOptions {
-  /** Route layout; defaults to 'webservice' */
-  routeLayout?: PlatformRouteLayout | undefined;
-}
-
-/**
- * The daemon layout returns `timestamp` as an RFC 3339 string (Go time.Time).
- * Normalize it to Unix seconds so callers always see the declared number;
- * an unparseable string is dropped rather than returned as NaN.
- */
-function withUnixTimestamp<T extends { timestamp?: number | undefined }>(
-  response: ApiResponse<T>
-): ApiResponse<T> {
-  const data = response.data as (T & { timestamp?: unknown }) | undefined;
-  if (data === undefined || data === null || typeof data.timestamp !== 'string') {
-    return response;
-  }
-  const ms = Date.parse(data.timestamp);
-  const normalized = { ...data } as T & { timestamp?: number | undefined };
-  if (Number.isNaN(ms)) {
-    delete normalized.timestamp;
-  } else {
-    normalized.timestamp = Math.floor(ms / 1000);
-  }
-  return { ...response, data: normalized };
-}
 
 /**
  * Platform Service class
@@ -103,13 +60,9 @@ export class PlatformService extends BaseService {
    *
    * @param client - The API client to use for requests
    */
-  constructor(client: Transport | ApiClient, options?: PlatformServiceOptions) {
+  constructor(client: Transport | ApiClient) {
     super(client, '/v1/platform');
-    this.lifecycleBasePath = (options?.routeLayout ?? 'webservice') === 'daemon' ? '/v1' : '/v1/platform';
   }
-
-  /** Base path of getStatus and the service-management routes. */
-  private readonly lifecycleBasePath: string;
 
   // =========================================================================
   // Information Operations
@@ -244,75 +197,52 @@ export class PlatformService extends BaseService {
   // =========================================================================
 
   /**
-   * Get the platform daemon status; an RFC 3339 timestamp is normalized to
-   * Unix seconds.
-   * REST: GET /v1/platform/status (webservice layout) or GET /v1/status
-   * (daemon layout).
-   */
-  async getStatus(): Promise<ApiResponse<DaemonStatusResponse>> {
-    return withUnixTimestamp(
-      await this.client.get<DaemonStatusResponse>(
-        this.buildUrlUnder(this.lifecycleBasePath, '/status')
-      )
-    );
-  }
-
-  /**
    * List the daemon services and their state.
-   * REST: GET /v1/platform/services (webservice layout) or GET /v1/services
-   * (daemon layout) (PlatformDaemon.ListServices).
+   * REST: GET /v1/platform/services (PlatformDaemon.ListServices).
    */
   async listServices(): Promise<ApiResponse<PlatformServicesListResponse>> {
-    return withUnixTimestamp(
-      await this.client.get<PlatformServicesListResponse>(
-        this.buildUrlUnder(this.lifecycleBasePath, '/services')
-      )
-    );
+    return this.client.get<PlatformServicesListResponse>(this.buildUrl('/services'));
   }
 
   /**
    * Get one daemon service's state; an unknown name answers 404.
-   * REST: GET /v1/platform/services/{service} (webservice layout) or
-   * GET /v1/services/{service} (daemon layout) (PlatformDaemon.GetServiceStatus).
+   * REST: GET /v1/platform/services/{service} (PlatformDaemon.GetServiceStatus).
    */
   async getServiceStatus(name: string): Promise<ApiResponse<PlatformServiceInfo>> {
     return this.client.get<PlatformServiceInfo>(
-      this.buildUrlUnder(this.lifecycleBasePath, `/services/${this.encodePathSegment(name)}`)
+      this.buildUrl(`/services/${this.encodePathSegment(name)}`)
     );
   }
 
   /**
    * Start a daemon service.
-   * REST: POST /v1/platform/services/{service}/start (webservice layout) or
-   * POST /v1/services/{service}/start (daemon layout) (PlatformDaemon.StartService).
+   * REST: POST /v1/platform/services/{service}/start (PlatformDaemon.StartService).
    */
   async startService(name: string): Promise<ApiResponse<PlatformServiceActionResponse>> {
     return this.client.post<PlatformServiceActionResponse>(
-      this.buildUrlUnder(this.lifecycleBasePath, `/services/${this.encodePathSegment(name)}/start`),
+      this.buildUrl(`/services/${this.encodePathSegment(name)}/start`),
       {}
     );
   }
 
   /**
    * Stop a daemon service.
-   * REST: POST /v1/platform/services/{service}/stop (webservice layout) or
-   * POST /v1/services/{service}/stop (daemon layout) (PlatformDaemon.StopService).
+   * REST: POST /v1/platform/services/{service}/stop (PlatformDaemon.StopService).
    */
   async stopService(name: string): Promise<ApiResponse<PlatformServiceActionResponse>> {
     return this.client.post<PlatformServiceActionResponse>(
-      this.buildUrlUnder(this.lifecycleBasePath, `/services/${this.encodePathSegment(name)}/stop`),
+      this.buildUrl(`/services/${this.encodePathSegment(name)}/stop`),
       {}
     );
   }
 
   /**
    * Restart a daemon service.
-   * REST: POST /v1/platform/services/{service}/restart (webservice layout) or
-   * POST /v1/services/{service}/restart (daemon layout) (PlatformDaemon.RestartService).
+   * REST: POST /v1/platform/services/{service}/restart (PlatformDaemon.RestartService).
    */
   async restartService(name: string): Promise<ApiResponse<PlatformServiceActionResponse>> {
     return this.client.post<PlatformServiceActionResponse>(
-      this.buildUrlUnder(this.lifecycleBasePath, `/services/${this.encodePathSegment(name)}/restart`),
+      this.buildUrl(`/services/${this.encodePathSegment(name)}/restart`),
       {}
     );
   }

@@ -362,43 +362,6 @@ export interface VerifyCertificateRequest {
 }
 
 /**
- * Request to certify, for code signing, the KMS key a CSR names
- * (POST /v1/ca/sign-csr; the caller's token needs ca:sign-csr)
- */
-export interface SignCSRRequest {
-  /** PKCS#10 certificate signing request in PEM format */
-  csrPem: string;
-  /** Validity period in days (the CA default when absent) */
-  validDays?: number;
-}
-
-/**
- * Request to initialize the CA (ca.proto InitCARequest).
- */
-export interface InitCARequest {
-  /** Re-initialize even when the CA is already initialized */
-  force?: boolean;
-}
-
-/**
- * Request to install the CA certificates into the host trust store
- * (ca.proto InstallCACertificatesRequest).
- */
-export interface InstallCACertificatesRequest {
-  /** Also install the intermediate CA certificates */
-  includeIntermediates?: boolean;
-}
-
-/**
- * Request to remove the CA certificates from the host trust store
- * (ca.proto UninstallCACertificatesRequest).
- */
-export interface UninstallCACertificatesRequest {
-  /** Also remove the intermediate CA certificates */
-  includeIntermediates?: boolean;
-}
-
-/**
  * List certificates request options
  */
 export interface ListCertificatesOptions {
@@ -512,46 +475,6 @@ export interface VerifyCertificateResponse {
   errors: string[];
   /** Validation warnings */
   warnings: string[];
-  /** Response timestamp */
-  timestamp: string;
-  /** Whether the certificate is revoked */
-  revoked?: boolean;
-}
-
-/**
- * Response from InitCA (ca.proto InitCAResponse).
- */
-export interface InitCAResponse {
-  /** Operation status */
-  status: OperationStatus;
-  /** The CA after initialization */
-  caInfo?: CAInfo;
-  /** Response timestamp */
-  timestamp: string;
-}
-
-/**
- * Response from InstallCACertificates (ca.proto InstallCACertificatesResponse).
- */
-export interface InstallCACertificatesResponse {
-  /** Operation status */
-  status: OperationStatus;
-  /** Number of certificates installed */
-  certificatesInstalled: number;
-  /** Trust store path the certificates were installed to */
-  installPath: string;
-  /** Response timestamp */
-  timestamp: string;
-}
-
-/**
- * Response from UninstallCACertificates (ca.proto UninstallCACertificatesResponse).
- */
-export interface UninstallCACertificatesResponse {
-  /** Operation status */
-  status: OperationStatus;
-  /** Number of certificates removed */
-  certificatesRemoved: number;
   /** Response timestamp */
   timestamp: string;
 }

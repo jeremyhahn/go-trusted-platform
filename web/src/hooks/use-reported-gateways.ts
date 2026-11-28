@@ -81,57 +81,44 @@ export function useReportedGateways(
     };
   }, []);
 
-  // settle applies one state read from its promise callbacks, so the mount
-  // effect can start a read without a synchronous setState.
-  const settle = React.useCallback(
-    () =>
-      fetch('/api/v1/gateway/state', { credentials: 'include' })
-        .then(async (res) => {
-          if (!res.ok) {
-            throw new Error(`HTTP ${res.status}`);
-          }
-          const body = await res.json();
-          if (mounted.current) {
-            setGateways(body.payload?.gateways ?? body.gateways ?? []);
-            // The effect calls settle directly, bypassing refetch's reset:
-            // a success clears an earlier failure's error (#2125 Codex).
-            setError(null);
-          }
-        })
-        .catch((e: unknown) => {
-          if (mounted.current) {
-            setError(e instanceof Error ? e.message : String(e));
-          }
-        })
-        .finally(() => {
-          if (mounted.current) {
-            setInFlight(false);
-            setLoaded(true);
-          }
-        }),
-    []
-  );
-
   const refetch = React.useCallback(async () => {
     if (!enabled) {
       return;
     }
     setInFlight(true);
     setError(null);
-    await settle();
-  }, [enabled, settle]);
+    try {
+      const res = await fetch('/api/v1/gateway/state', { credentials: 'include' });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const body = await res.json();
+      if (mounted.current) {
+        setGateways(body.payload?.gateways ?? body.gateways ?? []);
+      }
+    } catch (e: unknown) {
+      if (mounted.current) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      if (mounted.current) {
+        setInFlight(false);
+        setLoaded(true);
+      }
+    }
+  }, [enabled]);
 
   React.useEffect(() => {
     if (!enabled) {
       return;
     }
-    void settle();
+    void refetch();
     if (!refreshMs) {
       return;
     }
     const id = setInterval(() => void refetch(), refreshMs);
     return () => clearInterval(id);
-  }, [enabled, refetch, refreshMs, settle]);
+  }, [enabled, refetch, refreshMs]);
 
   return { gateways, isLoading, error, refetch };
 }

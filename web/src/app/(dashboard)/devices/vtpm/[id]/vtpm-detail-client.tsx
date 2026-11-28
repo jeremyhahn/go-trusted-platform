@@ -2,41 +2,8 @@
 
 /**
  * vTPM Detail Page
- * Display detailed information about a specific vTPM instance. Seal and
- * Unseal call the bundle runtime routes and Delete its route, each gated on
- * the server's capabilities (#2071). The server has no reset route and keeps
- * no sealed-data store: the caller holds sealed blobs.
+ * Display detailed information about a specific vTPM instance
  */
-
-/** SEAL_OP, UNSEAL_OP and DELETE_OP are the server ops the controls are gated on. */
-const SEAL_OP = 'POST /api/v1/vtpm/bundles/{id}/seal';
-const UNSEAL_OP = 'POST /api/v1/vtpm/bundles/{id}/unseal';
-const DELETE_OP = 'DELETE /api/v1/vtpm/bundles/{id}';
-
-/** parsePCRs reads a comma list of PCR indices 0-23; null when any is invalid. */
-function parsePCRs(text: string): number[] | null {
-  const parts = text
-    .split(',')
-    .map((p) => p.trim())
-    .filter((p) => p !== '');
-  const pcrs: number[] = [];
-  for (const p of parts) {
-    if (!/^\d+$/.test(p)) return null;
-    const n = Number(p);
-    if (n > 23) return null;
-    pcrs.push(n);
-  }
-  return pcrs;
-}
-
-/** errorText reads the message of an Error or of the SDK's MutationError ({ code, message }). */
-function errorText(error: unknown, fallback: string): string {
-  if (error && typeof error === 'object' && 'message' in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === 'string' && message !== '') return message;
-  }
-  return fallback;
-}
 
 import { useState, useEffect } from 'react';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -52,6 +19,14 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
@@ -66,8 +41,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { VTPMPCRDisplay } from '@/components/features/devices/vtpm-pcr';
 import { useToast } from '@/hooks/use-toast';
 import { useVTPM, useMutation } from '@/hooks';
-import { useVTPMRuntime, textToBase64, base64ToText } from '@/hooks/use-vtpm-runtime';
-import { Gated } from '@/components/features/capabilities/gated';
 import type { VTPMDetail } from '@/types/device';
 
 export default function VTPMDetailPage() {
@@ -84,10 +57,7 @@ export default function VTPMDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSealDialogOpen, setIsSealDialogOpen] = useState(false);
   const [isUnsealDialogOpen, setIsUnsealDialogOpen] = useState(false);
-  const runtime = useVTPMRuntime(vtpmId);
-  const [sealedBlob, setSealedBlob] = useState<string | null>(null);
-  const [unsealInput, setUnsealInput] = useState('');
-  const [unsealedData, setUnsealedData] = useState<string | null>(null);
+  const [unsealedData] = useState<string | null>(null);
 
   // Seal data form state
   const [sealForm, setSealForm] = useState({
@@ -97,54 +67,41 @@ export default function VTPMDetailPage() {
     pcrIndices: '0,1,2,7',
   });
 
-  // The effect settles the bundle read into state from its promise
-  // callbacks (no synchronous setState in the effect).
-  useEffect(() => {
-    if (!vtpmId) {
-      return;
-    }
-    let active = true;
-    vtpmService
-      .getBundle(vtpmId)
-      .then((response) => {
-        if (!response.data) {
-          throw new Error('Failed to fetch vTPM');
-        }
-        if (active) {
-          // The REST payload carries the VTPMDetail fields, which differ from
-          // the SDK/proto declaration of the bundle (#445).
-          setVTPM(response.data as unknown as VTPMDetail);
-        }
-      })
-      .catch((error: unknown) => {
-        if (active) {
-          toast({
-            title: 'Error',
-            description: error instanceof Error ? error.message : 'Failed to fetch vTPM',
-            variant: 'destructive',
-          });
-        }
-      })
-      .finally(() => {
-        if (active) {
-          setIsLoading(false);
-        }
+  const fetchVTPM = async () => {
+    setIsLoading(true);
+    try {
+      const response = await vtpmService.getBundle(vtpmId);
+
+      if (response.data) {
+        // The REST payload carries the VTPMDetail fields, which differ from
+        // the SDK/proto declaration of the bundle (#445).
+        setVTPM(response.data as unknown as VTPMDetail);
+      } else {
+        throw new Error('Failed to fetch vTPM');
+      }
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to fetch vTPM',
+        variant: 'destructive',
       });
-    return () => {
-      active = false;
-    };
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (vtpmId) {
+      fetchVTPM();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vtpmId]);
 
-  // Open the seal dialog when the query asks for it (state adjusted during
-  // render against the previous action, not in an effect).
-  const [actionSeen, setActionSeen] = useState<string | null | undefined>(undefined);
-  if (action !== actionSeen) {
-    setActionSeen(action);
+  useEffect(() => {
     if (action === 'seal') {
       setIsSealDialogOpen(true);
     }
-  }
+  }, [action]);
 
   const deleteMutation = useMutation(
     async () => {
@@ -168,6 +125,20 @@ export default function VTPMDetailPage() {
     }
   );
 
+  const handleReset = async () => {
+    if (!vtpm) return;
+
+    if (!confirm(`Are you sure you want to reset vTPM ${vtpm.name}? This will clear all state.`)) {
+      return;
+    }
+
+    toast({
+      title: 'Info',
+      description: 'Reset operation not yet implemented in SDK',
+      variant: 'default',
+    });
+  };
+
   const handleDelete = async () => {
     if (!vtpm) return;
 
@@ -181,44 +152,31 @@ export default function VTPMDetailPage() {
   const handleSealData = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const pcrs = parsePCRs(sealForm.pcrIndices);
-    if (pcrs === null) {
-      toast({
-        title: 'Error',
-        description: 'PCR indices must be a comma list of integers 0-23',
-        variant: 'destructive',
-      });
-      return;
-    }
-    setSealedBlob(null);
-    try {
-      const res = await runtime.seal.mutateAsync({ data: textToBase64(sealForm.data), pcrs });
-      setSealedBlob(res.sealed_data);
-      setIsSealDialogOpen(false);
-      toast({ title: 'Success', description: 'Data sealed' });
-    } catch (error) {
-      toast({
-        title: 'Error',
-        description: errorText(error, 'Failed to seal data'),
-        variant: 'destructive',
-      });
-    }
+    toast({
+      title: 'Info',
+      description: 'Seal operation not yet implemented in SDK',
+      variant: 'default',
+    });
   };
 
-  const handleUnsealData = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleUnsealData = async () => {
+    toast({
+      title: 'Info',
+      description: 'Unseal operation not yet implemented in SDK',
+      variant: 'default',
+    });
+  };
 
-    setUnsealedData(null);
-    try {
-      const res = await runtime.unseal.mutateAsync({ sealed_data: unsealInput.trim() });
-      setUnsealedData(base64ToText(res.data));
-    } catch (error) {
-      toast({
-        title: 'Error',
-        description: errorText(error, 'Failed to unseal data'),
-        variant: 'destructive',
-      });
+  const handleDeleteSealed = async () => {
+    if (!confirm('Are you sure you want to delete this sealed data?')) {
+      return;
     }
+
+    toast({
+      title: 'Info',
+      description: 'Delete sealed data operation not yet implemented in SDK',
+      variant: 'default',
+    });
   };
 
   const formatDate = (date: string) => {
@@ -231,6 +189,12 @@ export default function VTPMDetailPage() {
     });
   };
 
+  const formatBytes = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   const getStateBadge = (state: VTPMDetail['state']) => {
     const variants: Record<VTPMDetail['state'], { variant: 'default' | 'secondary' | 'outline'; label: string }> = {
       active: { variant: 'default', label: 'Active' },
@@ -239,8 +203,7 @@ export default function VTPMDetailPage() {
       suspended: { variant: 'secondary', label: 'Suspended' },
     };
 
-    // The REST bundle may carry no state; show it as unknown, not a crash.
-    const { variant, label } = variants[state] ?? { variant: 'outline' as const, label: state || 'Unknown' };
+    const { variant, label } = variants[state];
     return <Badge variant={variant}>{label}</Badge>;
   };
 
@@ -280,28 +243,20 @@ export default function VTPMDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Gated op={SEAL_OP}>
+          {vtpm.state === 'active' && (
             <Button onClick={() => setIsSealDialogOpen(true)}>
               <Lock className="mr-2 h-4 w-4" />
               Seal Data
             </Button>
-          </Gated>
-          <Gated op={UNSEAL_OP}>
-            <Button variant="outline" onClick={() => setIsUnsealDialogOpen(true)}>
-              <Unlock className="mr-2 h-4 w-4" />
-              Unseal
-            </Button>
-          </Gated>
-          <Button variant="outline" disabled title="No server route">
+          )}
+          <Button variant="outline" onClick={handleReset}>
             <RotateCcw className="mr-2 h-4 w-4" />
             Reset
           </Button>
-          <Gated op={DELETE_OP}>
-            <Button variant="destructive" onClick={handleDelete}>
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete
-            </Button>
-          </Gated>
+          <Button variant="destructive" onClick={handleDelete}>
+            <Trash2 className="mr-2 h-4 w-4" />
+            Delete
+          </Button>
         </div>
       </div>
 
@@ -349,7 +304,7 @@ export default function VTPMDetailPage() {
         </CardContent>
       </Card>
 
-      <VTPMPCRDisplay pcrValues={vtpm.pcrValues ?? []} />
+      <VTPMPCRDisplay pcrValues={vtpm.pcrValues} />
 
       <Card>
         <CardHeader>
@@ -360,32 +315,80 @@ export default function VTPMDetailPage() {
                 Sealed Data
               </CardTitle>
               <CardDescription>
-                Data sealed to PCR values. The server keeps no sealed-data store:
-                sealed blobs are held by the caller.
+                Data sealed to PCR values
               </CardDescription>
             </div>
-            <Gated op={SEAL_OP}>
-              <Button onClick={() => setIsSealDialogOpen(true)} size="sm">
+            <Button onClick={() => setIsSealDialogOpen(true)} size="sm">
               <Plus className="mr-2 h-4 w-4" />
               Seal Data
-              </Button>
-            </Gated>
+            </Button>
           </div>
         </CardHeader>
         <CardContent>
-          {sealedBlob === null ? (
-            <p className="text-sm text-muted-foreground">No data sealed in this session.</p>
-          ) : (
-            <div>
-              <Label>Last sealed blob (base64)</Label>
-              <pre
-                data-testid="vtpm-sealed-blob"
-                className="mt-1 whitespace-pre-wrap break-all rounded-md border border-border bg-muted/50 p-3 font-mono text-xs"
-              >
-                {sealedBlob}
-              </pre>
-            </div>
-          )}
+          <div className="rounded-md border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead>PCR Indices</TableHead>
+                  <TableHead>Size</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {vtpm.sealedData.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center text-muted-foreground">
+                      No sealed data found
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  vtpm.sealedData.map((sealed) => (
+                    <TableRow key={sealed.id}>
+                      <TableCell className="font-medium">{sealed.name}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {sealed.description || '-'}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex gap-1">
+                          {sealed.pcrIndices.map((idx) => (
+                            <Badge key={idx} variant="outline" className="font-mono text-xs">
+                              {idx}
+                            </Badge>
+                          ))}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-sm">{formatBytes(sealed.dataSize)}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {formatDate(sealed.createdAt)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleUnsealData()}
+                          >
+                            <Unlock className="mr-2 h-4 w-4" />
+                            Unseal
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteSealed()}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
         </CardContent>
       </Card>
 
@@ -447,12 +450,10 @@ export default function VTPMDetailPage() {
               <Button type="button" variant="outline" onClick={() => setIsSealDialogOpen(false)}>
                 Cancel
               </Button>
-              <Gated op={SEAL_OP}>
-                <Button type="submit" disabled={runtime.seal.isLoading}>
-                  <Lock className="mr-2 h-4 w-4" />
-                  Seal Data
-                </Button>
-              </Gated>
+              <Button type="submit">
+                <Lock className="mr-2 h-4 w-4" />
+                Seal Data
+              </Button>
             </div>
           </form>
         </DialogContent>
@@ -462,47 +463,27 @@ export default function VTPMDetailPage() {
       <Dialog open={isUnsealDialogOpen} onOpenChange={setIsUnsealDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Unseal Data</DialogTitle>
+            <DialogTitle>Unsealed Data</DialogTitle>
             <DialogDescription>
-              Paste a blob this bundle sealed. It unseals only when the PCRs match.
+              Data has been successfully unsealed
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleUnsealData} className="space-y-4">
+          <div className="space-y-4">
             <div>
-              <Label htmlFor="unsealInput">Sealed blob to unseal</Label>
+              <Label>Unsealed Data</Label>
               <Textarea
-                id="unsealInput"
-                value={unsealInput}
-                onChange={(e) => setUnsealInput(e.target.value)}
-                placeholder="Base64 sealed blob"
+                value={unsealedData || ''}
+                readOnly
                 className="font-mono text-sm"
-                rows={4}
-                required
+                rows={8}
               />
             </div>
-            {unsealedData !== null && (
-              <div>
-                <Label>Unsealed Data</Label>
-                <pre
-                  data-testid="vtpm-unsealed-data"
-                  className="mt-1 whitespace-pre-wrap break-all rounded-md border border-border bg-muted/50 p-3 font-mono text-sm"
-                >
-                  {unsealedData}
-                </pre>
-              </div>
-            )}
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setIsUnsealDialogOpen(false)}>
+            <div className="flex justify-end">
+              <Button onClick={() => setIsUnsealDialogOpen(false)}>
                 Close
               </Button>
-              <Gated op={UNSEAL_OP}>
-                <Button type="submit" disabled={runtime.unseal.isLoading}>
-                  <Unlock className="mr-2 h-4 w-4" />
-                  Unseal blob
-                </Button>
-              </Gated>
             </div>
-          </form>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

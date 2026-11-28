@@ -23,8 +23,6 @@ import type {
   CreateIDevIDCSRResponse,
   CreateIAKCSRRequest,
   CreateIAKCSRResponse,
-  CreateLDevIDRequest,
-  CreateLDevIDResponse,
   InstallIDevIDCertificateRequest,
   InstallIDevIDCertificateResponse,
   InstallIAKCertificateRequest,
@@ -44,144 +42,6 @@ import type {
 } from '../types/idevid.js';
 import { DEVICE_KEY_ALGORITHM_PROTO_NAMES, CERT_STORAGE_TYPE_PROTO_NAMES } from '../types/idevid.js';
 import { encodeEnum } from './wire-enum.js';
-import type { DeviceKeyAlgorithm } from '../types/idevid.js';
-
-/**
- * DeviceKeyAlgorithm numbers (idevid.proto). The daemon REST handler
- * (pkg/api/daemon/rest_idevid_ldevid.go) decodes with encoding/json, which
- * reads the enum only as a number; protojson in the webservice accepts it too.
- */
-const DEVICE_KEY_ALGORITHM_NUMBERS: Readonly<Record<DeviceKeyAlgorithm, number>> = {
-  UNSPECIFIED: 0,
-  ECDSA_P256: 1,
-  ECDSA_P384: 2,
-  RSA_2048: 3,
-  RSA_3072: 4,
-};
-
-/** CreateLDevIDRequest as both REST handlers decode it. */
-interface CreateLDevIDWireRequest {
-  template?: Record<string, unknown>;
-  algorithm?: number;
-  handle?: number;
-  profile?: string;
-  validity_days?: number;
-  overwrite?: boolean;
-}
-
-/**
- * Maps the daemon's encoding/json field names (certificate_pem, csr_pem) to
- * the declared camelCase response; a webservice (protojson) body passes through.
- */
-function normalizeCreateLDevIDResponse(res: ApiResponse<CreateLDevIDResponse>): ApiResponse<CreateLDevIDResponse> {
-  const data: unknown = res.data;
-  if (
-    data === null ||
-    typeof data !== 'object' ||
-    !('certificate_pem' in data || 'csr_pem' in data || 'certificate' in data)
-  ) {
-    return res;
-  }
-  const { certificate_pem: certificatePem, csr_pem: csrPem, ...rest } = data as Record<string, unknown>;
-  const normalized: Record<string, unknown> = { ...rest };
-  if (certificatePem !== undefined) {
-    normalized.certificatePem = certificatePem;
-  }
-  if (csrPem !== undefined) {
-    normalized.csrPem = csrPem;
-  }
-  if (rest.certificate !== null && typeof rest.certificate === 'object') {
-    normalized.certificate = normalizeDeviceIdentityCertificate(rest.certificate as Record<string, unknown>);
-  }
-  return { ...res, data: normalized as unknown as CreateLDevIDResponse };
-}
-
-// encoding/json names in sdk/go/gen/idevid.pb.go (CSRTemplate,
-// TCGDeviceAttributes, DeviceIdentityCertificate). The daemon REST handler
-// decodes and encodes with encoding/json, which matches only these names;
-// protojson in the webservice accepts them on input too.
-const CSR_TEMPLATE_WIRE_NAMES: Record<string, string> = {
-  commonName: 'common_name',
-  organization: 'organization',
-  organizationalUnit: 'organizational_unit',
-  country: 'country',
-  province: 'province',
-  locality: 'locality',
-  emailAddresses: 'email_addresses',
-  dnsNames: 'dns_names',
-  tcgAttributes: 'tcg_attributes',
-};
-
-const TCG_ATTRIBUTES_WIRE_NAMES: Record<string, string> = {
-  tpmManufacturer: 'tpm_manufacturer',
-  tpmModel: 'tpm_model',
-  tpmVersion: 'tpm_version',
-  platformManufacturer: 'platform_manufacturer',
-  platformModel: 'platform_model',
-  platformVersion: 'platform_version',
-  platformSerial: 'platform_serial',
-};
-
-const DEVICE_IDENTITY_CERTIFICATE_SDK_NAMES: Record<string, string> = {
-  key_type: 'keyType',
-  tpm_handle: 'tpmHandle',
-  issued_at: 'issuedAt',
-  expires_at: 'expiresAt',
-  issuer_cn: 'issuerCn',
-  subject_cn: 'subjectCn',
-  serial_number: 'serialNumber',
-  key_algorithm: 'keyAlgorithm',
-  signature_algorithm: 'signatureAlgorithm',
-  key_size: 'keySize',
-};
-
-function renameKeys(source: Record<string, unknown>, names: Record<string, string>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(source)) {
-    if (value === undefined) {
-      continue;
-    }
-    out[names[key] ?? key] = value;
-  }
-  return out;
-}
-
-/** Maps a CSRTemplate, TCG attributes included, to its snake_case wire names. */
-function toWireCSRTemplate(template: NonNullable<CreateLDevIDRequest['template']>): Record<string, unknown> {
-  const wire = renameKeys(template as Record<string, unknown>, CSR_TEMPLATE_WIRE_NAMES);
-  const tcg = wire.tcg_attributes;
-  if (tcg !== null && typeof tcg === 'object') {
-    wire.tcg_attributes = renameKeys(tcg as Record<string, unknown>, TCG_ATTRIBUTES_WIRE_NAMES);
-  }
-  return wire;
-}
-
-/**
- * encoding/json writes a timestamppb.Timestamp as {seconds, nanos}; the SDK
- * promises an ISO string. A protojson string passes through unchanged.
- */
-function timestampToISO(value: unknown): unknown {
-  if (value === null || typeof value !== 'object') {
-    return value;
-  }
-  const { seconds, nanos } = value as { seconds?: unknown; nanos?: unknown };
-  const secs = Number(seconds ?? 0);
-  const ns = Number(nanos ?? 0);
-  if (!Number.isFinite(secs) || !Number.isFinite(ns)) {
-    return value;
-  }
-  return new Date(secs * 1000 + Math.floor(ns / 1e6)).toISOString();
-}
-
-function normalizeDeviceIdentityCertificate(cert: Record<string, unknown>): Record<string, unknown> {
-  const out = renameKeys(cert, DEVICE_IDENTITY_CERTIFICATE_SDK_NAMES);
-  for (const key of ['issuedAt', 'expiresAt']) {
-    if (key in out) {
-      out[key] = timestampToISO(out[key]);
-    }
-  }
-  return out;
-}
 
 /** A key config as the REST decoder reads it: enums carry their protobuf names. */
 type WireKeyConfig<T extends IDevIDConfig | IAKConfig> = Omit<T, 'algorithm' | 'storage'> & {
@@ -407,37 +267,6 @@ export class IDevIDService extends BaseService {
    */
   async deleteIAKCertificate(): Promise<ApiResponse<DeleteIAKCertificateResponse>> {
     return this.client.delete<DeleteIAKCertificateResponse>(this.buildUrl('/iak/certificate'));
-  }
-
-  /**
-   * Create an LDevID: the platform generates the key, builds a CSR and has
-   * the platform CA issue the certificate
-   *
-   * @param request - LDevID creation request
-   * @returns CSR and issued certificate
-   */
-  async createLDevID(request?: CreateLDevIDRequest): Promise<ApiResponse<CreateLDevIDResponse>> {
-    // Both REST handlers accept this shape: the daemon decodes with
-    // encoding/json (int32 algorithm, validity_days), the webservice with
-    // protojson (which also takes enum numbers and the proto field name).
-    const { algorithm, validityDays, template, ...rest } = request ?? {};
-    const body: CreateLDevIDWireRequest = { ...rest };
-    if (template !== undefined) {
-      body.template = toWireCSRTemplate(template);
-    }
-    if (algorithm !== undefined) {
-      const number = DEVICE_KEY_ALGORITHM_NUMBERS[algorithm];
-      if (number === undefined) {
-        throw new RangeError(`createLDevID: unknown algorithm ${String(algorithm)}`);
-      }
-      body.algorithm = number;
-    }
-    if (validityDays !== undefined) {
-      body.validity_days = validityDays;
-    }
-    return normalizeCreateLDevIDResponse(
-      await this.client.post<CreateLDevIDResponse>(this.buildUrl('/ldevid'), body)
-    );
   }
 
   // =========================================================================

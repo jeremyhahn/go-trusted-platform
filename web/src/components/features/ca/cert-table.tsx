@@ -9,7 +9,6 @@ import { Badge } from "@/components/ui/badge";
 import type { Certificate } from "@/types/security";
 import type { TypedFilterColumn, TypedRowAction } from "@/components/ui/data-table.types";
 import { RefreshCw, Download, Eye, XCircle } from "lucide-react";
-import { useCapabilities } from "@/hooks/use-capabilities";
 
 interface CertTableProps {
   certificates: Certificate[];
@@ -37,7 +36,6 @@ interface CapabilityGate {
  * - Filter by type and status
  * - Row actions (view, download, revoke, renew)
  * - Status badges with semantic colors
- * - Renew and Revoke are gated on the server's capabilities (#2033, #2041)
  */
 export function CertTable({
   certificates,
@@ -49,12 +47,6 @@ export function CertTable({
   revokeGate,
   loading = false,
 }: CertTableProps) {
-  const capabilities = useCapabilities();
-  const renewCap = capabilities.capability("POST /api/v1/ca/certificates/{serial}/renew");
-  const revokeCap = capabilities.capability("DELETE /api/v1/ca/certificates/{serial}");
-  // A gate the caller passes wins; otherwise the server's capability answer gates the action.
-  const renew = renewGate ?? renewCap;
-  const revoke = revokeGate ?? revokeCap;
   const columns: ColumnDef<Certificate>[] = React.useMemo(
     () => [
       createSelectColumn<Certificate>(),
@@ -176,8 +168,7 @@ export function CertTable({
               onClick: onRenew,
               icon: RefreshCw,
               separator: actions.length > 0,
-              disabled: !renew.enabled,
-              title: renew.enabled ? undefined : renew.reason,
+              ...(renewGate ? { disabled: !renewGate.enabled, title: renewGate.enabled ? undefined : renewGate.reason } : {}),
             });
           }
 
@@ -188,8 +179,7 @@ export function CertTable({
               variant: "destructive",
               icon: XCircle,
               separator: true,
-              disabled: !revoke.enabled,
-              title: revoke.enabled ? undefined : revoke.reason,
+              ...(revokeGate ? { disabled: !revokeGate.enabled, title: revokeGate.enabled ? undefined : revokeGate.reason } : {}),
             });
           }
 
@@ -197,7 +187,7 @@ export function CertTable({
         },
       },
     ],
-    [onView, onDownload, onRevoke, onRenew, renew.enabled, renew.reason, revoke.enabled, revoke.reason]
+    [onView, onDownload, onRevoke, onRenew, renewGate, revokeGate]
   );
 
   const filterableColumns: TypedFilterColumn<Certificate>[] = [

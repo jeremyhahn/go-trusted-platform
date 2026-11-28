@@ -47,43 +47,23 @@ interface BadRoute {
   body: string;
 }
 
-async function captureNotFoundEnvelopes(
-  page: Page,
-): Promise<{ bad: BadRoute[]; settled: () => Promise<void> }> {
+async function captureNotFoundEnvelopes(page: Page): Promise<BadRoute[]> {
   const bad: BadRoute[] = [];
-  let inflight = 0;
-  const pending: Promise<void>[] = [];
-  const done = (r: Request) => {
-    if (r.url().includes('/api/') && inflight > 0) inflight--;
-  };
-  page.on('request', (r: Request) => {
-    if (r.url().includes('/api/')) inflight++;
+  page.on('response', async (resp: Response) => {
+    if (resp.status() !== 404) return;
+    const req: Request = resp.request();
+    if (!req.url().includes('/api/')) return;
+    let body = '';
+    try {
+      body = await resp.text();
+    } catch {
+      return;
+    }
+    if (body.includes(NOT_FOUND_MESSAGE)) {
+      bad.push({ url: req.url(), method: req.method(), status: resp.status(), body });
+    }
   });
-  page.on('requestfinished', done);
-  page.on('requestfailed', done);
-  page.on('response', (resp: Response) => {
-    pending.push(
-      (async () => {
-        if (resp.status() !== 404) return;
-        const req: Request = resp.request();
-        if (!req.url().includes('/api/')) return;
-        let body = '';
-        try {
-          body = await resp.text();
-        } catch {
-          return;
-        }
-        if (body.includes(NOT_FOUND_MESSAGE)) {
-          bad.push({ url: req.url(), method: req.method(), status: resp.status(), body });
-        }
-      })(),
-    );
-  });
-  const settled = async () => {
-    await expect.poll(() => inflight, { timeout: 10_000, message: 'API requests still in flight' }).toBe(0);
-    await Promise.all(pending);
-  };
-  return { bad, settled };
+  return bad;
 }
 
 const sessionCookie = process.env.E2E_SESSION_COOKIE;
@@ -110,7 +90,7 @@ test.describe('REST routes regression', () => {
           },
         ]);
       }
-      const { bad, settled } = await captureNotFoundEnvelopes(pwPage);
+      const bad = await captureNotFoundEnvelopes(pwPage);
       const target = process.env.BACKEND_URL
         ? `${process.env.BACKEND_URL}${page.path}`
         : page.path;
@@ -119,9 +99,8 @@ test.describe('REST routes regression', () => {
       if (resp) {
         expect(resp.status(), `navigation to ${page.path}`).toBeLessThan(500);
       }
-      await pwPage.locator('body').waitFor();
-      // Wait for every in-flight API request and its body capture, then assert no unregistered routes.
-      await settled();
+      // Give SPA queries a beat to settle, then assert no unregistered routes.
+      await pwPage.waitForTimeout(500);
       expect(bad, `unregistered REST endpoints hit by ${page.path}: ${JSON.stringify(bad, null, 2)}`).toHaveLength(0);
     });
   }

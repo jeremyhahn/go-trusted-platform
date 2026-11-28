@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import {
@@ -13,7 +13,6 @@ import {
   Camera,
   RefreshCw,
   Pause,
-  ShieldCheck,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Button } from '@/components/ui/button';
@@ -28,30 +27,9 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { VMMetricsCard } from '@/components/features/compute/vm-metrics';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import {
-  useCompute,
-  useMutation,
-  useToast,
-  useVMAttestationVerify,
-  vmVerifyGate,
-  type MutationError,
-} from '@/hooks';
-import { isServiceNotConfigured } from 'trusted-platform-sdk';
-import type { VerifyVMAttestationResponse } from 'trusted-platform-sdk';
-import { ServiceUnavailableState } from '@/components/features/platform';
+import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
 import type { VMDetail } from '@/types/infrastructure';
-import { toVMDetail, VM_PCRS_NOT_APPRAISED, vmVerifyHeadline } from '@/lib/vm-detail';
-import { VMOperations } from './vm-operations';
-import { useCapabilities } from '@/hooks/use-capabilities';
-import { Gated } from '@/components/features/capabilities/gated';
+import { vmStatus } from '@/lib/compute-state';
 
 const statusColors = {
   running: 'bg-green-500/10 text-green-500 border-green-500/20',
@@ -67,79 +45,27 @@ export default function VMDetailPage() {
   const vmId = resolveDynamicId(params, pathname, 'vms');
   const [vm, setVM] = useState<VMDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  // A refused first load: the not-configured 503 (no compute on this node)
-  // or any other refusal; a refresh refusal after a good load keeps the
-  // detail (#2045).
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [unavailable, setUnavailable] = useState(false);
-  // Read by fetchVM, which the 5 s interval calls through its first closure.
-  const loaded = useRef(false);
   const [actionLoading, setActionLoading] = useState(false);
   const compute = useCompute();
   const { toast } = useToast();
-  const verifyAttestation = useVMAttestationVerify(vmId);
-  const { capability } = useCapabilities();
-  const [verifyConfirmOpen, setVerifyConfirmOpen] = useState(false);
-  const [verifyResult, setVerifyResult] = useState<VerifyVMAttestationResponse | null>(null);
-  const [verifyError, setVerifyError] = useState<string | null>(null);
-
-  // Attest with a fresh nonce, then verify the quote (#2045).
-  const handleVerifyAttestation = async () => {
-    setVerifyConfirmOpen(false);
-    setActionLoading(true);
-    setVerifyResult(null);
-    setVerifyError(null);
-    try {
-      setVerifyResult(await verifyAttestation());
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      setVerifyError(message);
-      toast({
-        title: 'Error',
-        description: `Failed to verify VM attestation: ${message}`,
-        variant: 'destructive',
-      });
-    } finally {
-      setActionLoading(false);
-    }
-  };
 
   const fetchVM = async () => {
-    // No state is set before the first await: the poll effect calls this, and
-    // without a vmId the page shows the spinner anyway (vm stays null).
-    if (!vmId) return;
-    // No setLoading(true) here: loading starts true and only the first fetch
-    // clears it, so the 5 s refresh keeps the detail tree (and the stateful
-    // VMOperations panel) mounted (#1727).
+    if (!vmId) {
+      setLoading(false);
+      return;
+    }
     try {
+      setLoading(true);
       const response = await compute.getVM(vmId);
       if (response.success && response.data) {
-        loaded.current = true;
-        setVM(toVMDetail(response.data.vm));
-        setUnavailable(false);
-        setLoadError(null);
-      } else if (!response.success && isServiceNotConfigured(response.error)) {
-        setUnavailable(true);
-        setLoadError(null);
-      } else if (!response.success) {
-        const message = response.error?.message || 'Unknown error';
-        setUnavailable(false);
-        if (!loaded.current) setLoadError(message);
-        toast({
-          title: 'Error',
-          description: `Failed to fetch VM details: ${message}`,
-          variant: 'destructive',
+        // SDK returns { vm: VM }, but we need VMDetail
+        // For now, cast to VMDetail - proper type mapping would be handled by backend
+        setVM({
+          ...(response.data.vm as unknown as VMDetail),
+          status: vmStatus(response.data.vm.state),
         });
       }
     } catch (error) {
-      if (isServiceNotConfigured(error)) {
-        setUnavailable(true);
-        setLoadError(null);
-        return;
-      }
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      setUnavailable(false);
-      if (!loaded.current) setLoadError(message);
       toast({
         title: 'Error',
         description: `Failed to fetch VM details: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -151,14 +77,10 @@ export default function VMDetailPage() {
   };
 
   useEffect(() => {
+    fetchVM();
     if (!vmId) return;
-    // Timers, not a direct call: no state is set in the effect body.
-    const first = setTimeout(fetchVM, 0);
     const interval = setInterval(fetchVM, 5000);
-    return () => {
-      clearTimeout(first);
-      clearInterval(interval);
-    };
+    return () => clearInterval(interval);
   }, [vmId]);
 
   const startVMMutation = useMutation(
@@ -227,17 +149,14 @@ export default function VMDetailPage() {
     }
   );
 
+  // TODO: Suspend/Resume functionality not available in SDK yet
+  // SDK only provides start/stop/reboot operations
+  // Placeholder mutations for future implementation
   const suspendVMMutation = useMutation(
-    (vmId: string) => compute.suspendVM(vmId),
+    async (vmId: string) => {
+      throw new Error('Suspend operation not yet implemented in SDK');
+    },
     {
-      onSuccess: () => {
-        toast({
-          title: 'Success',
-          description: 'VM suspended successfully',
-        });
-        setActionLoading(false);
-        fetchVM();
-      },
       onError: (error: MutationError) => {
         toast({
           title: 'Error',
@@ -250,16 +169,10 @@ export default function VMDetailPage() {
   );
 
   const resumeVMMutation = useMutation(
-    (vmId: string) => compute.resumeVM(vmId),
+    async (vmId: string) => {
+      throw new Error('Resume operation not yet implemented in SDK');
+    },
     {
-      onSuccess: () => {
-        toast({
-          title: 'Success',
-          description: 'VM resumed successfully',
-        });
-        setActionLoading(false);
-        fetchVM();
-      },
       onError: (error: MutationError) => {
         toast({
           title: 'Error',
@@ -348,7 +261,7 @@ export default function VMDetailPage() {
     cloneVMMutation.mutate({ vmId: vmId, name });
   };
 
-  if (loading) {
+  if (loading || !vm) {
     return (
       <div className="flex items-center justify-center h-64">
         <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -356,40 +269,8 @@ export default function VMDetailPage() {
     );
   }
 
-  if (unavailable) {
-    return (
-      <div className="space-y-4">
-        <Button variant="ghost" onClick={() => router.push('/compute/vms')}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to VMs
-        </Button>
-        <h1 className="text-3xl font-bold">Virtual Machine</h1>
-        <ServiceUnavailableState
-          service="Compute"
-          description="The compute service is not configured on this node; VMs run on compute nodes."
-        />
-      </div>
-    );
-  }
-
-  if (!vm) {
-    return (
-      <div className="space-y-4">
-        <Button variant="ghost" onClick={() => router.push('/compute/vms')}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to VMs
-        </Button>
-        <p className="text-destructive" role="alert">
-          Failed to load VM: {loadError ?? 'not found'}
-        </p>
-      </div>
-    );
-  }
-
   const formatMemory = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
   const formatStorage = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
-  const verifyGate = vmVerifyGate(vm.status, actionLoading);
-  const attestCap = capability('POST /api/v1/compute/vms/{id}/attest');
 
   return (
     <div className="space-y-6">
@@ -452,17 +333,6 @@ export default function VMDetailPage() {
               Resume
             </Button>
           )}
-          <Gated op="POST /api/v1/compute/vms/{id}/attest/verify">
-            <Button
-              variant="outline"
-              onClick={() => setVerifyConfirmOpen(true)}
-              disabled={!verifyGate.enabled || !attestCap.enabled}
-              title={verifyGate.reason ?? (attestCap.enabled ? undefined : attestCap.reason) ?? undefined}
-            >
-              <ShieldCheck className="mr-2 h-4 w-4" />
-              Verify Attestation
-            </Button>
-          </Gated>
           <Button variant="outline" onClick={handleClone} disabled={actionLoading}>
             <Copy className="mr-2 h-4 w-4" />
             Clone
@@ -519,51 +389,8 @@ export default function VMDetailPage() {
           </CardContent>
         </Card>
 
-        {vm.metrics && <VMMetricsCard metrics={vm.metrics} />}
+        <VMMetricsCard metrics={vm.metrics} />
       </div>
-
-      {(verifyResult || verifyError) && (
-        <Card data-testid="vm-verify-result">
-          <CardHeader>
-            <CardTitle>Attestation Verification</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {verifyError ? (
-              <p className="font-medium text-destructive">Verification failed: {verifyError}</p>
-            ) : (
-              verifyResult && (
-                <>
-                  <p className="font-medium">{vmVerifyHeadline(verifyResult)}</p>
-                  <p className="text-muted-foreground">{VM_PCRS_NOT_APPRAISED}</p>
-                  {verifyResult.message && (
-                    <p className="text-muted-foreground">{verifyResult.message}</p>
-                  )}
-                </>
-              )
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      <Dialog open={verifyConfirmOpen} onOpenChange={setVerifyConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Verify VM attestation?</DialogTitle>
-            <DialogDescription>
-              This requests a fresh TPM quote from {vm.name} and verifies it. It checks the quote
-              signature and nonce; boot measurements are not compared with reference values.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setVerifyConfirmOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={() => void handleVerifyAttestation()}>Confirm</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <VMOperations vmId={vmId} />
 
       <Card>
         <CardHeader>
@@ -576,7 +403,7 @@ export default function VMDetailPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {!vm.snapshots || vm.snapshots.length === 0 ? (
+          {vm.snapshots.length === 0 ? (
             <p className="text-center text-muted-foreground py-8">No snapshots</p>
           ) : (
             <Table>

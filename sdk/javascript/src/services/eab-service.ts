@@ -22,9 +22,6 @@ import type {
   DeleteEABCredentialResponse,
   GetEABQRCodeResponse,
   GetEnrollmentURLResponse,
-  MarkEABCredentialUsedResponse,
-  CleanupExpiredEABCredentialsRequest,
-  CleanupExpiredEABCredentialsResponse,
 } from '../types/eab.js';
 
 /**
@@ -64,20 +61,6 @@ export class EABService extends BaseService {
     super(client, '/v1/eab');
   }
 
-  /**
-   * Builds `/credentials/{id}{suffix}` for a credential ID. IDs are uint64
-   * decimals: anything else (empty, a path separator, a query) would reach
-   * another route, so it is refused before any request is sent.
-   *
-   * @throws RangeError when `id` is not 1-20 decimal digits
-   */
-  private credentialPath(id: string, suffix = ''): string {
-    if (!/^[0-9]{1,20}$/.test(id)) {
-      throw new RangeError(`EAB credential id must be 1-20 decimal digits, got ${JSON.stringify(id)}`);
-    }
-    return `/credentials/${encodeURIComponent(id)}${suffix}`;
-  }
-
   // =========================================================================
   // EAB CRUD Operations
   // =========================================================================
@@ -98,9 +81,9 @@ export class EABService extends BaseService {
    * @param id - Credential ID
    * @returns Credential information (without HMAC key)
    */
-  async get(id: string): Promise<ApiResponse<GetEABCredentialResponse>> {
+  async get(id: number): Promise<ApiResponse<GetEABCredentialResponse>> {
     return this.client.get<GetEABCredentialResponse>(
-      this.buildUrl(this.credentialPath(id))
+      this.buildUrl(`/credentials/${id}`)
     );
   }
 
@@ -146,9 +129,9 @@ export class EABService extends BaseService {
    * @param id - Credential ID
    * @returns Revocation result
    */
-  async revoke(id: string): Promise<ApiResponse<RevokeEABCredentialResponse>> {
+  async revoke(id: number): Promise<ApiResponse<RevokeEABCredentialResponse>> {
     return this.client.post<RevokeEABCredentialResponse>(
-      this.buildUrl(this.credentialPath(id, '/revoke')),
+      this.buildUrl(`/credentials/${id}/revoke`),
       {}
     );
   }
@@ -172,9 +155,9 @@ export class EABService extends BaseService {
    * @param id - Credential ID
    * @returns Deletion result
    */
-  async delete(id: string): Promise<ApiResponse<DeleteEABCredentialResponse>> {
+  async delete(id: number): Promise<ApiResponse<DeleteEABCredentialResponse>> {
     return this.client.delete<DeleteEABCredentialResponse>(
-      this.buildUrl(this.credentialPath(id))
+      this.buildUrl(`/credentials/${id}`)
     );
   }
 
@@ -189,13 +172,13 @@ export class EABService extends BaseService {
    * @param size - QR code size in pixels (optional)
    * @returns Base64-encoded QR code image
    */
-  async getQRCode(id: string, size?: number): Promise<ApiResponse<GetEABQRCodeResponse>> {
+  async getQRCode(id: number, size?: number): Promise<ApiResponse<GetEABQRCodeResponse>> {
     const filters: Record<string, string | number | boolean | undefined> = {};
     if (size !== undefined) {
       filters.size = size;
     }
     return this.client.get<GetEABQRCodeResponse>(
-      this.buildUrl(this.credentialPath(id, '/qrcode'), { filters })
+      this.buildUrl(`/credentials/${id}/qrcode`, { filters })
     );
   }
 
@@ -203,42 +186,11 @@ export class EABService extends BaseService {
    * Get enrollment URL for an EAB credential
    *
    * @param id - Credential ID
-   * Calls the registered `GET /credentials/{id}/url` route.
-   *
-   * @returns Enrollment URL and the time it was generated (`timestamp`);
-   *   the response carries no expiry
+   * @returns Enrollment URL with expiration
    */
-  async getEnrollmentURL(id: string): Promise<ApiResponse<GetEnrollmentURLResponse>> {
+  async getEnrollmentURL(id: number): Promise<ApiResponse<GetEnrollmentURLResponse>> {
     return this.client.get<GetEnrollmentURLResponse>(
-      this.buildUrl(this.credentialPath(id, '/url'))
-    );
-  }
-
-  /**
-   * Mark an EAB credential as used
-   *
-   * @param id - Credential ID
-   * @returns Operation status
-   */
-  async markUsed(id: string): Promise<ApiResponse<MarkEABCredentialUsedResponse>> {
-    return this.client.post<MarkEABCredentialUsedResponse>(
-      this.buildUrl(this.credentialPath(id, '/used')),
-      {}
-    );
-  }
-
-  /**
-   * Delete expired EAB credentials
-   *
-   * @param request - Optional tenant filter (empty means all tenants)
-   * @returns Number of credentials deleted
-   */
-  async cleanupExpired(
-    request?: CleanupExpiredEABCredentialsRequest
-  ): Promise<ApiResponse<CleanupExpiredEABCredentialsResponse>> {
-    return this.client.post<CleanupExpiredEABCredentialsResponse>(
-      this.buildUrl('/credentials/cleanup'),
-      request ?? {}
+      this.buildUrl(`/credentials/${id}/enrollment-url`)
     );
   }
 }

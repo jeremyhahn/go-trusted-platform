@@ -606,7 +606,6 @@ export interface GetDeviceResponse {
 
 /**
  * Update device response
- * @deprecated The server returns the flat object; the SDK method now resolves to it.
  */
 export interface UpdateDeviceResponse {
   /** Operation status */
@@ -635,7 +634,6 @@ export interface ListDevicesResponse {
 
 /**
  * Find device by serial response
- * @deprecated The server returns the flat object; the SDK method now resolves to it.
  */
 export interface FindDeviceBySerialResponse {
   /** Found device */
@@ -670,7 +668,6 @@ export interface GetProfileResponse {
 
 /**
  * Update profile response
- * @deprecated The server returns the flat object; the SDK method now resolves to it.
  */
 export interface UpdateProfileResponse {
   /** Operation status */
@@ -699,7 +696,6 @@ export interface ListProfilesResponse {
 
 /**
  * Find profile by MAC address response
- * @deprecated The server returns the flat object; the SDK method now resolves to it.
  */
 export interface FindProfileByMACAddressResponse {
   /** Found profile */
@@ -708,7 +704,6 @@ export interface FindProfileByMACAddressResponse {
 
 /**
  * Find profile by serial response
- * @deprecated The server returns the flat object; the SDK method now resolves to it.
  */
 export interface FindProfileBySerialResponse {
   /** Found profile */
@@ -717,7 +712,6 @@ export interface FindProfileBySerialResponse {
 
 /**
  * Find matching profile response
- * @deprecated The server returns the flat object; the SDK method now resolves to it.
  */
 export interface FindMatchingProfileResponse {
   /** Found profile */
@@ -825,12 +819,14 @@ export interface RecordAttestCertResponse {
  * Activate device response
  */
 export interface ActivateDeviceResponse {
+  /** Operation status */
+  status: DeviceStatus;
   /** Activation status */
-  status: string;
+  activationStatus?: string;
   /** VLAN assigned */
   vlan?: number;
   /** Transition timestamp */
-  transitioned_at?: string;
+  transitionedAt?: string;
 }
 
 // =============================================================================
@@ -891,10 +887,8 @@ export interface UpdateDeviceTemplateRequest {
   role?: DeviceRole;
   /** Full platform config (app.App as JSON) */
   config?: Record<string, unknown>;
-  /** Profile match rules (wire name `match_rules`) */
-  match_rules?: ProfileMatchRules;
-  /** Tenant ID; PUT replaces the stored template, so send it back unchanged */
-  tenant_id?: string;
+  /** Profile match rules */
+  matchRules?: ProfileMatchRules;
 }
 
 /**
@@ -946,8 +940,8 @@ export interface FindConfigForDeviceRequest {
  * Assign profile to device request
  */
 export interface AssignProfileToDeviceRequest {
-  /** Profile ID, a decimal string: generated ids exceed 2^53 */
-  profileId: string;
+  /** Profile ID */
+  profileId: number;
   /** Endorsement key serial number */
   ekSerial?: string;
   /** MAC address */

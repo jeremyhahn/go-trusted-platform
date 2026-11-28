@@ -343,14 +343,6 @@ export interface SignRequest {
   message: string;
   /** Hash algorithm */
   hashAlgorithm?: HashAlgorithm;
-  /**
-   * Key version to sign with. The daemon always signs with the current key
-   * version, so KMSService.sign refuses a nonzero value with a RangeError and
-   * never sends it.
-   */
-  keyVersion?: number;
-  /** The message is already a digest (sent as `pre_hashed`) */
-  preHashed?: boolean;
 }
 
 /**
@@ -483,12 +475,14 @@ export interface GenerateKeyResponse {
  * Import key response
  */
 export interface ImportKeyResponse {
-  /** Imported key name. REST wire form (rest/kms ImportKeyResponse). */
-  key_id: string;
-  /** Key version */
-  version: number;
-  /** Key algorithm */
-  algorithm: string;
+  /** Operation status */
+  status: KMSStatus;
+  /** Key handle */
+  key?: KMSKeyHandle;
+  /** Key metadata */
+  metadata?: KMSKeyMetadata;
+  /** Timestamp (unix epoch) */
+  timestamp: number;
 }
 
 /**
@@ -555,12 +549,16 @@ export interface RotateKeyResponse {
  * Update key status response
  */
 export interface UpdateKeyStatusResponse {
-  /** Key name. REST wire form (rest/kms UpdateKeyStatusResponse). */
-  key_id: string;
+  /** Operation status */
+  status: KMSStatus;
+  /** Key ID */
+  keyId: string;
   /** Key version */
   version: number;
   /** New key status */
-  status: string;
+  keyStatus: KeyStatus;
+  /** Timestamp (unix epoch) */
+  timestamp: number;
 }
 
 /**
@@ -589,137 +587,200 @@ export interface ExportKeyResponse {
  * Get key versions response
  */
 export interface GetKeyVersionsResponse {
-  /** Key versions. REST wire form (rest/kms ListKeyVersionsResponse). */
-  versions: KMSKeyVersionWire[];
-}
-
-/**
- * One key version as the REST router sends it (rest/kms KeyVersionInfoResponse).
- */
-export interface KMSKeyVersionWire {
-  version: number;
-  status: string;
-  algorithm: string;
-  created_at?: string;
-  disabled_at?: string;
+  /** Key ID */
+  keyId: string;
+  /** Key versions */
+  versions: KMSKeyVersionInfo[];
+  /** Next cursor for pagination */
+  nextCursor?: string;
+  /** Whether there are more results */
+  hasMore: boolean;
+  /** Timestamp (unix epoch) */
+  timestamp: number;
 }
 
 /**
  * Encrypt response
  */
 export interface EncryptResponse {
+  /** Operation status */
+  status: KMSStatus;
   /** Key ID */
-  key_id: string;
+  keyId: string;
   /** Key version used */
-  version: number;
+  keyVersion: number;
   /** Ciphertext (base64) */
   ciphertext: string;
+  /** Nonce (base64) */
+  nonce?: string;
+  /** Timestamp (unix epoch) */
+  timestamp: number;
 }
 
 /**
  * Decrypt response
  */
 export interface DecryptResponse {
+  /** Operation status */
+  status: KMSStatus;
+  /** Key ID */
+  keyId: string;
+  /** Key version used */
+  keyVersion: number;
   /** Plaintext (base64) */
   plaintext: string;
+  /** Timestamp (unix epoch) */
+  timestamp: number;
 }
 
 /**
  * Sign response
  */
 export interface SignResponse {
+  /** Operation status */
+  status: KMSStatus;
   /** Key ID */
-  key_id: string;
+  keyId: string;
   /** Key version used */
-  version: number;
+  keyVersion: number;
   /** Signature (base64) */
   signature: string;
+  /** Hash algorithm used */
+  hashAlgorithm: HashAlgorithm;
+  /** Timestamp (unix epoch) */
+  timestamp: number;
 }
 
 /**
  * Verify response
  */
 export interface VerifyResponse {
+  /** Operation status */
+  status: KMSStatus;
+  /** Key ID */
+  keyId: string;
+  /** Key version used */
+  keyVersion: number;
   /** Whether the signature is valid */
   valid: boolean;
+  /** Timestamp (unix epoch) */
+  timestamp: number;
 }
 
 /**
  * Hash response
  */
 export interface HashResponse {
-  /** Hash algorithm used. REST wire form (rest/kms HashResponse). */
+  /** Operation status */
+  status: KMSStatus;
+  /** Hash algorithm used */
+  algorithm: HashAlgorithm;
+  /** Hash value (base64) */
   hash: string;
-  /** Digest (base64) */
-  digest: string;
+  /** Timestamp (unix epoch) */
+  timestamp: number;
 }
 
 /**
  * HMAC response
  */
 export interface HMACResponse {
-  /** Key name. REST wire form (rest/kms HMACResponse). */
-  key_id: string;
+  /** Operation status */
+  status: KMSStatus;
+  /** Key ID */
+  keyId: string;
+  /** Key version used */
+  keyVersion: number;
   /** HMAC value (base64) */
   hmac: string;
+  /** Hash algorithm used */
+  hashAlgorithm: HashAlgorithm;
+  /** Timestamp (unix epoch) */
+  timestamp: number;
 }
 
 /**
  * Verify HMAC response
  */
 export interface VerifyHMACResponse {
-  /** Whether the HMAC is valid. REST wire form (rest/kms VerifyHMACResponse). */
+  /** Operation status */
+  status: KMSStatus;
+  /** Key ID */
+  keyId: string;
+  /** Key version used */
+  keyVersion: number;
+  /** Whether the HMAC is valid */
   valid: boolean;
+  /** Timestamp (unix epoch) */
+  timestamp: number;
 }
 
 /**
  * Generate random response
  */
 export interface GenerateRandomResponse {
-  /** Random bytes (base64). REST wire form (rest/kms GenerateRandomResponse). */
-  bytes: string;
+  /** Operation status */
+  status: KMSStatus;
+  /** Random bytes (base64) */
+  randomBytes: string;
+  /** Timestamp (unix epoch) */
+  timestamp: number;
 }
 
 /**
  * Generate data key response
  */
 export interface GenerateDataKeyResponse {
-  /** Key encryption key name. REST wire form (rest/kms GenerateDataKeyResponse). */
-  key_id: string;
+  /** Operation status */
+  status: KMSStatus;
   /** Plaintext key (base64) */
-  plaintext_key: string;
+  plaintextKey: string;
   /** Encrypted key (base64) */
-  encrypted_key: string;
+  encryptedKey: string;
+  /** Key encryption key ID */
+  keyId: string;
+  /** Timestamp (unix epoch) */
+  timestamp: number;
 }
 
 /**
  * Generate wrapped data key response
  */
 export interface GenerateWrappedDataKeyResponse {
-  /** Wrapping key name. REST wire form (rest/kms GenerateWrappedDataKeyResponse). */
-  wrapping_key_id: string;
+  /** Operation status */
+  status: KMSStatus;
   /** Wrapped key (base64) */
-  wrapped_key: string;
+  wrappedKey: string;
+  /** Wrapping key ID */
+  wrappingKeyId: string;
+  /** Wrapping algorithm */
+  wrappingAlgorithm: WrappingAlgorithm;
+  /** Timestamp (unix epoch) */
+  timestamp: number;
 }
 
 /**
  * Backend status response
  */
 export interface BackendStatusResponse {
-  /** Backend type (e.g., 'tpm', 'pkcs11', 'software'). REST wire form (rest/kms BackendStatusResponse). */
-  backend_type: string;
+  /** Operation status */
+  status: KMSStatus;
+  /** Backend type (e.g., 'tpm', 'pkcs11', 'software') */
+  backendType: string;
   /** Backend status description */
-  status: string;
+  backendStatus: string;
   /** Device path (if applicable) */
   device?: string;
   /** Region (if applicable) */
   region?: string;
   /** Key ID (if applicable) */
-  key_id?: string;
+  keyId?: string;
   /** PCR banks available */
-  pcr_banks?: string[];
+  pcrBanks?: string[];
   /** PCR registers */
-  pcr_registers?: number[];
+  pcrRegisters?: number[];
   /** Backend capabilities */
   capabilities?: Record<string, boolean>;
+  /** Timestamp (unix epoch) */
+  timestamp: number;
 }

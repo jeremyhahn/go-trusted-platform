@@ -22,14 +22,14 @@ export type EABCredentialStatus = 'ACTIVE' | 'REVOKED' | 'EXPIRED' | 'USED';
  * EAB credential
  */
 export interface EABCredential {
-  /** Unique identifier (uint64, serialized by protojson as a decimal string) */
-  id: string;
+  /** Unique identifier */
+  id: number;
   /** Key identifier for ACME binding */
   keyId: string;
   /** HMAC key for signing */
   hmacKey: string;
-  /** Associated profile ID (uint64, serialized by protojson as a decimal string) */
-  profileId: string;
+  /** Associated profile ID */
+  profileId: number;
   /** Tenant identifier */
   tenantId: string;
   /** Expiration timestamp */
@@ -46,12 +46,12 @@ export interface EABCredential {
  * EAB credential summary (without sensitive HMAC key)
  */
 export interface EABCredentialSummary {
-  /** Unique identifier (uint64, serialized by protojson as a decimal string) */
-  id: string;
+  /** Unique identifier */
+  id: number;
   /** Key identifier for ACME binding */
   keyId: string;
-  /** Associated profile ID (uint64, serialized by protojson as a decimal string) */
-  profileId: string;
+  /** Associated profile ID */
+  profileId: number;
   /** Tenant identifier */
   tenantId: string;
   /** Expiration timestamp */
@@ -72,8 +72,8 @@ export interface EABCredentialSummary {
  * Create EAB credential request
  */
 export interface CreateEABCredentialRequest {
-  /** Profile ID to associate with (uint64, serialized by protojson as a decimal string) */
-  profileId: string;
+  /** Profile ID to associate with */
+  profileId: number;
   /** Tenant identifier */
   tenantId: string;
   /** Expiration time in seconds (optional) */
@@ -84,8 +84,8 @@ export interface CreateEABCredentialRequest {
  * Get EAB credential request
  */
 export interface GetEABCredentialRequest {
-  /** Credential ID (uint64, serialized by protojson as a decimal string) */
-  id: string;
+  /** Credential ID */
+  id: number;
 }
 
 /**
@@ -100,8 +100,8 @@ export interface GetEABCredentialByKeyIdRequest {
  * List EAB credentials request
  */
 export interface ListEABCredentialsRequest {
-  /** Filter by profile ID (uint64, serialized by protojson as a decimal string) */
-  profileId?: string;
+  /** Filter by profile ID */
+  profileId?: number;
   /** Filter by tenant ID */
   tenantId?: string;
   /** Filter by status */
@@ -116,8 +116,8 @@ export interface ListEABCredentialsRequest {
  * Revoke EAB credential request
  */
 export interface RevokeEABCredentialRequest {
-  /** Credential ID (uint64, serialized by protojson as a decimal string) */
-  id: string;
+  /** Credential ID */
+  id: number;
 }
 
 /**
@@ -134,16 +134,16 @@ export interface ValidateEABCredentialRequest {
  * Delete EAB credential request
  */
 export interface DeleteEABCredentialRequest {
-  /** Credential ID (uint64, serialized by protojson as a decimal string) */
-  id: string;
+  /** Credential ID */
+  id: number;
 }
 
 /**
  * Get EAB QR code request
  */
 export interface GetEABQRCodeRequest {
-  /** Credential ID (uint64, serialized by protojson as a decimal string) */
-  id: string;
+  /** Credential ID */
+  id: number;
   /** QR code size in pixels (optional) */
   size?: number;
 }
@@ -152,8 +152,8 @@ export interface GetEABQRCodeRequest {
  * Get enrollment URL request
  */
 export interface GetEnrollmentURLRequest {
-  /** Credential ID (uint64, serialized by protojson as a decimal string) */
-  id: string;
+  /** Credential ID */
+  id: number;
 }
 
 // =============================================================================
@@ -245,8 +245,7 @@ export interface ValidateEABCredentialResponse {
   /** Validation details */
   details?: {
     keyId: string;
-    /** Profile ID (uint64, serialized by protojson as a decimal string) */
-    profileId: string;
+    profileId: number;
     tenantId: string;
     expiresAt: string;
     status: EABCredentialStatus;
@@ -277,36 +276,8 @@ export interface GetEABQRCodeResponse {
  * Get enrollment URL response
  */
 export interface GetEnrollmentURLResponse {
-  /** Enrollment URL with the credential embedded as query parameters */
+  /** Enrollment URL */
   url: string;
-  /** Time the server generated the URL (RFC 3339); not an expiry */
-  timestamp: string;
-}
-
-/**
- * Mark EAB credential used response
- */
-export interface MarkEABCredentialUsedResponse {
-  /** Operation status */
-  status: EABStatus;
-  /** Response timestamp */
-  timestamp?: string;
-}
-
-/**
- * Cleanup expired EAB credentials request
- */
-export interface CleanupExpiredEABCredentialsRequest {
-  /** Tenant to clean up (empty means all tenants) */
-  tenantId?: string;
-}
-
-/**
- * Cleanup expired EAB credentials response
- */
-export interface CleanupExpiredEABCredentialsResponse {
-  /** Number of credentials deleted */
-  deletedCount: number;
-  /** Operation status */
-  status: EABStatus;
+  /** URL expiration timestamp */
+  expiresAt: string;
 }

@@ -62,19 +62,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast, useDeviceTemplates } from '@/hooks';
-import type {
-  DeviceProfile,
-  DeviceRole,
-  DeviceTemplate,
-  UpdateDeviceTemplateRequest,
-} from 'trusted-platform-sdk';
-import {
-  ConfirmDialog,
-  CreateProfileDialog,
-  EditTemplateDialog,
-  ProfileAssignmentPanel,
-  TemplateDetailsDialog,
-} from './template-dialogs';
+import type { DeviceRole, DeviceTemplate } from 'trusted-platform-sdk';
 import {
   ASSIGNABLE_DEVICE_ROLES,
   DEVICE_ROLES,
@@ -138,21 +126,7 @@ export default function DeviceTemplatesPage() {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [filters, setFilters] = useState<TemplateFilters>({});
 
-  const [detailsId, setDetailsId] = useState<string | null>(null);
-  const [editTarget, setEditTarget] = useState<DeviceTemplate | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<DeviceTemplate | null>(null);
-  const [profileTarget, setProfileTarget] = useState<DeviceTemplate | null>(null);
-
-  const {
-    templates,
-    isLoading,
-    error,
-    refetch,
-    create,
-    update,
-    remove,
-    createProfileFromTemplate,
-  } = useDeviceTemplates();
+  const { templates, isLoading, error, refetch, create, remove } = useDeviceTemplates();
 
   // Filtered templates
   const filteredTemplates = useMemo(() => {
@@ -181,54 +155,11 @@ export default function DeviceTemplatesPage() {
   };
 
   const handleViewTemplate = (template: DeviceTemplate) => {
-    setDetailsId(template.id);
+    router.push(`/devices/templates/${template.id}`);
   };
 
   const handleEditTemplate = (template: DeviceTemplate) => {
-    setEditTarget(template);
-  };
-
-  const handleUpdateTemplate = async (request: UpdateDeviceTemplateRequest) => {
-    try {
-      await update.mutateAsync(request);
-      toast({
-        title: 'Template updated',
-        description: `"${request.name ?? ''}" has been saved`,
-        variant: 'success',
-      });
-      setEditTarget(null);
-      refetch();
-    } catch (err) {
-      toast({
-        title: 'Error updating template',
-        description: err instanceof Error ? err.message : 'Unknown error',
-        variant: 'destructive',
-      });
-    }
-  };
-
-  const handleCreateProfile = async (overrides: Partial<DeviceProfile> | undefined) => {
-    if (!profileTarget) {
-      return;
-    }
-    try {
-      const profile = await createProfileFromTemplate.mutateAsync({
-        templateId: profileTarget.id,
-        overrides,
-      });
-      toast({
-        title: 'Profile created',
-        description: `Profile ${profile?.name ?? ''} was created from "${profileTarget.name}"`,
-        variant: 'success',
-      });
-      setProfileTarget(null);
-    } catch (err) {
-      toast({
-        title: 'Error creating profile',
-        description: err instanceof Error ? err.message : 'Unknown error',
-        variant: 'destructive',
-      });
-    }
+    router.push(`/devices/templates/${template.id}/edit`);
   };
 
   const handleDuplicateTemplate = async (template: DeviceTemplate) => {
@@ -255,16 +186,11 @@ export default function DeviceTemplatesPage() {
     }
   };
 
-  const handleDeleteTemplate = (template: DeviceTemplate) => {
-    setDeleteTarget(template);
-  };
-
-  const confirmDeleteTemplate = async () => {
-    const template = deleteTarget;
-    if (!template) {
+  const handleDeleteTemplate = async (template: DeviceTemplate) => {
+    if (!confirm(`Are you sure you want to delete "${template.name}"?`)) {
       return;
     }
-    setDeleteTarget(null);
+
     try {
       await remove.mutateAsync(template.id);
       toast({
@@ -469,38 +395,6 @@ export default function DeviceTemplatesPage() {
         </Card>
       </div>
 
-      {/* Config lookup and profile assignment */}
-      <ProfileAssignmentPanel />
-
-      <TemplateDetailsDialog
-        templateId={detailsId}
-        onOpenChange={(open) => !open && setDetailsId(null)}
-        onOpenPage={(id) => router.push(`/devices/templates/${id}`)}
-      />
-      <EditTemplateDialog
-        template={editTarget}
-        onOpenChange={(open) => !open && setEditTarget(null)}
-        pending={update.isLoading}
-        onSave={handleUpdateTemplate}
-      />
-      <CreateProfileDialog
-        template={profileTarget}
-        onOpenChange={(open) => !open && setProfileTarget(null)}
-        pending={createProfileFromTemplate.isLoading}
-        onCreate={handleCreateProfile}
-      />
-      <ConfirmDialog
-        open={deleteTarget !== null}
-        onOpenChange={(open) => !open && setDeleteTarget(null)}
-        title="Delete template?"
-        description={
-          deleteTarget ? `"${deleteTarget.name}" will be deleted. This cannot be undone.` : ''
-        }
-        confirmLabel="Delete"
-        pending={remove.isLoading}
-        onConfirm={confirmDeleteTemplate}
-      />
-
       {/* Filters */}
       <div className="flex items-center gap-4 rounded-lg border border-border bg-card p-4">
         <Filter className="h-5 w-5 text-muted-foreground" />
@@ -607,10 +501,6 @@ export default function DeviceTemplatesPage() {
                           <DropdownMenuItem onClick={() => handleDuplicateTemplate(template)}>
                             <Copy className="mr-2 h-4 w-4" />
                             Duplicate
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setProfileTarget(template)}>
-                            <Plus className="mr-2 h-4 w-4" />
-                            Create Profile
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem

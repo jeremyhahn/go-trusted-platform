@@ -70,7 +70,7 @@ export function VTPMTable({ vtpms, onVTPMChange }: VTPMTableProps) {
       onError: (error) => {
         toast({
           title: 'Error',
-          description: error.message || 'Failed to delete vTPM',
+          description: error instanceof Error ? error.message : 'Failed to delete vTPM',
           variant: 'destructive',
         });
       },
@@ -113,8 +113,6 @@ export function VTPMTable({ vtpms, onVTPMChange }: VTPMTableProps) {
     setLoadingId(vtpm.id);
     try {
       await deleteMutation.mutateAsync(vtpm.id);
-    } catch {
-      // onError has already shown the refusal.
     } finally {
       setLoadingId(null);
     }

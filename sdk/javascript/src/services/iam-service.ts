@@ -307,8 +307,8 @@ export class IAMService extends BaseService {
    */
   async addGroupMember(request: AddGroupMemberRequest): Promise<ApiResponse<AddGroupMemberResponse>> {
     return this.client.post<AddGroupMemberResponse>(
-      this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/groups/${this.encodePathSegment(request.groupId)}/members/${this.encodePathSegment(request.userId)}`),
-      {}
+      this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/groups/${this.encodePathSegment(request.groupId)}/members`),
+      { userId: request.userId }
     );
   }
 
@@ -336,37 +336,7 @@ export class IAMService extends BaseService {
    * Check permission
    */
   async checkPermission(request: CheckIAMPermissionRequest): Promise<ApiResponse<CheckIAMPermissionResponse>> {
-    // REST wire format of CheckPermissionRequest: subject_id; the tenant is the path, not the body.
-    const body = {
-      subject_id: request.subjectId,
-      roles: request.roles,
-      groups: request.groups,
-      action: request.action,
-      resource: request.resource,
-      context: request.context,
-      attributes: request.attributes,
-    };
-    const res = await this.client.post<CheckIAMPermissionResponse>(
-      this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/permissions/check`),
-      body
-    );
-    // The REST handler sends snake_case (pkg/webservice/v1/rest/iam/types.go
-    // CheckPermissionResponse, #2127 Codex): set the camelCase fields on the
-    // same response object, never over a camelCase value already present.
-    if (res.success && res.data) {
-      const data = res.data as unknown as Record<string, unknown>;
-      const fields: Array<[string, string]> = [
-        ['matchedPolicy', 'matched_policy'],
-        ['matchedRule', 'matched_rule'],
-        ['evaluationTimeNs', 'evaluation_time_ns'],
-      ];
-      for (const [camel, wire] of fields) {
-        if (data[camel] === undefined && data[wire] !== undefined) {
-          data[camel] = data[wire];
-        }
-      }
-    }
-    return res;
+    return this.client.post<CheckIAMPermissionResponse>(this.buildUrl('/auth/check'), request);
   }
 
   /**
@@ -387,30 +357,7 @@ export class IAMService extends BaseService {
    * Verify token
    */
   async verifyToken(request: VerifyIAMTokenRequest): Promise<ApiResponse<VerifyIAMTokenResponse>> {
-    // The server serves POST /api/v1/iam/tokens/verify (flat) with body
-    // {"token"}; the daemon's own-tenant guard reads the caller's tenant from
-    // the tenant_id query, so the request names it there.
-    const url = `${this.buildUrl('/tokens/verify')}?tenant_id=${encodeURIComponent(request.tenantId)}`;
-    const res = await this.client.post<VerifyIAMTokenResponse>(url, {
-      token: request.token,
-    });
-    // The REST handler sends snake_case (pkg/webservice/v1/rest/iam/types.go
-    // VerifyTokenResponse): set the camelCase fields on the same response
-    // object, never over a camelCase value already present.
-    if (res.success && res.data) {
-      const data = res.data as unknown as Record<string, unknown>;
-      const fields: Array<[string, string]> = [
-        ['userId', 'subject'],
-        ['tenantId', 'tenant_id'],
-        ['expiresAt', 'expires_at'],
-      ];
-      for (const [camel, wire] of fields) {
-        if (data[camel] === undefined && data[wire] !== undefined) {
-          data[camel] = data[wire];
-        }
-      }
-    }
-    return res;
+    return this.client.post<VerifyIAMTokenResponse>(this.buildUrl('/auth/token/verify'), request);
   }
 
   // =========================================================================
@@ -437,15 +384,9 @@ export class IAMService extends BaseService {
    * List tenants
    */
   async listTenants(request?: ListIAMTenantsRequest): Promise<ApiResponse<ListIAMTenantsResponse>> {
-    // The server pages tenants by limit and offset; it ignores page.
-    const pageSize = request?.pageSize;
-    const page = request?.page;
-    const offset = pageSize !== undefined && page !== undefined && page > 1
-      ? (page - 1) * pageSize
-      : undefined;
     return this.client.get<ListIAMTenantsResponse>(this.buildUrl('/tenants', {
-      limit: pageSize,
-      filters: { offset },
+      page: request?.page,
+      limit: request?.pageSize,
     }));
   }
 
@@ -600,23 +541,9 @@ export class IAMService extends BaseService {
    * Rotate application secret
    */
   async rotateAppSecret(tenantId: string, clientId: string): Promise<ApiResponse<RotateIAMAppSecretResponse>> {
-    const res = await this.client.post<RotateIAMAppSecretResponse>(
-      this.buildUrl(`/tenants/${this.encodePathSegment(tenantId)}/apps/${this.encodePathSegment(clientId)}/rotate`),
+    return this.client.post<RotateIAMAppSecretResponse>(
+      this.buildUrl(`/tenants/${this.encodePathSegment(tenantId)}/apps/${this.encodePathSegment(clientId)}/rotate-secret`),
       {}
     );
-    // The REST RotateSecretResponse is snake_case: set the camelCase fields on the same object, never over a present value.
-    if (res.success && res.data) {
-      const data = res.data as unknown as Record<string, unknown>;
-      const fields: Array<[string, string]> = [
-        ['clientId', 'client_id'],
-        ['clientSecret', 'client_secret'],
-      ];
-      for (const [camel, wire] of fields) {
-        if (data[camel] === undefined && data[wire] !== undefined) {
-          data[camel] = data[wire];
-        }
-      }
-    }
-    return res;
   }
 }

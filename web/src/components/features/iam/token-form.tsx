@@ -59,12 +59,9 @@ export function TokenForm({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [customScope, setCustomScope] = useState('');
 
-  // Reset the form each time the dialog opens: state adjusted during
-  // render against the previous open value, not in an effect.
-  const [wasOpen, setWasOpen] = useState(false);
-  if (open !== wasOpen) {
-    setWasOpen(open);
+  React.useEffect(() => {
     if (open) {
+      // Reset form when dialog opens
       const oneMonthFromNow = new Date();
       oneMonthFromNow.setMonth(oneMonthFromNow.getMonth() + 1);
 
@@ -76,7 +73,7 @@ export function TokenForm({
       setErrors({});
       setCustomScope('');
     }
-  }
+  }, [open]);
 
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
@@ -233,15 +230,7 @@ export function TokenForm({
                   <div
                     key={scope.value}
                     className="flex items-start space-x-2 p-2 rounded-md hover:bg-accent cursor-pointer"
-                    onClick={(e) => {
-                      // The checkbox toggles itself; its click (and the click
-                      // its hidden form input re-dispatches) must not toggle
-                      // the scope a second time.
-                      if ((e.target as HTMLElement).closest('button, input')) {
-                        return;
-                      }
-                      toggleScope(scope.value);
-                    }}
+                    onClick={() => toggleScope(scope.value)}
                   >
                     <Checkbox
                       checked={formData.scopes.includes(scope.value)}

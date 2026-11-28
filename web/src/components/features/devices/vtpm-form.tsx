@@ -75,7 +75,7 @@ export function VTPMForm({ onSuccess, onCancel }: VTPMFormProps) {
       onError: (error) => {
         toast({
           title: 'Error',
-          description: error.message || 'Failed to create vTPM',
+          description: error instanceof Error ? error.message : 'Failed to create vTPM',
           variant: 'destructive',
         });
       },

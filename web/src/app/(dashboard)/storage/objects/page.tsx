@@ -182,20 +182,19 @@ export default function ObjectStoragePage() {
     }));
   }, [bucketsResponse]);
 
-  // Auto-select first bucket when buckets are loaded (state adjusted
-  // during render, not in an effect).
-  if (buckets.length > 0 && !selectedBucket) {
-    setSelectedBucket(buckets[0].name);
-  }
+  // Auto-select first bucket when buckets are loaded
+  React.useEffect(() => {
+    if (buckets.length > 0 && !selectedBucket) {
+      setSelectedBucket(buckets[0].name);
+    }
+  }, [buckets, selectedBucket]);
 
   // Update upload form bucket when selected bucket changes
-  const [uploadBucketFor, setUploadBucketFor] = React.useState(selectedBucket);
-  if (selectedBucket !== uploadBucketFor) {
-    setUploadBucketFor(selectedBucket);
+  React.useEffect(() => {
     if (selectedBucket) {
       setUploadFormData((prev) => ({ ...prev, bucket: selectedBucket }));
     }
-  }
+  }, [selectedBucket]);
 
   // Fetch objects for selected bucket
   const {

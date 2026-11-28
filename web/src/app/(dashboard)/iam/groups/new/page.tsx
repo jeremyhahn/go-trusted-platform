@@ -10,26 +10,13 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useIAM, useToast, useMutation } from '@/hooks';
-import { Gated } from '@/components/features/capabilities/gated';
-import { useCapabilities } from '@/hooks/use-capabilities';
-
-const CREATE_GROUP_OP = 'POST /api/v1/iam/tenants/{tenant}/groups';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Loader2 } from 'lucide-react';
-
-// The SDK rejects with an error object carrying the server's message; it is
-// not always an Error instance.
-function failureMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (err !== null && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
-    return (err as { message: string }).message;
-  }
-  return String(err);
-}
+import { Gated } from '@/components/features/capabilities/gated';
 
 export default function NewGroupPage() {
   const router = useRouter();
@@ -38,14 +25,9 @@ export default function NewGroupPage() {
   const { tenantId, isLoading: authLoading } = useAuth();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const { capability } = useCapabilities();
-  const createCap = capability(CREATE_GROUP_OP);
 
   const createMutation = useMutation(
     async () => {
-      if (!createCap.enabled) {
-        throw new Error(createCap.reason ?? 'Creating groups is not offered by the server');
-      }
       if (!tenantId) throw new Error('No tenant available');
       const id = name.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
       return iam.createGroup({ tenantId, id, name, description });
@@ -58,7 +40,7 @@ export default function NewGroupPage() {
       onError: (err) => {
         toast({
           title: 'Failed to create group',
-          description: failureMessage(err),
+          description: err instanceof Error ? err.message : 'Unknown error',
           variant: 'destructive',
         });
       },
@@ -105,7 +87,7 @@ export default function NewGroupPage() {
             <Button variant="outline" onClick={() => router.push('/iam/groups')}>
               Cancel
             </Button>
-            <Gated op={CREATE_GROUP_OP}>
+            <Gated op="POST /api/v1/iam/tenants/{tenant}/groups">
               <Button
                 onClick={() => createMutation.mutate(undefined)}
                 disabled={!name || createMutation.isLoading}

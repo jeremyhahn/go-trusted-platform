@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getUserFromToken } from "@/utils/jwt";
 import { getBaseUrl } from "@/utils/getBaseUrl";
@@ -24,59 +23,6 @@ interface Notification {
   type: NotificationType;
 }
 
-// The REST handlers answer through protorest.WriteSuccess with the
-// {code, success, payload} envelope, and payload carries protojson camelCase
-// names (expiresAt, createdAt). unwrapPayload and toInvitation read that
-// shape; a bare body and snake_case names are accepted too.
-
-/** unwrapPayload returns body.payload when it is an object, else the body. */
-function unwrapPayload(body: unknown): Record<string, unknown> {
-  if (body === null || typeof body !== "object") {
-    return {};
-  }
-  const payload = (body as Record<string, unknown>).payload;
-  if (payload !== null && typeof payload === "object") {
-    return payload as Record<string, unknown>;
-  }
-  return body as Record<string, unknown>;
-}
-
-function text(value: unknown): string {
-  return value === undefined || value === null ? "" : String(value);
-}
-
-/** toInvitation maps a protojson invitation to the page's Invitation. */
-function toInvitation(raw: Record<string, unknown>): Invitation {
-  return {
-    id: text(raw.id),
-    token: text(raw.token),
-    email: text(raw.email),
-    role: text(raw.role),
-    expires_at: text(raw.expires_at ?? raw.expiresAt),
-    created_at: text(raw.created_at ?? raw.createdAt),
-  };
-}
-
-/** loadInvitations reads the tenant's invitations; it throws on failure. */
-async function loadInvitations(): Promise<Invitation[]> {
-  const baseUrl = getBaseUrl();
-  const jwt = getCookie("jwt");
-
-  const response = await fetch(`${baseUrl}/api/v1/invitations`, {
-    headers: {
-      Authorization: `Bearer ${jwt}`,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error("Failed to fetch invitations");
-  }
-
-  const data = await response.json();
-  const list = (unwrapPayload(data).invitations as unknown[] | undefined) ?? [];
-  return list.map((raw) => toInvitation((raw ?? {}) as Record<string, unknown>));
-}
-
 export default function InvitationsPage() {
   const router = useRouter();
   const [invitations, setInvitations] = useState<Invitation[]>([]);
@@ -87,16 +33,6 @@ export default function InvitationsPage() {
   const [notification, setNotification] = useState<Notification | null>(null);
   const [isTenantOwner, setIsTenantOwner] = useState(false);
 
-  const showNotification = (message: string, type: NotificationType) => {
-    setNotification({ message, type });
-    setTimeout(() => setNotification(null), 5000);
-  };
-
-  // The effect reads the session, settles ownership first (in a microtask,
-  // before any network read) and the invitations list second, all from
-  // promise callbacks (no synchronous setState in the effect). An owner gets
-  // the form while the list loads; a non-owner gets no read and the
-  // owner-only notice.
   useEffect(() => {
     const user = getUserFromToken();
     if (!user) {
@@ -104,46 +40,51 @@ export default function InvitationsPage() {
       return;
     }
 
-    let active = true;
-    void Promise.resolve(user.isTenantOwner).then((owner) => {
-      if (!active) {
-        return;
-      }
-      setIsTenantOwner(!!owner);
-      if (!owner) {
-        setNotification({
-          message: "Only tenant owners can manage invitations.",
-          type: "error",
-        });
-        setFetchingInvitations(false);
-        return;
-      }
-      return loadInvitations().then(
-        (list) => {
-          if (active) {
-            setInvitations(list);
-            setFetchingInvitations(false);
-          }
-        },
-        (error: unknown) => {
-          if (active) {
-            setNotification({
-              message:
-                error instanceof Error
-                  ? error.message
-                  : "Failed to fetch invitations",
-              type: "error",
-            });
-            setTimeout(() => setNotification(null), 5000);
-            setFetchingInvitations(false);
-          }
-        }
-      );
-    });
-    return () => {
-      active = false;
-    };
+    if (!user.isTenantOwner) {
+      setIsTenantOwner(false);
+      setNotification({
+        message: "Only tenant owners can manage invitations.",
+        type: "error",
+      });
+      setFetchingInvitations(false);
+      return;
+    }
+
+    setIsTenantOwner(true);
+    fetchInvitations();
   }, [router]);
+
+  const showNotification = (message: string, type: NotificationType) => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 5000);
+  };
+
+  const fetchInvitations = async () => {
+    try {
+      const baseUrl = getBaseUrl();
+      const jwt = getCookie("jwt");
+
+      const response = await fetch(`${baseUrl}/api/v1/invitations`, {
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to fetch invitations");
+      }
+
+      const data = await response.json();
+      setInvitations(data.invitations || []);
+    } catch (error) {
+      showNotification(
+        error instanceof Error ? error.message : "Failed to fetch invitations",
+        "error"
+      );
+    } finally {
+      setFetchingInvitations(false);
+    }
+  };
 
   const handleCreateInvitation = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -174,14 +115,7 @@ export default function InvitationsPage() {
       }
 
       const data = await response.json();
-      const created = unwrapPayload(data).invitation;
-      if (created === null || typeof created !== "object") {
-        throw new Error("The server returned no invitation");
-      }
-      setInvitations([
-        toInvitation(created as Record<string, unknown>),
-        ...invitations,
-      ]);
+      setInvitations([data.invitation, ...invitations]);
       setEmail("");
       setRole("member");
       showNotification("Invitation created successfully!", "success");
@@ -233,9 +167,6 @@ export default function InvitationsPage() {
   };
 
   const formatDate = (dateString: string) => {
-    if (!dateString) {
-      return "-";
-    }
     const date = new Date(dateString);
     return date.toLocaleDateString() + " " + date.toLocaleTimeString();
   };
@@ -356,13 +287,6 @@ export default function InvitationsPage() {
                   >
                     Copy Link
                   </button>
-                  <Link
-                    href={`/admin/invitations/detail/?id=${encodeURIComponent(invitation.id)}`}
-                    title="View invitation"
-                    data-testid={`view-invitation-${invitation.id}`}
-                  >
-                    View
-                  </Link>
                   <button
                     onClick={() => handleRevokeInvitation(invitation.id)}
                     className={styles.revokeButton}

@@ -5,8 +5,6 @@
  *
  * Displays and manages API tokens with generation and revocation.
  * Uses the trusted-platform-sdk for API interactions.
- * Register Application, the row Rotate Secret and the row Delete are gated on the server's capabilities (#2033, #2054).
- * The Verify a token card checks a pasted token through the SDK, gated on its op (#2053).
  */
 
 import React, { useState, useMemo, useCallback } from 'react';
@@ -32,9 +30,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Plus, Key, Clock, AlertCircle, Loader2, Copy, Check } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { Gated } from '@/components/features/capabilities/gated';
-import { TokenVerifyCard } from '@/components/features/iam/token-verify-card';
-import { useCapabilities } from '@/hooks/use-capabilities';
 
 /**
  * Display type for applications used as API tokens
@@ -52,9 +47,6 @@ interface DisplayApplication {
 export default function TokensPage() {
   const { toast } = useToast();
   const { tenantId, isLoading: authLoading } = useAuth();
-  const capabilities = useCapabilities();
-  const rotateCap = capabilities.capability('POST /api/v1/iam/tenants/{tenant}/apps/{id}/rotate');
-  const deleteCap = capabilities.capability('DELETE /api/v1/iam/tenants/{tenant}/apps/{id}');
   const iam = useIAM();
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [displaySecret, setDisplaySecret] = useState<{
@@ -201,14 +193,12 @@ export default function TokensPage() {
   );
 
   const handleDelete = useCallback((app: DisplayApplication) => {
-    if (!deleteCap.enabled) return;
     if (window.confirm(`Are you sure you want to delete "${app.name}"?`)) {
       deleteAppMutation.mutate(app.clientId);
     }
-  }, [deleteAppMutation, deleteCap.enabled]);
+  }, [deleteAppMutation]);
 
   const handleRotateSecret = useCallback((app: DisplayApplication) => {
-    if (!rotateCap.enabled) return;
     if (
       window.confirm(
         `Are you sure you want to rotate the secret for "${app.name}"? The old secret will stop working immediately.`
@@ -216,10 +206,9 @@ export default function TokensPage() {
     ) {
       rotateSecretMutation.mutate(app.clientId);
     }
-  }, [rotateSecretMutation, rotateCap.enabled]);
+  }, [rotateSecretMutation]);
 
   const handleBulkDelete = useCallback(async (appsToDelete: DisplayApplication[]) => {
-    if (!deleteCap.enabled) return;
     if (!tenantId) {
       toast({
         title: 'Error',
@@ -252,7 +241,7 @@ export default function TokensPage() {
         });
       }
     }
-  }, [tenantId, iam, toast, refetchApps, deleteCap.enabled]);
+  }, [tenantId, iam, toast, refetchApps]);
 
   const handleCreateApp = () => {
     if (!newAppName.trim()) {
@@ -353,30 +342,19 @@ export default function TokensPage() {
               {
                 label: 'Rotate Secret',
                 onClick: () => handleRotateSecret(app),
-                disabled: !rotateCap.enabled,
-                title: rotateCap.enabled ? undefined : rotateCap.reason,
               },
               {
                 label: 'Delete',
                 onClick: () => handleDelete(app),
                 variant: 'destructive',
                 separator: true,
-                disabled: !deleteCap.enabled,
-                title: deleteCap.enabled ? undefined : deleteCap.reason,
               },
             ]}
           />
         );
       },
     },
-  ], [
-    handleRotateSecret,
-    handleDelete,
-    rotateCap.enabled,
-    rotateCap.reason,
-    deleteCap.enabled,
-    deleteCap.reason,
-  ]);
+  ], [handleRotateSecret, handleDelete]);
 
   // Show auth loading state
   if (authLoading) {
@@ -439,12 +417,10 @@ export default function TokensPage() {
             Manage OAuth applications for programmatic API access
           </p>
         </div>
-        <Gated op="POST /api/v1/iam/tenants/{tenant}/apps">
-          <Button onClick={() => setIsFormOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Register Application
-          </Button>
-        </Gated>
+        <Button onClick={() => setIsFormOpen(true)}>
+          <Plus className="mr-2 h-4 w-4" />
+          Register Application
+        </Button>
       </div>
 
       {/* Info Alert */}
@@ -506,16 +482,11 @@ export default function TokensPage() {
                 label: 'Delete selected',
                 onClick: handleBulkDelete,
                 variant: 'destructive',
-                disabled: !deleteCap.enabled,
-                title: deleteCap.enabled ? undefined : deleteCap.reason,
               },
             ]}
           />
         </CardContent>
       </Card>
-
-      {/* Verify a token (#2053) */}
-      <TokenVerifyCard tenantId={tenantId} />
 
       {/* Register Application Dialog */}
       <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
@@ -541,17 +512,15 @@ export default function TokensPage() {
             <Button variant="outline" onClick={() => setIsFormOpen(false)}>
               Cancel
             </Button>
-            <Gated op="POST /api/v1/iam/tenants/{tenant}/apps">
-              <Button
-                onClick={handleCreateApp}
-                disabled={registerAppMutation.isLoading}
-              >
-                {registerAppMutation.isLoading && (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                )}
-                Register
-              </Button>
-            </Gated>
+            <Button
+              onClick={handleCreateApp}
+              disabled={registerAppMutation.isLoading}
+            >
+              {registerAppMutation.isLoading && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
+              Register
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

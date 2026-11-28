@@ -8,7 +8,6 @@
  */
 
 import * as React from "react";
-import Link from "next/link";
 import { Building2, Mail, Settings, Users, AlertCircle, RefreshCw } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import {
@@ -357,7 +356,7 @@ export default function TenantPage() {
                       </p>
                     </div>
                     <Button asChild variant="outline">
-                      <Link href="/tenant/invitations">Manage Invitations</Link>
+                      <a href="/tenant/invitations">Manage Invitations</a>
                     </Button>
                   </div>
                 </div>
