@@ -511,6 +511,10 @@ func (r *qemuIncomingReceiver) Abort(_ context.Context) error {
 // server tls-creds object, then over QMP installs the tls-creds migration
 // parameter and issues migrate-incoming on the configured listen address.
 // receiverDisk picks the image the receiving QEMU runs on and whether it must be created.
+// A live migration runs on the shared image the source left in place. The wire
+// carries no disk path, so the receiver mirrors the source layout
+// (<WorkDir>/<instance id>/disk.qcow2) from its own config and the instance id,
+// and refuses any image it cannot confine to the shared storage mount.
 func receiverDisk(o *QEMUOrchestrator, spec MigrationSpec, workDir string) (string, bool, error) {
 	if spec.Mode != MigrateModeLive {
 		return filepath.Join(workDir, "disk.qcow2"), true, nil
@@ -518,15 +522,18 @@ func receiverDisk(o *QEMUOrchestrator, spec MigrationSpec, workDir string) (stri
 	if !o.config.SharedStorageEnabled() {
 		return "", false, ErrLiveMigrationRequiresSharedStorage
 	}
-	if spec.Config == nil || spec.Config.DiskPath == "" {
-		return "", false, &WrappedError{Msg: "live migration spec names no shared disk image", Err: ErrMigrationSpecRequired}
+	id := spec.InstanceID
+	if id == "" || !filepath.IsLocal(id) || filepath.Base(id) != id {
+		return "", false, &WrappedError{Msg: fmt.Sprintf("live migration instance id %q is not a single path element", id), Err: ErrMigrationSpecRequired}
 	}
-	disk := filepath.Clean(spec.Config.DiskPath)
-	if mount := o.config.SharedStorage.MountPath; mount != "" {
-		rel, err := filepath.Rel(filepath.Clean(mount), disk)
-		if err != nil || !filepath.IsLocal(rel) {
-			return "", false, fmt.Errorf("shared disk image %s is outside the shared storage mount %s", disk, mount)
-		}
+	mount := o.config.SharedStorage.MountPath
+	if o.config.WorkDir == "" || mount == "" {
+		return "", false, &WrappedError{Msg: "live migration needs a work dir and a shared storage mount path", Err: ErrMigrationSpecRequired}
+	}
+	disk := filepath.Join(o.config.WorkDir, id, "disk.qcow2")
+	rel, err := filepath.Rel(filepath.Clean(mount), disk)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", false, fmt.Errorf("shared disk image %s is outside the shared storage mount %s", disk, mount)
 	}
 	if _, err := os.Stat(disk); err != nil {
 		return "", false, &WrappedError{Msg: "open shared disk image", Err: err}

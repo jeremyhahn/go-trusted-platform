@@ -400,7 +400,15 @@ export default function VMDetailPage() {
                   Reboot
                 </Button>
               </Gated>
-              <VMMigrateButton vmId={vmId} disabled={actionLoading} onMigrated={fetchVM} />
+              <VMMigrateButton
+                vmId={vmId}
+                disabled={actionLoading}
+                onMigrated={() => {
+                  // MigrateVM removed the source instance: leave its page.
+                  stopPolling();
+                  router.push('/compute/vms');
+                }}
+              />
             </>
           )}
           {vm.status === 'suspended' && (
