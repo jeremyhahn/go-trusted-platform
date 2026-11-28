@@ -31,8 +31,8 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/reporting"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
@@ -429,16 +429,14 @@ func TestWireQuarantineObserver_FailedAttestationQuarantinesThePort(t *testing.T
 	require.NotNil(t, wireQuarantineObserver(svcs, sdn, devices, newTestLogger()))
 
 	ctx := context.Background()
-	failed, err := svcs.Service.VerifyManifest(ctx,
-		&manifest.HostManifest{ID: "m-07", HostID: "node-07", Nonce: []byte("replayed")},
-		nil, []byte("fresh"), nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, manifest.VerificationStatusFailed, failed.Status)
-
-	passed, err := svcs.Service.VerifyManifest(ctx,
-		&manifest.HostManifest{ID: "m-08", HostID: "node-08"}, nil, nil, nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, manifest.VerificationStatusVerified, passed.Status)
+	// Quarantine follows a device verdict; a manifest inspection reaches no
+	// observer (#2038).
+	require.NoError(t, svcs.Service.RecordDeviceVerdict(ctx, verdict.DeviceVerdict{
+		DeviceID: 7, HostID: "node-07", Passed: false, Cryptographic: true, Reason: "signature invalid",
+	}))
+	require.NoError(t, svcs.Service.RecordDeviceVerdict(ctx, verdict.DeviceVerdict{
+		DeviceID: 8, HostID: "node-08", Passed: true,
+	}))
 
 	state, err := eng.GetPortState("tap07")
 	require.NoError(t, err, "the failed host's port is known to the policy engine")

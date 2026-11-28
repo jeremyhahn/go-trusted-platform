@@ -1,0 +1,392 @@
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  ok,
+  refused,
+  stubControlPlane,
+  withControlPlane,
+  type Answer,
+  type SentRequest,
+} from '@/test/control-plane-fetch';
+import { useToast } from '@/hooks';
+import { AttestationQuoteCard } from './attestation-quote-card';
+
+// #2038: GetAttestationQuote and VerifyAttestationQuote through the real SDK
+// client on client.attestation, each control behind its capability.
+
+vi.mock('next/navigation', () => ({
+  useParams: () => ({}),
+  usePathname: () => '/attestation/quotes',
+  useRouter: () => ({ push: vi.fn(), back: vi.fn() }),
+}));
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+const QUOTE_OP = 'POST /api/v1/attestation/quote';
+const VERIFY_OP = 'POST /api/v1/attestation/quote/verify';
+
+// The server's capabilities listing: both quote ops, off when off is set.
+function caps(off = false): Answer {
+  const capabilities = [QUOTE_OP, VERIFY_OP].map((op) =>
+    off ? { op, kind: 'route', enabled: false, reason: 'not-configured: attestation' } : { op, kind: 'route', enabled: true },
+  );
+  return ok({ capabilities, total: capabilities.length, enabled: capabilities.filter((c) => c.enabled).length });
+}
+
+// The wire is protojson with lowerCamel names (protorest UseProtoNames false).
+const QUOTE = {
+  quoteData: 'cXVvdGU=',
+  signature: 'c2ln',
+  signatureAlgorithm: 'SHA256-RSAPSS',
+  pcrValues: [],
+  nonce: 'bm9uY2U=',
+};
+
+function routes(extra: Record<string, Answer> = {}, off = false): Record<string, Answer> {
+  return {
+    'GET /api/v1/capabilities': caps(off),
+    [QUOTE_OP]: ok({ status: 'ok', quote: QUOTE, channelBinding: 'Y2I=' }),
+    [VERIFY_OP]: ok({ status: 'ok', verified: true }),
+    ...extra,
+  };
+}
+
+function posts(sent: SentRequest[], path: string) {
+  return sent.filter((r) => r.method === 'POST' && r.path === path);
+}
+
+async function ready(name: string) {
+  const button = await screen.findByRole('button', { name });
+  await waitFor(() => expect(button.getAttribute('data-capability-enabled')).not.toBeNull());
+  return button;
+}
+
+const PEM = '-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\n-----END PUBLIC KEY-----';
+
+describe('AttestationQuoteCard', () => {
+  it('requests a quote with the nonce and PCR selection', async () => {
+    const sent = stubControlPlane(routes());
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const button = await ready('Get quote');
+    await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-quote-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.change(screen.getByTestId('attestation-quote-pcrs'), { target: { value: '0,7' } });
+    fireEvent.click(button);
+
+    const result = await screen.findByTestId('attestation-quote-result');
+    const quotes = posts(sent, '/api/v1/attestation/quote');
+    expect(quotes).toHaveLength(1);
+    const body = quotes[0].body as { nonce: string; config: { pcrIndices: number[] } };
+    expect(body.nonce).toBe('bm9uY2U=');
+    expect(body.config.pcrIndices).toEqual([0, 7]);
+    expect(result.textContent).toContain('SHA256-RSAPSS');
+    expect(result.textContent).toContain('Y2I=');
+  });
+
+  it('verifies a quote against the AK key and nonce', async () => {
+    const sent = stubControlPlane(routes({ [VERIFY_OP]: ok({ status: 'ok', verified: true, message: 'PCR values match the expected policy' }) }));
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const button = await ready('Verify quote');
+    await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), { target: { value: JSON.stringify(QUOTE) } });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.change(screen.getByTestId('attestation-verify-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(button);
+
+    const verdict = await screen.findByTestId('attestation-quote-verdict');
+    const verifies = posts(sent, '/api/v1/attestation/quote/verify');
+    expect(verifies).toHaveLength(1);
+    const body = verifies[0].body as { quote: typeof QUOTE; akPublicKeyPem: string; expectedNonce: string };
+    expect(body.quote).toEqual(QUOTE);
+    // ak_public_key_pem is a proto bytes field: protojson wants it base64.
+    expect(body.akPublicKeyPem).toBe(btoa(PEM));
+    expect(body.expectedNonce).toBe('bm9uY2U=');
+    expect('channelBinding' in body).toBe(false);
+    expect(verdict.textContent).toContain('verified');
+    expect(verdict.textContent).not.toContain('not verified');
+    const policy = screen.getByTestId('attestation-quote-pcr-policy');
+    expect(policy.textContent).toContain('PCR policy not checked');
+    expect(verdict.textContent).not.toContain('match the expected policy');
+  });
+
+  it('shows a failed verification with the server message', async () => {
+    stubControlPlane(routes({ [VERIFY_OP]: ok({ status: 'ok', verified: false, message: 'nonce mismatch' }) }));
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const button = await ready('Verify quote');
+    await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), { target: { value: JSON.stringify(QUOTE) } });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.change(screen.getByTestId('attestation-verify-nonce'), { target: { value: 'b3RoZXI=' } });
+    fireEvent.click(button);
+
+    const verdict = await screen.findByTestId('attestation-quote-verdict');
+    expect(verdict.textContent).toContain('not verified');
+    expect(verdict.textContent).toContain('nonce mismatch');
+  });
+
+  it('verifies a fetched quote with the nonce it was requested with, not the bound quote nonce', async () => {
+    // The quote carries SHA-256(nonce || channelBinding); sending that bound
+    // value as expectedNonce makes the server hash it again.
+    const bound = { ...QUOTE, nonce: 'Ym91bmQ=' };
+    const sent = stubControlPlane(routes({ [QUOTE_OP]: ok({ status: 'ok', quote: bound, channelBinding: 'Y2I=' }) }));
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const get = await ready('Get quote');
+    await waitFor(() => expect(get.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-quote-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(get);
+    await screen.findByTestId('attestation-quote-result');
+
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.click(await ready('Verify quote'));
+    await screen.findByTestId('attestation-quote-verdict');
+
+    const verifies = posts(sent, '/api/v1/attestation/quote/verify');
+    expect(verifies).toHaveLength(1);
+    const body = verifies[0].body as { expectedNonce: string; channelBinding?: string };
+    expect(body.expectedNonce).toBe('bm9uY2U=');
+    expect(body.channelBinding).toBe('Y2I=');
+  });
+
+  it('sends the channel binding typed for an imported quote', async () => {
+    const sent = stubControlPlane(routes());
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const button = await ready('Verify quote');
+    await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), { target: { value: JSON.stringify(QUOTE) } });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.change(screen.getByTestId('attestation-verify-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.change(screen.getByTestId('attestation-verify-channel-binding'), { target: { value: 'Y2I=' } });
+    fireEvent.click(button);
+    await screen.findByTestId('attestation-quote-verdict');
+
+    const verifies = posts(sent, '/api/v1/attestation/quote/verify');
+    expect(verifies).toHaveLength(1);
+    expect((verifies[0].body as { channelBinding?: string }).channelBinding).toBe('Y2I=');
+  });
+
+  // With a blank expected nonce the server checks only the signature, so a
+  // replayed quote would read as verified: the card must not send it.
+  async function refusesBlankNonce(binding: string) {
+    const sent = stubControlPlane(routes());
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const button = await ready('Verify quote');
+    await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), { target: { value: JSON.stringify(QUOTE) } });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    if (binding !== '') {
+      fireEvent.change(screen.getByTestId('attestation-verify-channel-binding'), { target: { value: binding } });
+    }
+    fireEvent.click(button);
+
+    const error = await screen.findByTestId('attestation-verify-error');
+    expect(error.textContent).toContain('expected nonce');
+    await act(async () => {
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    });
+    expect(posts(sent, '/api/v1/attestation/quote/verify')).toHaveLength(0);
+    expect(screen.queryByTestId('attestation-quote-verdict')).toBeNull();
+  }
+
+  it('refuses to verify an imported quote with no expected nonce', async () => {
+    await refusesBlankNonce('');
+  });
+
+  it('refuses a channel binding with no expected nonce', async () => {
+    await refusesBlankNonce('Y2I=');
+  });
+
+  it('keeps a fetched quote binding when the quote JSON is reformatted', async () => {
+    const sent = stubControlPlane(routes());
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const get = await ready('Get quote');
+    await waitFor(() => expect(get.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-quote-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(get);
+    await screen.findByTestId('attestation-quote-result');
+    await waitFor(() =>
+      expect((screen.getByTestId('attestation-verify-channel-binding') as HTMLInputElement).value).toBe('Y2I='),
+    );
+
+    const reordered = JSON.stringify({
+      nonce: QUOTE.nonce,
+      pcrValues: [],
+      signatureAlgorithm: QUOTE.signatureAlgorithm,
+      signature: QUOTE.signature,
+      quoteData: QUOTE.quoteData,
+    });
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), { target: { value: reordered } });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.click(await ready('Verify quote'));
+    await screen.findByTestId('attestation-quote-verdict');
+
+    const verifies = posts(sent, '/api/v1/attestation/quote/verify');
+    expect(verifies).toHaveLength(1);
+    expect((verifies[0].body as { channelBinding?: string }).channelBinding).toBe('Y2I=');
+  });
+
+  it('reads the quote and binding from a pasted GetAttestationQuote answer', async () => {
+    const sent = stubControlPlane(routes());
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const button = await ready('Verify quote');
+    await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), {
+      target: { value: JSON.stringify({ quote: QUOTE, channelBinding: 'Y2I=' }) },
+    });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.change(screen.getByTestId('attestation-verify-nonce'), { target: { value: 'bm9uY2U=' } });
+    expect((screen.getByTestId('attestation-verify-channel-binding') as HTMLInputElement).value).toBe('');
+    fireEvent.click(button);
+    await screen.findByTestId('attestation-quote-verdict');
+
+    const verifies = posts(sent, '/api/v1/attestation/quote/verify');
+    expect(verifies).toHaveLength(1);
+    const body = verifies[0].body as { quote: typeof QUOTE; channelBinding?: string };
+    expect(body.quote).toEqual(QUOTE);
+    expect(body.channelBinding).toBe('Y2I=');
+  });
+
+  // Get quote fills the binding field for the quote it fetched; a pasted
+  // envelope for another quote is checked against its own binding.
+  async function fetchThenPaste(envelope: unknown) {
+    const sent = stubControlPlane(routes());
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const get = await ready('Get quote');
+    await waitFor(() => expect(get.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-quote-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(get);
+    await screen.findByTestId('attestation-quote-result');
+    await waitFor(() =>
+      expect((screen.getByTestId('attestation-verify-channel-binding') as HTMLInputElement).value).toBe('Y2I='),
+    );
+
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), { target: { value: JSON.stringify(envelope) } });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.change(screen.getByTestId('attestation-verify-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(await ready('Verify quote'));
+    await screen.findByTestId('attestation-quote-verdict');
+
+    const verifies = posts(sent, '/api/v1/attestation/quote/verify');
+    expect(verifies).toHaveLength(1);
+    return verifies[0].body as { quote: typeof QUOTE; channelBinding?: string };
+  }
+
+  it('uses the imported envelope binding, not the one Get quote filled in', async () => {
+    // Codex #2370 round 11: the autofilled binding belongs to the fetched
+    // quote, not the imported one.
+    const body = await fetchThenPaste({ quote: { ...QUOTE, nonce: 'b3RoZXI=' }, channelBinding: 'bmV3' });
+    expect(body.channelBinding).toBe('bmV3');
+    expect(body.quote.nonce).toBe('b3RoZXI=');
+  });
+
+  it('sends no binding for an imported unbound envelope after Get quote filled one in', async () => {
+    // protojson omits an empty binding: an envelope with no channelBinding is unbound.
+    const body = await fetchThenPaste({ quote: QUOTE });
+    expect('channelBinding' in body).toBe(false);
+  });
+
+  it('clears the previous verdict when an input changes or a verify is refused', async () => {
+    const table = routes();
+    stubControlPlane(table);
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const button = await ready('Verify quote');
+    await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), { target: { value: JSON.stringify(QUOTE) } });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.change(screen.getByTestId('attestation-verify-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(button);
+    await screen.findByTestId('attestation-quote-verdict');
+
+    // Editing an input makes the shown verdict stale.
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: `${PEM}\n` } });
+    expect(screen.queryByTestId('attestation-quote-verdict')).toBeNull();
+
+    // A verify again yields a verdict, then a refused verify must not leave it.
+    fireEvent.click(button);
+    await screen.findByTestId('attestation-quote-verdict');
+    table[VERIFY_OP] = refused(400, 'bad key');
+    fireEvent.click(button);
+    await screen.findByTestId('toast');
+    expect(screen.queryByTestId('attestation-quote-verdict')).toBeNull();
+
+    // The toast store is global: dismiss this toast so it cannot leak into the next case.
+    const toasts = renderHook(() => useToast()).result.current;
+    act(() => toasts.toasts.forEach((t) => toasts.dismiss(t.id)));
+  });
+
+  it('drops a verify answer whose inputs changed while it was in flight', async () => {
+    const sent = stubControlPlane(routes());
+    const routed = globalThis.fetch;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url.endsWith('/api/v1/attestation/quote/verify')) await gate;
+        return routed(input, init);
+      }),
+    );
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const button = await ready('Verify quote');
+    await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), { target: { value: JSON.stringify(QUOTE) } });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.change(screen.getByTestId('attestation-verify-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(button);
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true));
+
+    // The key changes while the verify waits: its answer is for the old key.
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: `${PEM}\n` } });
+    release();
+    await waitFor(() => expect(posts(sent, '/api/v1/attestation/quote/verify')).toHaveLength(1));
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    await act(async () => {
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    });
+    expect(screen.queryByTestId('attestation-quote-verdict')).toBeNull();
+  });
+
+  it('withholds the controls the server does not offer', async () => {
+    const sent = stubControlPlane(routes({}, true));
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    for (const name of ['Get quote', 'Verify quote']) {
+      const button = await ready(name);
+      await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('false'));
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+      expect(button.getAttribute('title')).toBe('not-configured: attestation');
+      fireEvent.click(button);
+    }
+    expect(sent.filter((r) => r.method === 'POST')).toHaveLength(0);
+  });
+
+  it('shows a refused quote as a destructive toast', async () => {
+    stubControlPlane(routes({ [QUOTE_OP]: refused(503, 'tpm unavailable') }));
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const button = await ready('Get quote');
+    await waitFor(() => expect(button.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-quote-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(button);
+
+    const toast = await screen.findByTestId('toast');
+    expect(toast.getAttribute('data-variant')).toBe('destructive');
+    expect(toast.textContent).toContain('tpm unavailable');
+    expect(screen.queryByTestId('attestation-quote-result')).toBeNull();
+  });
+});
