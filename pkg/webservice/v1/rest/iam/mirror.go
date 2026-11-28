@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
@@ -55,10 +54,12 @@ func (m *QuicBaaSUserMirror) MirrorUser(ctx context.Context, tenantID, email, di
 
 // MirrorInvitedUser creates the user in the QuicBaaS IAM tenant and returns
 // an undo that removes only what this call wrote, so a pre-existing identity
-// is never deleted: a created user is deleted, otherwise only the roles this
-// call newly assigned are revoked. A create conflict is resolved by tenant
-// and email: a username held by another email is ErrMirrorUsernameTaken, and
-// the same identity is given the requested roles it does not hold yet. The
+// is never deleted: a created user is deleted, otherwise the undo is a noop.
+// A create conflict is resolved by tenant and email: a username held by
+// another email is ErrMirrorUsernameTaken, and the same identity is accepted
+// only when it already holds every requested role. A role it lacks is
+// ErrMirrorRoleNotHeld before any IAM write, because the pinned embedded IAM
+// backend dispatches no User/AssignRole. The
 // IAM username is MirrorUsername(email), never the display name, which is
 // sent as DisplayName only.
 func (m *QuicBaaSUserMirror) MirrorInvitedUser(
@@ -116,32 +117,15 @@ func (m *QuicBaaSUserMirror) MirrorInvitedUser(
 	if err != nil {
 		return nil, err
 	}
-	var assigned []string
-	revoke := func(ctx context.Context) error {
-		var errs []error
-		for _, role := range assigned {
-			if rErr := m.client.RevokeRole(ctx, tenantID, existing.ID, role); rErr != nil {
-				errs = append(errs, rErr)
-			}
-		}
-		return errors.Join(errs...)
-	}
+	// The pinned embedded IAM backend dispatches no User/AssignRole, so an
+	// existing identity is accepted only when it already holds every
+	// requested role; otherwise refuse before any IAM write.
 	for _, role := range roles {
-		if _, ok := held[role]; ok {
-			continue
+		if _, ok := held[role]; !ok {
+			return nil, ErrMirrorRoleNotHeld{TenantID: tenantID, Email: email, Role: role}
 		}
-		if aErr := m.client.AssignRole(ctx, tenantID, existing.ID, role); aErr != nil {
-			if isAlreadyExists(aErr) {
-				continue
-			}
-			rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mirrorRollbackTimeout)
-			_ = revoke(rbCtx)
-			cancel()
-			return nil, aErr
-		}
-		assigned = append(assigned, role)
 	}
-	return revoke, nil
+	return noop, nil
 }
 
 // heldRoleRefs returns the IDs and names of the roles whose ID is in
@@ -177,11 +161,6 @@ func (m *QuicBaaSUserMirror) heldRoleRefs(ctx context.Context, tenantID string, 
 // mirroredEmailsPageSize is the IAM ListUsers page size MirroredEmails reads
 // with.
 const mirroredEmailsPageSize = 100
-
-// mirrorRollbackTimeout bounds the revoke of a partial role assignment, which
-// runs detached from the request's cancellation so a canceled request still
-// removes the roles it granted (#2362).
-const mirrorRollbackTimeout = 30 * time.Second
 
 // MirroredEmails returns the lower-cased email of every user the IAM tenant
 // holds. The startup reconcile compares it with the platform user store to

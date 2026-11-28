@@ -556,7 +556,10 @@ func (s *InvitationService) CleanupExpired(ctx context.Context) (int, error) {
 	return expiredCount, nil
 }
 
-// Delete removes an invitation by ID.
+// Delete removes an invitation by ID. Pending, revoked and expired
+// invitations delete; an accepted invitation is refused with
+// ErrInvalidInvitation, because it is the record that proves its user's
+// redemption finished and deleting it would block that user's logins.
 func (s *InvitationService) Delete(ctx context.Context, id uint64) error {
 	if id == 0 {
 		return ErrInvalidInvitation{Reason: "invitation ID is required"}
@@ -568,6 +571,10 @@ func (s *InvitationService) Delete(ctx context.Context, id uint64) error {
 	if err != nil {
 		s.logger.Debug("invitation not found for deletion", "invitation_id", id)
 		return ErrInvitationNotFound{ID: id}
+	}
+
+	if invitation.Status == entities.InvitationStatusAccepted {
+		return ErrInvalidInvitation{Reason: "an accepted invitation is the record of a finished redemption and cannot be deleted"}
 	}
 
 	if err := s.invitationDAO.Delete(ctx, invitation); err != nil {
