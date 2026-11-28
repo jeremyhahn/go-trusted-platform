@@ -1137,13 +1137,6 @@ func TestCreateUser_CancelledContextStopsWrites(t *testing.T) {
 
 // wantEnableFrame asserts c is the 2-byte Set User Password enable-user
 // frame for slot.
-func wantEnableFrame(t *testing.T, c mockCall, slot uint8) {
-	t.Helper()
-	if c.cmd != cmdSetUserPassword || len(c.data) != 2 || c.data[0] != slot || c.data[1] != pwdOpEnable {
-		t.Errorf("last call = cmd 0x%02x % x, want SetUserPassword enable for slot %d", c.cmd, c.data, slot)
-	}
-}
-
 func TestSetUserPassword(t *testing.T) {
 	m := newMock()
 	um := newUM(m)
@@ -1153,11 +1146,13 @@ func TestSetUserPassword(t *testing.T) {
 	if err := um.SetUserPassword(context.Background(), 5, pwd); err != nil {
 		t.Fatalf("SetUserPassword: %v", err)
 	}
-	if len(m.calls) != 2 {
-		t.Fatalf("calls = %d, want the set then the enable", len(m.calls))
+	if len(m.calls) != 1 {
+		t.Fatalf("calls = %d, want the password set only (no enable)", len(m.calls))
 	}
-	wantEnableFrame(t, m.lastCall(t), 5)
 	c := m.calls[0]
+	if len(c.data) == 2 && c.data[1] == pwdOpEnable {
+		t.Fatal("SetUserPassword sent an enable frame")
+	}
 	if c.cmd != cmdSetUserPassword {
 		t.Errorf("cmd = 0x%02x, want SetUserPassword", c.cmd)
 	}
@@ -1188,11 +1183,13 @@ func TestSetUserPassword_LongPasswordSets20ByteFlag(t *testing.T) {
 	if err := um.SetUserPassword(context.Background(), 5, pwd); err != nil {
 		t.Fatalf("SetUserPassword: %v", err)
 	}
-	if len(m.calls) != 2 {
-		t.Fatalf("calls = %d, want the set then the enable", len(m.calls))
+	if len(m.calls) != 1 {
+		t.Fatalf("calls = %d, want the password set only (no enable)", len(m.calls))
 	}
-	wantEnableFrame(t, m.lastCall(t), 5)
 	c := m.calls[0]
+	if len(c.data) == 2 && c.data[1] == pwdOpEnable {
+		t.Fatal("SetUserPassword sent an enable frame")
+	}
 	if c.data[1] != pwdOpSet {
 		t.Errorf("op = 0x%02x, want pwdOpSet", c.data[1])
 	}
@@ -1257,11 +1254,10 @@ func TestSetUserPassword_TransportError(t *testing.T) {
 	}
 }
 
-// TestSetUserPassword_ActivatesDisabledReusedSlot covers the activation
-// path of a slot created disabled: a reused slot whose global enable flag a
-// disabled create cleared is enabled again once its password is set, so a
-// later role grant leaves an account that can authenticate.
-func TestSetUserPassword_ActivatesDisabledReusedSlot(t *testing.T) {
+// TestSetUserPassword_KeepsDisabledAccountDisabled: a globally disabled
+// account that keeps channel access stays disabled through a password reset
+// (Codex #2199 round 23).
+func TestSetUserPassword_KeepsDisabledAccountDisabled(t *testing.T) {
 	s := newStatefulUserSender()
 	um := newUM(s)
 	ctx := context.Background()
@@ -1280,19 +1276,25 @@ func TestSetUserPassword_ActivatesDisabledReusedSlot(t *testing.T) {
 	}, nil); err != nil {
 		t.Fatalf("CreateUser disabled: %v", err)
 	}
-	if s.enabled[4] {
-		t.Fatal("a disabled create left the reused slot globally enabled")
+	if err := um.SetUserPrivilege(ctx, 4, 0, PrivilegeUser); err != nil {
+		t.Fatalf("SetUserPrivilege: %v", err)
 	}
+	if s.enabled[4] {
+		t.Fatal("setup: the account is globally enabled before the reset")
+	}
+	before := len(s.calls)
 	next := memguard.NewMemoryEnclave([]byte("s3cret"))
 	defer next.Destroy()
 	if err := um.SetUserPassword(ctx, 4, next); err != nil {
 		t.Fatalf("SetUserPassword: %v", err)
 	}
-	if err := um.SetUserPrivilege(ctx, 4, 0, PrivilegeUser); err != nil {
-		t.Fatalf("SetUserPrivilege: %v", err)
+	if s.enabled[4] {
+		t.Error("a password reset re-enabled a globally disabled account")
 	}
-	if !s.enabled[4] {
-		t.Error("password and role set, but the slot's global enable flag is still clear")
+	for _, c := range s.calls[before:] {
+		if c.cmd == cmdSetUserPassword && len(c.data) >= 2 && c.data[1]&0x03 == pwdOpEnable {
+			t.Errorf("password reset sent an enable frame % x", c.data)
+		}
 	}
 }
 
@@ -1310,6 +1312,26 @@ func TestSetUserPassword_FailedSetSendsNoEnable(t *testing.T) {
 	for _, c := range m.calls {
 		if c.cmd == cmdSetUserPassword && len(c.data) >= 2 && c.data[1]&0x03 == pwdOpEnable {
 			t.Errorf("a failed password set was followed by an enable: % x", c.data)
+		}
+	}
+}
+
+// TestSetUserPassword_RefusesNULPasswordWritesNothing: IPMI zero-pads the
+// password field, so a NUL byte would store a truncated or blank secret; the
+// reset refuses it before any write (Codex #2199 round 23).
+func TestSetUserPassword_RefusesNULPasswordWritesNothing(t *testing.T) {
+	for _, p := range []string{"\x00", "\x00\x00\x00\x00", "ab\x00cd", "abcd\x00"} {
+		m := newMock()
+		um := newUM(m)
+		pwd := memguard.NewMemoryEnclave([]byte(p))
+		err := um.SetUserPassword(context.Background(), 5, pwd)
+		pwd.Destroy()
+		var cfg ErrInvalidConfig
+		if !errors.As(err, &cfg) || cfg.Field != "password" {
+			t.Errorf("password %q: err = %v, want ErrInvalidConfig on password", p, err)
+		}
+		if len(m.calls) != 0 {
+			t.Errorf("password %q: calls = %d, want no writes", p, len(m.calls))
 		}
 	}
 }
