@@ -4,6 +4,7 @@
 package tenant
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -28,6 +29,7 @@ type fakeQRDBTenants struct {
 	statuses    []string
 	sealed      map[string]bool
 	initialized map[string]bool
+	passphrase  map[string][]byte
 	initErr     error
 
 	// prefix tenants answer "prefix" from GetTenant; untyped tenants answer
@@ -42,6 +44,7 @@ func newFakeQRDBTenants() *fakeQRDBTenants {
 	return &fakeQRDBTenants{
 		sealed:      map[string]bool{},
 		initialized: map[string]bool{},
+		passphrase:  map[string][]byte{},
 		prefix:      map[string]bool{},
 		untyped:     map[string]bool{},
 	}
@@ -61,6 +64,7 @@ func (f *fakeQRDBTenants) TenantBarrierInit(ctx context.Context, req *quicbaassd
 	}
 	f.initialized[req.TenantID] = true
 	f.sealed[req.TenantID] = true
+	f.passphrase[req.TenantID] = append([]byte(nil), req.Passphrase...)
 	return &quicbaassdk.QRDBTenantBarrierInitResponse{}, nil
 }
 
@@ -68,6 +72,12 @@ func (f *fakeQRDBTenants) TenantBarrierUnseal(ctx context.Context, req *quicbaas
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.unseals = append(f.unseals, req)
+	// Mirrors go-qrdb v0.19.0-alpha: an unseal of a tenant that was never
+	// initialized, or with a key that is not the init passphrase, is refused
+	// with a BarrierError (op unseal) and the tenant stays sealed.
+	if !f.initialized[req.TenantID] || !bytes.Equal(req.Key, f.passphrase[req.TenantID]) {
+		return errors.New("qrdb: tenant barrier unseal: key does not open the barrier")
+	}
 	f.sealed[req.TenantID] = false
 	return nil
 }
@@ -144,7 +154,7 @@ func TestSDKTenantBarrierClient_ForwardsEachVerb(t *testing.T) {
 	if err := bc.TenantBarrierInit(ctx, &quicbaassdk.QRDBTenantBarrierInitRequest{TenantID: id, Passphrase: []byte("operator-pass")}); err != nil {
 		t.Fatalf("TenantBarrierInit: %v", err)
 	}
-	if err := bc.TenantBarrierUnseal(ctx, &quicbaassdk.QRDBTenantBarrierUnsealRequest{TenantID: id, Key: []byte("k")}); err != nil {
+	if err := bc.TenantBarrierUnseal(ctx, &quicbaassdk.QRDBTenantBarrierUnsealRequest{TenantID: id, Key: []byte("operator-pass")}); err != nil {
 		t.Fatalf("TenantBarrierUnseal: %v", err)
 	}
 	st, err := bc.TenantBarrierStatus(ctx, &quicbaassdk.QRDBTenantBarrierStatusRequest{TenantID: id})
@@ -161,8 +171,8 @@ func TestSDKTenantBarrierClient_ForwardsEachVerb(t *testing.T) {
 	if len(fake.inits) != 1 || fake.inits[0].TenantID != id || string(fake.inits[0].Passphrase) != "operator-pass" {
 		t.Fatalf("inits = %+v, want one for %q with the operator passphrase", fake.inits, id)
 	}
-	if len(fake.unseals) != 1 || fake.unseals[0].TenantID != id || string(fake.unseals[0].Key) != "k" {
-		t.Fatalf("unseals = %+v, want one for %q with key k", fake.unseals, id)
+	if len(fake.unseals) != 1 || fake.unseals[0].TenantID != id || string(fake.unseals[0].Key) != "operator-pass" {
+		t.Fatalf("unseals = %+v, want one for %q with the operator passphrase key", fake.unseals, id)
 	}
 	if len(fake.seals) != 1 || fake.seals[0] != id {
 		t.Fatalf("seals = %v, want [%s]", fake.seals, id)
@@ -220,11 +230,11 @@ func TestManager_BarrierLifecycleThroughSDKAdapter(t *testing.T) {
 		t.Fatalf("status after init = %+v, want initialized and sealed", st)
 	}
 
-	if err := m.UnsealTenantBarrier(ctx, id, []byte("k")); err != nil {
+	if err := m.UnsealTenantBarrier(ctx, id, []byte("operator-pass")); err != nil {
 		t.Fatalf("UnsealTenantBarrier: %v", err)
 	}
-	if n := len(fake.unseals); n != 1 || string(fake.unseals[0].Key) != "k" || fake.unseals[0].TenantID != id {
-		t.Fatalf("unseals = %+v, want one for %q with key k", fake.unseals, id)
+	if n := len(fake.unseals); n != 1 || string(fake.unseals[0].Key) != "operator-pass" || fake.unseals[0].TenantID != id {
+		t.Fatalf("unseals = %+v, want one for %q with the operator passphrase key", fake.unseals, id)
 	}
 	st, err = m.TenantBarrierStatus(ctx, id)
 	if err != nil {

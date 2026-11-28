@@ -6,9 +6,12 @@
  * tenant kinds: a tenant with no barrier (the registration fixture's default
  * prefix tenant), where the card shows "Not applicable" and disables its key
  * input and Unseal, and a barrier, volume or raft tenant, where it shows the
- * sealed and initialized state. The spec does not seal the fixture tenant,
- * because the server refuses an empty unseal key and the harness holds no
- * tenant barrier key to unseal it again.
+ * sealed and initialized state. It also drives the three mutations,
+ * Initialize, Unseal and Seal, through the platform REST API against the
+ * real backend, which refuses them for the prefix fixture tenant and leaves
+ * its barrier status unchanged. The success lifecycle on a barrier tenant
+ * (init, wrong-key refusal, seal, unseal) waits on a way to make one in the
+ * harness (go-quicbaas#358); pkg/tenant unit tests cover it until then.
  */
 import type { Page, Response } from '@playwright/test';
 import { expect, test } from './fixtures';
@@ -189,5 +192,47 @@ test.describe('Tenant barrier (real server)', () => {
 
     const after = await readStatus(adminPage, tenant.id);
     expect(after.sealed).toBe(before.sealed);
+  });
+
+  test('refuses Initialize, Unseal and Seal on the fixture tenant and leaves its barrier unchanged', async ({
+    adminPage,
+    sdk,
+    tenant,
+  }) => {
+    const caps = (await listCapabilities(sdk)) as Capability[];
+    const statusOn = capabilityOf(caps, STATUS_OP).enabled;
+
+    let before: BarrierStatus | undefined;
+    if (statusOn) {
+      before = await readStatus(adminPage, tenant.id);
+      expect(
+        hasNoBarrier(before),
+        `the harness tenant now has a barrier (isolation ${before.isolation}): ` +
+          'write the barrier lifecycle test (init, wrong-key unseal refused, seal, unseal) in place of this one',
+      ).toBe(true);
+    }
+
+    // The platform REST API against the real backend, no page.route: the
+    // server refuses every barrier verb for a prefix tenant.
+    const verbs: Array<[string, string, Record<string, unknown>]> = [
+      [INIT_OP, '/init', { passphrase: 'e2e-barrier-pass' }],
+      // base64 of e2e-barrier-pass: the proto key field is bytes.
+      [UNSEAL_OP, '/unseal', { key: 'ZTJlLWJhcnJpZXItcGFzcw==' }],
+      [SEAL_OP, '/seal', {}],
+    ];
+    for (const [op, suffix, data] of verbs) {
+      const res = await adminPage.request.post(barrierPath(tenant.id, suffix), { data });
+      expect(res.ok(), `${op} on the fixture tenant answered ${res.status()}, want a refusal`).toBe(false);
+      expect(res.status()).toBeGreaterThanOrEqual(400);
+      if (capabilityOf(caps, op).enabled) {
+        expect(await res.text(), `${op} refusal should name the tenant's isolation`).toContain('isolation');
+      }
+    }
+
+    if (statusOn && before) {
+      const after = await readStatus(adminPage, tenant.id);
+      expect(after.sealed).toBe(before.sealed);
+      expect(after.initialized).toBe(before.initialized);
+    }
   });
 });
