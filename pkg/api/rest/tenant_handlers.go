@@ -317,12 +317,15 @@ type TenantBarrierActionResponse struct {
 // TenantBarrierStatusResponse represents the current sealed/initialized state
 // and active strategy metadata of a per-tenant barrier.
 type TenantBarrierStatusResponse struct {
-	TenantID       string    `json:"tenant_id"`
-	Sealed         bool      `json:"sealed"`
-	Initialized    bool      `json:"initialized"`
-	Strategy       string    `json:"strategy"`
-	HardwareBacked bool      `json:"hardware_backed"`
-	Timestamp      time.Time `json:"timestamp"`
+	TenantID       string `json:"tenant_id"`
+	Sealed         bool   `json:"sealed"`
+	Initialized    bool   `json:"initialized"`
+	Strategy       string `json:"strategy"`
+	HardwareBacked bool   `json:"hardware_backed"`
+	// Isolation is the tenant's isolation type; only barrier, volume and
+	// raft tenants have a per-tenant barrier.
+	Isolation string    `json:"isolation,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // =============================================================================
@@ -1191,14 +1194,18 @@ func (h *TenantHandlers) handleInitTenantBarrier(w http.ResponseWriter, r *http.
 
 	// The body carries the operator's barrier passphrase, which is required,
 	// passed straight to the barrier and never stored or defaulted.
-	// Threshold/shares are accepted for forward compatibility with the SDK's
-	// TenantBarrierInitRequest.
+	// Threshold/shares are refused as the gRPC TenantBarrierInit refuses
+	// them (docs/tenant/api.md): the per-tenant barrier returns no shares.
 	var req InitTenantBarrierRequest
 	if r.Body != nil && r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
 			return
 		}
+	}
+	if req.Threshold != 0 || req.Shares != 0 {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: fmt.Sprintf("tenant barrier init with Shamir threshold %d of %d shares is not supported: the per-tenant barrier initializes with its deterministic credential and returns no shares; send threshold and shares 0", req.Threshold, req.Shares)})
+		return
 	}
 	if req.Passphrase == "" {
 		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "passphrase is required"})
@@ -1330,6 +1337,7 @@ func (h *TenantHandlers) handleTenantBarrierStatus(w http.ResponseWriter, r *htt
 		Initialized:    st.Initialized,
 		Strategy:       st.Strategy,
 		HardwareBacked: st.HardwareBacked,
+		Isolation:      st.Isolation,
 		Timestamp:      time.Now().UTC(),
 	}
 

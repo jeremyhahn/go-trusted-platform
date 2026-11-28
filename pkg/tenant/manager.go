@@ -76,6 +76,12 @@ type TenantBarrierState struct {
 	// HardwareBacked is true when the active strategy uses dedicated
 	// cryptographic hardware (HSM, TPM, etc.).
 	HardwareBacked bool
+
+	// Isolation is the tenant's isolation type ("prefix", "barrier",
+	// "volume", "raft"). Only barrier, volume and raft tenants have a
+	// per-tenant barrier; for any other the barrier fields are not
+	// applicable and stay zero.
+	Isolation string
 }
 
 // DEKStatus represents the status of a tenant's DEK.
@@ -1119,17 +1125,34 @@ func (m *Manager) SealTenantBarrier(ctx context.Context, tenantID string) error 
 	return nil
 }
 
-// TenantBarrierStatus returns the current sealed/initialized state and active
-// strategy metadata of a per-tenant barrier. When the barrier has never been
-// registered the response carries Sealed=true, Initialized=false, and an
-// empty Strategy — callers can use the Initialized flag to decide whether to
-// call InitTenantBarrier first.
+// TenantBarrierStatus returns the current sealed/initialized state, active
+// strategy metadata and isolation type of a per-tenant barrier. When the
+// barrier has never been registered the response carries Sealed=true,
+// Initialized=false, and an empty Strategy — callers can use the Initialized
+// flag to decide whether to call InitTenantBarrier first.
+//
+// A tenant whose isolation type has no per-tenant barrier (prefix isolation
+// reports "prefix") gets a state carrying only TenantID and Isolation, and
+// the barrier backend is not asked. A failed isolation lookup fails closed.
 func (m *Manager) TenantBarrierStatus(ctx context.Context, tenantID string) (*TenantBarrierState, error) {
 	if tenantID == "" {
 		return nil, ErrInvalidRequest{Reason: "tenant ID is required"}
 	}
 	if m.tenantBarrierClient == nil {
 		return nil, ErrBarrierNotSupported{Operation: "TenantBarrierStatus"}
+	}
+
+	iso, err := m.tenantBarrierClient.TenantIsolationType(ctx, tenantID)
+	if err != nil {
+		return nil, ErrStorageFailed{Operation: "TenantIsolationType", Err: err}
+	}
+	switch iso {
+	case string(quicbaassdk.TenantIsolationBarrier), string(quicbaassdk.TenantIsolationVolume), string(quicbaassdk.TenantIsolationRaft):
+	default:
+		if iso == "" {
+			iso = "prefix"
+		}
+		return &TenantBarrierState{TenantID: tenantID, Isolation: iso}, nil
 	}
 
 	req := &quicbaassdk.QRDBTenantBarrierStatusRequest{TenantID: tenantID}
@@ -1147,6 +1170,7 @@ func (m *Manager) TenantBarrierStatus(ctx context.Context, tenantID string) (*Te
 		Initialized:    resp.Initialized,
 		Strategy:       resp.Strategy,
 		HardwareBacked: resp.HardwareBacked,
+		Isolation:      iso,
 	}, nil
 }
 

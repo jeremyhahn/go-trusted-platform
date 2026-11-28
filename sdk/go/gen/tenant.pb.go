@@ -2724,8 +2724,12 @@ type TenantBarrierStatus struct {
 	Initialized    bool                   `protobuf:"varint,3,opt,name=initialized,proto3" json:"initialized,omitempty"`
 	Strategy       string                 `protobuf:"bytes,4,opt,name=strategy,proto3" json:"strategy,omitempty"`
 	HardwareBacked bool                   `protobuf:"varint,5,opt,name=hardware_backed,json=hardwareBacked,proto3" json:"hardware_backed,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The tenant's isolation type ("prefix", "barrier", "volume", "raft").
+	// Only barrier, volume and raft tenants have a per-tenant barrier; for any
+	// other the barrier fields above are not applicable.
+	Isolation     string `protobuf:"bytes,6,opt,name=isolation,proto3" json:"isolation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TenantBarrierStatus) Reset() {
@@ -2791,6 +2795,13 @@ func (x *TenantBarrierStatus) GetHardwareBacked() bool {
 		return x.HardwareBacked
 	}
 	return false
+}
+
+func (x *TenantBarrierStatus) GetIsolation() string {
+	if x != nil {
+		return x.Isolation
+	}
+	return ""
 }
 
 type GetTenantBarrierStatusResponse struct {
@@ -3059,13 +3070,14 @@ const file_tenant_proto_rawDesc = "" +
 	"\x19SealTenantBarrierResponse\x12+\n" +
 	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\"<\n" +
 	"\x1dGetTenantBarrierStatusRequest\x12\x1b\n" +
-	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"\xb1\x01\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"\xcf\x01\n" +
 	"\x13TenantBarrierStatus\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x16\n" +
 	"\x06sealed\x18\x02 \x01(\bR\x06sealed\x12 \n" +
 	"\vinitialized\x18\x03 \x01(\bR\vinitialized\x12\x1a\n" +
 	"\bstrategy\x18\x04 \x01(\tR\bstrategy\x12'\n" +
-	"\x0fhardware_backed\x18\x05 \x01(\bR\x0ehardwareBacked\"i\n" +
+	"\x0fhardware_backed\x18\x05 \x01(\bR\x0ehardwareBacked\x12\x1c\n" +
+	"\tisolation\x18\x06 \x01(\tR\tisolation\"i\n" +
 	"\x1eGetTenantBarrierStatusResponse\x12G\n" +
 	"\x0ebarrier_status\x18\x01 \x01(\v2 .platform.v1.TenantBarrierStatusR\rbarrierStatus*\xaf\x01\n" +
 	"\vTenantState\x12\x1c\n" +

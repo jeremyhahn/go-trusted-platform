@@ -825,8 +825,10 @@ func (s *TenantGRPCServer) SealTenantBarrier(
 }
 
 // GetTenantBarrierStatus reports the current sealed/initialized state and
-// active strategy metadata of a per-tenant barrier. Uninitialized barriers
-// return Sealed=true, Initialized=false rather than erroring.
+// active strategy metadata of a per-tenant barrier, with the tenant's
+// isolation type. Uninitialized barriers return Sealed=true,
+// Initialized=false rather than erroring; a tenant with no per-tenant
+// barrier (prefix isolation) returns only its isolation type.
 func (s *TenantGRPCServer) GetTenantBarrierStatus(
 	ctx context.Context,
 	req *platformv1.GetTenantBarrierStatusRequest,
@@ -854,6 +856,7 @@ func (s *TenantGRPCServer) GetTenantBarrierStatus(
 			Initialized:    st.Initialized,
 			Strategy:       st.Strategy,
 			HardwareBacked: st.HardwareBacked,
+			Isolation:      st.Isolation,
 		},
 	}, nil
 }

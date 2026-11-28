@@ -368,6 +368,10 @@ message TenantBarrierStatus {
   bool initialized = 3;
   string strategy = 4;
   bool hardware_backed = 5;
+  // The tenant's isolation type ("prefix", "barrier", "volume", "raft").
+  // Only barrier, volume and raft tenants have a per-tenant barrier; for any
+  // other the barrier fields above are not applicable.
+  string isolation = 6;
 }
 
 message GetTenantBarrierStatusResponse {
