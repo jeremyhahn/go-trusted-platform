@@ -86,11 +86,6 @@ type TestConfig struct {
 	ServerISO string
 	ClientISO string
 
-	// Serial-log markers Phases 2 and 3 wait for (required with the ISOs):
-	// the server's boot-complete line and the client's enrollment-complete line.
-	ServerBootMarker   string
-	ClientEnrollMarker string
-
 	// Resource allocation
 	DiskSize string
 	MemoryMB int

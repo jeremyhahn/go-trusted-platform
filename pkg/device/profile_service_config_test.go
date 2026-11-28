@@ -15,7 +15,6 @@ package device
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
@@ -163,29 +162,6 @@ func TestProfileService_FindConfigForDevice_NotFound(t *testing.T) {
 	assert.ErrorAs(t, err, &noMatchErr)
 	assert.Equal(t, "NO-MATCH-EK", noMatchErr.EKSerial)
 	assert.Equal(t, "no:ma:tc:hh:er:ee", noMatchErr.MAC)
-}
-
-// errProfileStorageDown is the typed storage failure the mock injects.
-type errProfileStorageDown struct{}
-
-func (errProfileStorageDown) Error() string { return "profile storage unavailable" }
-
-// errInjectedProfileStorage is the injected List failure.
-var errInjectedProfileStorage error = errProfileStorageDown{}
-
-func TestProfileService_FindConfigForDevice_AStorageFailureIsNotANoMatch(t *testing.T) {
-	ds, mock := testProfileServiceDatastoreWithMock(t)
-	ctx := context.Background()
-
-	service, err := NewProfileService(ds)
-	require.NoError(t, err)
-	mock.ListError = errInjectedProfileStorage
-
-	_, err = service.FindConfigForDevice(ctx, "EK-1", "aa:bb:cc:dd:ee:ff")
-	require.Error(t, err)
-
-	assert.False(t, errors.As(err, &ErrNoMatchingConfig{}), "a storage failure is not a no-match")
-	assert.True(t, errors.Is(err, errInjectedProfileStorage))
 }
 
 func TestProfileService_FindConfigForDevice_EmptyIdentifiers(t *testing.T) {

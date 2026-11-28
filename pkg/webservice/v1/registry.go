@@ -14,22 +14,16 @@
 package v1
 
 import (
-	"bytes"
 	"context"
 	"crypto"
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
-
-	"google.golang.org/genproto/googleapis/rpc/errdetails"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
@@ -39,7 +33,6 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
@@ -288,210 +281,6 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 			slog.Bool("created", result.Created))
 		return nil
 	}
-}
-
-// PXEIdentityRecorder records the IDevID issued at enrolment on the PXE
-// record of the enrolling device. pkg/api/daemon.PXEGRPCService implements
-// it. The device is found by the MAC bound to its verified EK in its profile,
-// never by the client IP (#1694). It answers codes.NotFound when the MAC
-// resolves to no PXE device and codes.FailedPrecondition when the device is
-// past Installing.
-type PXEIdentityRecorder interface {
-	RecordEnrolledIDevIDFingerprintForMAC(ctx context.Context, mac string, leaf *x509.Certificate) error
-	// Configured reports whether a PXE backend is present. With none, the
-	// hook imposes no PXE profile requirement on an enrolment.
-	Configured() bool
-	// PXEInstallInProgressForMAC reports whether the MAC names a PXE device
-	// whose install is still in progress (Discovered, Booting or
-	// Installing). Only such an enrolment must present the EK bound to its
-	// profile; any other enrolment is outside the PXE workflow.
-	PXEInstallInProgressForMAC(ctx context.Context, mac string) (bool, error)
-}
-
-// NewPXEIdentityHook returns NewPXEIdentityHookWithProfiles with no profile
-// resolver: with no source of an EK-bound MAC it records nothing.
-func NewPXEIdentityHook(recorder PXEIdentityRecorder, logger *slog.Logger) trustedca.ACMEOrderFinalizeHook {
-	return NewPXEIdentityHookWithProfiles(recorder, nil, logger)
-}
-
-// NewPXEIdentityHookWithProfiles returns an ACME finalize hook that records
-// the issued IDevID's fingerprint on the PXE record of the enrolling device,
-// which the install-complete webhook requires over mTLS (#1694). The device is
-// resolved through its verified enrolment identity only: the MAC of the
-// device profile bound to the CA-verified EK certificate's serial, which works
-// across a router and over IPv6. The client IP proves no MAC, so it is never
-// used. With no resolver, no EK, no profile bound to the EK
-// (devicepkg.ErrNoMatchingConfig) or a profile with no MAC, nothing is
-// recorded and the enrolment proceeds; any other profile lookup error fails
-// the enrolment. Non-TCG enrolments and a missing
-// certificate are skipped. An enrolment that is not a PXE install in progress
-// (no MAC, no PXE device, or a device past Installing) is logged and does not
-// fail the enrolment. A node with no PXE backend answers with the typed
-// SERVICE_NOT_CONFIGURED discriminator (an ErrorInfo detail, see
-// isServiceNotConfigured); that is not an error either, so a TCG enrolment on
-// such a node succeeds. Any other error fails the enrolment, a bare
-// Unavailable included.
-func NewPXEIdentityHookWithProfiles(recorder PXEIdentityRecorder, profiles devicepkg.ConfigForDeviceFinder, logger *slog.Logger) trustedca.ACMEOrderFinalizeHook {
-	return func(ctx *trustedca.ACMEOrderFinalizeHookContext) error {
-		if !ctx.IsTCGCSR || ctx.Certificate == nil {
-			return nil
-		}
-		// PXE disabled: no PXE record to bind, so no PXE-specific profile
-		// requirement may abort an ordinary TCG enrolment.
-		if recorder == nil || !recorder.Configured() {
-			return nil
-		}
-		reqCtx := ctx.Context
-		if reqCtx == nil {
-			reqCtx = context.Background()
-		}
-		mac, err := boundProfileMAC(reqCtx, profiles, ctx.TCGData)
-		var notBound ErrPXEIdentityEKNotBound
-		if errors.As(err, &notBound) {
-			// A serial-only or otherwise unbound profile is refused only
-			// when its MAC names a PXE install in progress: an ordinary
-			// enrolment or renewal is outside the PXE workflow, and its
-			// IDevID is never recorded on a PXE record.
-			active, activeErr := recorder.PXEInstallInProgressForMAC(reqCtx, mac)
-			if isServiceNotConfigured(activeErr) {
-				return nil
-			}
-			if activeErr != nil {
-				return fmt.Errorf("check for a PXE install in progress: %w", activeErr)
-			}
-			if active {
-				return err
-			}
-			logger.Debug("PXE identity: profile EK not bound and no PXE install in progress - IDevID not recorded",
-				slog.String("client_ip", ctx.ClientIP),
-				slog.String("reason", notBound.Reason))
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if mac == "" {
-			logger.Debug("PXE identity: no MAC bound to the verified EK - IDevID not recorded",
-				slog.String("client_ip", ctx.ClientIP))
-			return nil
-		}
-		err = recorder.RecordEnrolledIDevIDFingerprintForMAC(reqCtx, mac, ctx.Certificate)
-		if isServiceNotConfigured(err) {
-			logger.Debug("PXE identity: PXE is not configured on this node - IDevID not recorded",
-				slog.String("client_ip", ctx.ClientIP))
-			return nil
-		}
-		switch status.Code(err) {
-		case codes.OK:
-			logger.Info("PXE identity: enrolled IDevID recorded on the PXE record",
-				slog.String("client_ip", ctx.ClientIP))
-			return nil
-		case codes.NotFound, codes.FailedPrecondition:
-			logger.Warn("PXE identity: enrolment is not a PXE install in progress - IDevID not recorded",
-				slog.String("client_ip", ctx.ClientIP),
-				slog.String("reason", err.Error()))
-			return nil
-		default:
-			return fmt.Errorf("record the enrolled IDevID on the PXE record: %w", err)
-		}
-	}
-}
-
-// boundProfileMAC returns the MAC of the device profile bound to the
-// CA-verified EK certificate's serial (an exact EK-serial match), or "" when
-// there is no resolver, no EK, no bound profile (devicepkg.ErrNoMatchingConfig)
-// or the profile has no MAC. Any other lookup error is returned as
-// ErrPXEIdentityProfileLookup. A profile with a MAC whose EK certificate
-// is missing or is not the submitted EK returns its MAC with
-// ErrPXEIdentityEKNotBound.
-func boundProfileMAC(ctx context.Context, profiles devicepkg.ConfigForDeviceFinder, tcg *trustedca.ACMETCGEnrollmentData) (string, error) {
-	if profiles == nil || tcg == nil || tcg.EKCertificate == nil || tcg.EKCertificate.SerialNumber == nil {
-		return "", nil
-	}
-	ekSerial := tcg.EKCertificate.SerialNumber.String()
-	profile, err := profiles.FindConfigForDevice(ctx, ekSerial, "")
-	if err != nil {
-		var noMatch devicepkg.ErrNoMatchingConfig
-		var noMatchPtr *devicepkg.ErrNoMatchingConfig
-		if errors.As(err, &noMatch) || errors.As(err, &noMatchPtr) {
-			return "", nil
-		}
-		return "", ErrPXEIdentityProfileLookup{EKSerial: ekSerial, Err: err}
-	}
-	// A profile with no MAC names no PXE device: it is outside the PXE
-	// workflow, so no EK binding is required of it.
-	if profile == nil || profile.MACAddress == "" {
-		return "", nil
-	}
-	// The serial alone proves nothing: another machine can present an
-	// EK certificate with the victim's serial. The submitted EK must
-	// carry the public key of the EK certificate the operator bound to
-	// the profile. The refusal carries the profile's MAC, so the caller
-	// enforces it only for a PXE install in progress.
-	mac := profile.MACAddress
-	if profile.EKCert == "" {
-		return mac, ErrPXEIdentityEKNotBound{EKSerial: ekSerial, Reason: "the matched profile has no registered EK certificate"}
-	}
-	bound, err := deviceentities.ParseEKCertPEM(profile.EKCert)
-	if err != nil {
-		return mac, ErrPXEIdentityEKNotBound{EKSerial: ekSerial, Reason: "the profile's EK certificate does not parse: " + err.Error()}
-	}
-	if !bytes.Equal(bound.RawSubjectPublicKeyInfo, tcg.EKCertificate.RawSubjectPublicKeyInfo) {
-		return mac, ErrPXEIdentityEKNotBound{EKSerial: ekSerial, Reason: "the submitted EK public key is not the one bound to the profile"}
-	}
-	return profile.MACAddress, nil
-}
-
-// ErrPXEIdentityEKNotBound refuses an enrolment whose EK certificate
-// matches a device profile by serial but is not the EK bound to it. It
-// carries PermissionDenied (HTTP 403).
-type ErrPXEIdentityEKNotBound struct {
-	EKSerial string
-	Reason   string
-}
-
-func (e ErrPXEIdentityEKNotBound) Error() string {
-	return fmt.Sprintf("PXE identity: EK serial %s: %s", e.EKSerial, e.Reason)
-}
-
-// GRPCStatus makes status.Code report PermissionDenied for the refusal.
-func (e ErrPXEIdentityEKNotBound) GRPCStatus() *status.Status {
-	return status.New(codes.PermissionDenied, e.Error())
-}
-
-// ErrPXEIdentityProfileLookup is returned by the PXE identity hook when the
-// lookup of the profile bound to the verified EK fails for a reason other
-// than devicepkg.ErrNoMatchingConfig; the enrolment fails with it.
-type ErrPXEIdentityProfileLookup struct {
-	EKSerial string
-	Err      error
-}
-
-func (e ErrPXEIdentityProfileLookup) Error() string {
-	return fmt.Sprintf("PXE identity: look up the profile bound to ek_serial=%q: %v", e.EKSerial, e.Err)
-}
-
-func (e ErrPXEIdentityProfileLookup) Unwrap() error { return e.Err }
-
-// isServiceNotConfigured reports whether err is a gRPC status carrying the
-// typed SERVICE_NOT_CONFIGURED discriminator: a google.rpc.ErrorInfo detail
-// whose Reason and Domain are response.ReasonServiceNotConfigured and
-// response.ErrorInfoDomain. The status code and message are not consulted.
-func isServiceNotConfigured(err error) bool {
-	if err == nil {
-		return false
-	}
-	st, ok := status.FromError(err)
-	if !ok {
-		return false
-	}
-	for _, detail := range st.Details() {
-		info, ok := detail.(*errdetails.ErrorInfo)
-		if ok && info.GetReason() == response.ReasonServiceNotConfigured && info.GetDomain() == response.ErrorInfoDomain {
-			return true
-		}
-	}
-	return false
 }
 
 // issuedCommonName returns the issued certificate's Common Name, or "" when
@@ -1022,7 +811,6 @@ type RestHandlerRegistry interface {
 	PlatformRestRouter() *platform.PlatformRouter
 	PXEServiceServer() platformv1.PXEServiceServer
 	PXEWebhookEnabled() bool
-	PXEWebhookSecret() string
 	NTPServiceServer() platformv1.NTPServiceServer
 	VPNServiceServer() platformv1.VPNServiceServer
 	// BMCRestHandler is the daemon's BMC REST handler behind /api/v1/bmc,
@@ -1252,16 +1040,12 @@ type RegistryParams struct {
 	// ProxyServiceServer is the in-process ProxyService behind
 	// /api/v1/proxy (#2061); nil leaves the proxy routes unmounted.
 	ProxyServiceServer platformv1.ProxyServiceServer
-	// PXEWebhookEnabled is pxe.ServiceConfig.WebhookEnabled: it mounts
-	// POST /pxe/webhook/complete. Nothing in the daemon sets it today, so
-	// the route is not served.
+	// PXEWebhookEnabled is pxe.ServiceConfig.WebhookEnabled: it mounts the
+	// unauthenticated POST /pxe/webhook/complete (#238). Nothing in the
+	// daemon sets it today, so the route is not served.
 	PXEWebhookEnabled bool
-	// PXEWebhookSecret is pxe.ServiceConfig.WebhookSecret: the HMAC key the
-	// webhook verifies every report with (#240). Empty, an enabled webhook
-	// refuses every report.
-	PXEWebhookSecret string
-	NTPServiceServer platformv1.NTPServiceServer
-	VPNServiceServer platformv1.VPNServiceServer
+	NTPServiceServer  platformv1.NTPServiceServer
+	VPNServiceServer  platformv1.VPNServiceServer
 	// BMCRestHandler is the daemon's BMC REST handler, the one the daemon
 	// REST listener mounts; the console serves /api/v1/bmc through it.
 	BMCRestHandler bmcwebsvc.RestHandler
@@ -2110,21 +1894,6 @@ func (registry *HandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 		registry.params.Logger.Debug("TLSA generation hook not registered - DNS service or DANE config unavailable")
 	}
 
-	// The PXE identity hook is registered last. Execute stops at the first
-	// error, so a DNS, SDN or TLSA failure leaves no fingerprint and the
-	// retry's new IDevID is recorded: the fingerprint is the last step that
-	// can fail before the CA returns the certificate (#1694).
-	if recorder, ok := registry.params.PXEServiceServer.(PXEIdentityRecorder); ok {
-		var profiles devicepkg.ConfigForDeviceFinder
-		if registry.params.ServiceRegistry != nil {
-			if ps := registry.params.ServiceRegistry.ProfileService(); ps != nil {
-				profiles = ps
-			}
-		}
-		hookRegistry.Register(NewPXEIdentityHookWithProfiles(recorder, profiles, registry.params.Logger.Slog()))
-		registry.params.Logger.Info("Registered PXE identity hook for ACME device enrollment")
-	}
-
 	// Build the pre-sign extension hook registry and register the zone extension
 	// hook when SDN identity zone encoding is configured.
 	preSignRegistry := trustedca.NewACMEOrderPreSignHookRegistry()
@@ -2362,19 +2131,6 @@ func (registry *HandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer 
 // install-completion webhook (pxe.ServiceConfig.WebhookEnabled).
 func (registry *HandlerRegistry) PXEWebhookEnabled() bool {
 	return registry.params.PXEWebhookEnabled
-}
-
-// PXEWebhookSecret is the HMAC key of the PXE install-completion webhook
-// (pxe.ServiceConfig.WebhookSecret).
-func (registry *HandlerRegistry) PXEWebhookSecret() string {
-	return registry.params.PXEWebhookSecret
-}
-
-// SetPXEWebhook sets PXEWebhookEnabled and PXEWebhookSecret from the daemon
-// pxe: section, so the install-completion route follows the configuration
-// (#1694).
-func (p *RegistryParams) SetPXEWebhook(section *pxe.DaemonConfig) {
-	p.PXEWebhookEnabled, p.PXEWebhookSecret = section.Webhook()
 }
 
 // NTPServiceServer returns the in-process NTPService gRPC implementation, or nil.

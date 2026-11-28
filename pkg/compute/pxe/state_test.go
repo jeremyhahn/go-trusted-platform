@@ -502,14 +502,6 @@ func TestStateManager_Transition(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, StateBooting, retrieved.State)
 	assert.Equal(t, "test transition", retrieved.StateReason)
-
-	// The transition is stored on the device with the state swap.
-	require.Len(t, retrieved.Events, 1)
-	event := retrieved.Events[0]
-	assert.Equal(t, StateDiscovered, event.FromState)
-	assert.Equal(t, StateBooting, event.ToState)
-	assert.Equal(t, EventPXEBootStarted, event.EventType)
-	assert.Equal(t, "test transition", event.Details["reason"])
 }
 
 func TestStateManager_Transition_EmptyID(t *testing.T) {

@@ -18,105 +18,16 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 
-	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
-	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
-
-// testSystemTenant is the system tenant the PXE routes are reserved to.
-const testSystemTenant = "system"
-
-// adminSession is an admin of tenant.
-func adminSession(tenant string) iammw.IAMSession {
-	return iammw.NewIAMSession(&iamsdk.User{ID: "u-" + tenant, TenantID: tenant, Roles: []string{"admin"}})
-}
-
-// systemTenantGuard is the real session guard's RequireTenant(system).
-func systemTenantGuard() func(http.Handler) http.Handler {
-	logger := logging.NewLogger(slog.LevelError, io.Discard)
-	guard, err := iammw.NewSessionGuard(logger, response.NewResponseWriter(logger, nil))
-	if err != nil {
-		panic(err)
-	}
-	return guard.RequireTenant(testSystemTenant)
-}
-
-// injectSession publishes session on every request, standing in for the
-// authentication middleware that verifies a token.
-func injectSession(session iammw.IAMSession) mux.MiddlewareFunc {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			next.ServeHTTP(w, r.WithContext(iammw.SetSessionInContext(r.Context(), session)))
-		})
-	}
-}
-
-// allowAllScopes grants every scope, so a test measures the tenant guard.
-type allowAllScopes struct{}
-
-func (allowAllScopes) RequireScope(string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler { return next }
-}
-
-// guardForSystem gives r the system-tenant guard and root a system-tenant
-// admin session, the production wiring a route-shape test runs under.
-func guardForSystem(r *PXERouter, root *mux.Router) {
-	r.SetSystemTenantGuard(systemTenantGuard())
-	root.Use(injectSession(adminSession(testSystemTenant)))
-}
-
-// TestPXERouter_RefusesNonSystemTenant: the PXE device store is platform-wide,
-// so an admin of another tenant reaches no operator or gateway route
-// (#1896 Codex r10); an admin of the system tenant reaches every one. The
-// router has no server, so a route that reaches its handler answers 503.
-func TestPXERouter_RefusesNonSystemTenant(t *testing.T) {
-	probe := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil,
-		response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil), false)
-	type mounted struct {
-		prefix string
-		routes []scopedRoute
-	}
-	sets := []mounted{
-		{"/api/v1" + basePath, probe.operatorRoutes()},
-		{"/api/v1" + gatewayBasePath, probe.gatewayRoutes()},
-	}
-	fill := strings.NewReplacer("{id}", "dev-1", "{mac}", "00:11:22:33:44:55")
-
-	root := func(tenant string) *mux.Router {
-		logger := logging.NewLogger(slog.LevelError, io.Discard)
-		r := NewPXERouter(logger, nil, response.NewResponseWriter(logger, nil), false)
-		r.SetScopeAuthorizer(allowAllScopes{})
-		r.SetSystemTenantGuard(systemTenantGuard())
-		parent := mux.NewRouter()
-		parent.Use(injectSession(adminSession(tenant)))
-		sub := parent.PathPrefix("/api/v1").Subrouter()
-		r.RegisterRoutes(sub)
-		r.RegisterGatewayRoutes(sub)
-		return parent
-	}
-	other, system := root("other"), root(testSystemTenant)
-
-	for _, set := range sets {
-		for _, route := range set.routes {
-			path := set.prefix + fill.Replace(route.path)
-			t.Run(route.method+" "+path, func(t *testing.T) {
-				assert.Equal(t, http.StatusForbidden, serveProbe(other, route.method, path),
-					"an admin of another tenant must not reach the handler")
-				assert.Equal(t, http.StatusServiceUnavailable, serveProbe(system, route.method, path),
-					"an admin of the system tenant must reach the handler")
-			})
-		}
-	}
-}
 
 // newRouter mounts BOTH halves, the way v1Router.pxeRoutes does, so the
 // existing behavioural tests keep exercising every route. Which half
@@ -125,7 +36,6 @@ func newRouter() (*PXERouter, *mux.Router) {
 	w := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
 	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w, true)
 	parent := mux.NewRouter()
-	guardForSystem(r, parent)
 	sub := parent.PathPrefix("/api/v1").Subrouter()
 	r.RegisterMachineFacingRoutes(sub)
 	r.RegisterRoutes(sub)
@@ -269,7 +179,6 @@ func operatorRoot(authorizer middleware.ScopeAuthorizer) *mux.Router {
 	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w, false)
 	r.SetScopeAuthorizer(authorizer)
 	root := mux.NewRouter()
-	guardForSystem(r, root)
 	r.RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
 	return root
 }

@@ -1036,14 +1036,12 @@ func (v1Router *Router) pxeRoutes() {
 		server,
 		v1Router.responseWriter,
 		v1Router.restHandlerRegistry.PXEWebhookEnabled())
-	r.SetWebhookSecret(v1Router.restHandlerRegistry.PXEWebhookSecret())
 	// Split by principal. Service controls and the device lifecycle —
 	// authorize, quarantine, retry, state — are operator work and take the
 	// admin gate, then per route the pxe:* scope its RPC takes on gRPC. The
 	// install-completion webhook stays off both because its caller is a
-	// booting node; it is mounted only when the operator enabled it, and
-	// then admits only a report HMAC-signed with pxe.ServiceConfig's
-	// WebhookSecret (#240).
+	// booting node; it presents and checks no credential at all (#238), so
+	// it is mounted only when the operator enabled it.
 	//
 	// The provisioning gateway's device reports (register, state, install
 	// complete) under /provisioning/devices/{mac}: the admin gate, then
@@ -1057,17 +1055,6 @@ func (v1Router *Router) pxeRoutes() {
 		r.SetScopeAuthorizer(scoped)
 	}
 	r.RegisterMachineFacingRoutes(v1Router.router)
-	_, guard, err := v1Router.authorization()
-	if err != nil {
-		v1Router.logger.Error(err,
-			"PXE operator and gateway routes not registered: the RBAC guard could not be built")
-		return
-	}
-	// The PXE device store is platform-wide with no tenant filter, so the
-	// operator and gateway routes admit only the system tenant (#1896 Codex
-	// r10), as the proxy routes do. A REST session binds no tenant the
-	// servicer's guard could read.
-	r.SetSystemTenantGuard(guard.RequireTenant(v1Router.restHandlerRegistry.TenantID()))
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 	r.RegisterGatewayRoutes(v1Router.gated(common.ROLE_ADMIN))
 }

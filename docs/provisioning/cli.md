@@ -1,18 +1,17 @@
 # Zero-Touch Provisioning — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl provision`, `install`, `iso`, `pxe` · Last verified: 2026-11-12
+> **Status: NORMATIVE** · Scope: `platformctl provision`, `install`, `iso` · Last verified: 2026-08-18
 > Conflicts with this document are defects. Fix them here first.
-> Read out of `pkg/cli/commands/{provision,install,iso}/` on 2026-08-18 and `pkg/cli/commands/pxe/` on 2026-11-12.
+> Read out of `pkg/cli/commands/{provision,install,iso}/` on 2026-08-18.
 
 ---
 
-## 1. Four command groups
+## 1. Three command groups
 
 ```
 platformctl provision    Device provisioning operations
 platformctl install      System installation operations
 platformctl iso          ISO build and test operations
-platformctl pxe          PXE provisioning workflow
 ```
 
 BMC (`platformctl bmc`) and bootstrap (`platformctl bootstrap`) are part of the
@@ -138,89 +137,21 @@ configuration that fails validation at build time has already cost you the build
 
 ---
 
-## 5. `platformctl pxe`
-
-The PXE device workflow, over the `PXEService` client of the current context
-(`pkg/cli/commands/pxe/`). Unlike `provision`, these verbs run on an operator
-machine and use the root's `--server`, `--transport` and credentials.
-
-| Verb | Purpose |
-|---|---|
-| `list` | List devices in the provisioning workflow |
-| `get <device-id>` | Show one device |
-| `authorize <device-id>` | **Authorize a device onto its target VLAN** |
-| `quarantine <device-id>` | **Quarantine a device** |
-| `retry <device-id>` | Send a failed or quarantined device back through provisioning |
-| `events <device-id>` | Show the provisioning events of a device |
-| `register --mac <mac>` | Register a device by MAC address ahead of its first PXE boot |
-| `get-by-mac <mac>` | Show the device registered with a MAC address |
-| `remove <device-id>` | Remove a device from the provisioning workflow |
-| `set-state <device-id>` | Move a device to a provisioning state, recording why |
-| `set-enrolled <device-id>` | Record a device's enrolment certificate |
-| `status` | Show the PXE service status (running, devices, iPXE server, VLANs, start time) |
-| `start` / `stop` | Start or stop the PXE service |
-
-### `pxe list`
-
-| Flag | Type | Meaning |
-|---|---|---|
-| `--state` | string | Filter by state |
-| `--mac` | string | Filter by MAC address (exact or prefix) |
-| `--vlan` | uint32 | Filter by current VLAN |
-| `--limit` | int32 | Maximum number of devices (`0` for the server default) |
-| `--offset` | int32 | Number of devices to skip |
-
-### `pxe authorize` and `pxe quarantine`
-
-| Verb | Flag | Type | Required | Meaning |
-|---|---|---|---|---|
-| `authorize` | `--target-vlan` | uint32 | **yes** | VLAN to move the device to (1-4094) |
-| `quarantine` | `--reason` | string | **yes** | Why the device is quarantined |
-
-**Authorizing is the step that lets an unknown machine onto the network.**
-`quarantine` refuses to run without `--reason`, so every quarantine carries
-its cause in the device's events. An empty device ID is refused before any
-call is made.
-
-```bash
-platformctl pxe list --state discovered
-platformctl pxe authorize dev-7c21 --target-vlan 101
-platformctl pxe quarantine dev-7c21 --reason "EK not in allow list"
-platformctl pxe events dev-7c21 -o json
-platformctl pxe            PXE provisioning workflow
-```
-
-### `pxe register`, `pxe set-state` and `pxe set-enrolled`
-
-| Verb | Flag | Type | Required | Meaning |
-|---|---|---|---|---|
-| `register` | `--mac` | string | **yes** | MAC address of the device |
-| `register` | `--port` | string | no | OVS port ID the device is attached to |
-| `set-state` | `--state` | string | **yes** | State to move the device to (as in `list --state`) |
-| `set-state` | `--reason` | string | **yes** | Why the state changes |
-| `set-enrolled` | `--certificate-serial` | string | **yes** | Serial of the device's enrolment certificate |
-
-`register` and `get-by-mac` refuse a missing or malformed MAC before any call
-is made; `set-state` refuses a missing or unknown state and a missing reason,
-and `set-enrolled` a missing serial, the same way. The service still enforces
-the state machine: a transition it does not allow fails.
-
-```bash
-platformctl pxe register --mac 02:00:00:00:00:01 --port port-1
-platformctl pxe get-by-mac 02:00:00:00:00:01
-platformctl pxe set-state dev-7c21 --state booting --reason "re-image"
-platformctl pxe set-enrolled dev-7c21 --certificate-serial 0a1b
-platformctl pxe status
-platformctl pxe stop
-platformctl pxe start
-platformctl pxe remove dev-7c21
-```
-
-### What the CLI does not cover
+## 5. What the CLI does not cover
 
 | Capability | Reach it with |
 |---|---|
+| Register / list / get / remove a PXE device | REST `/api/v1/pxe/devices`, gRPC `PXEService`, QUIC, MCP |
+| **Authorize / quarantine / retry** a PXE device | REST, gRPC, QUIC, MCP |
+| Set a PXE device enrolled | REST, gRPC, QUIC, MCP |
+| PXE device events | REST `GET /api/v1/pxe/devices/{id}/events`, gRPC `GetEvents`, QUIC, MCP |
+| Start / stop the PXE service | REST, gRPC, QUIC, MCP |
 | Remote Secure Boot digest signing | REST `POST /api/v1/provisioning/sign`, gRPC `SignDigest` (TCP and Unix socket), QUIC, MCP |
+
+**There is no `platformctl pxe` command group.** Every PXE device-lifecycle
+operation — including authorising and quarantining a device — is API-only. For a
+capability whose whole point is bringing unknown machines onto a network safely,
+that is worth noting; recorded as a gap in the migration report.
 
 ---
 

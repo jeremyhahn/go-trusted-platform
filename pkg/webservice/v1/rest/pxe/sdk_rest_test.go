@@ -81,9 +81,8 @@ func (s *recordingPXEServer) Quarantine(_ context.Context, req *platformv1.Quara
 func pxeRoutes(server platformv1.PXEServiceServer) *mux.Router {
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 	root := mux.NewRouter()
-	r := NewPXERouter(logger, server, response.NewResponseWriter(logger, nil), false)
-	guardForSystem(r, root)
-	r.RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
+	NewPXERouter(logger, server, response.NewResponseWriter(logger, nil), false).
+		RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
 	return root
 }
 

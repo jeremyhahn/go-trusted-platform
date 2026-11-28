@@ -330,51 +330,6 @@ func TestDeviceAttest_ConflictIsFailedPrecondition(t *testing.T) {
 	}
 }
 
-func TestPXEService_ConflictIsFailedPrecondition(t *testing.T) {
-	tests := []struct {
-		name   string
-		method string
-		req    any
-		resp   any
-		body   string
-	}{
-		{
-			name:   "start while running",
-			method: platformv1.PXEService_StartService_FullMethodName,
-			req:    &platformv1.StartPXEServiceRequest{},
-			resp:   &platformv1.StartPXEServiceResponse{},
-			body:   `{"error":"PXE service already running"}`,
-		},
-		{
-			name:   "stop while stopped",
-			method: platformv1.PXEService_StopService_FullMethodName,
-			req:    &platformv1.StopPXEServiceRequest{},
-			resp:   &platformv1.StopPXEServiceResponse{},
-			body:   `{"error":"PXE service is not running"}`,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				if r.Method != http.MethodPost {
-					_, _ = io.WriteString(w, `{"status":"ok"}`)
-					return
-				}
-				w.WriteHeader(http.StatusConflict)
-				_, _ = io.WriteString(w, tt.body)
-			})
-			err := a.Connection().Invoke(context.Background(), tt.method, tt.req, tt.resp)
-			if status.Code(err) != codes.FailedPrecondition {
-				t.Fatalf("code = %s (%v), want FailedPrecondition", status.Code(err), err)
-			}
-			if msg := status.Convert(err).Message(); msg == "" || msg[0] == '{' {
-				t.Errorf("message = %q, want the envelope's error", msg)
-			}
-		})
-	}
-}
-
 func TestDaemonServices_RefusedBeforeTheWire(t *testing.T) {
 	dns := platformv1.ServiceType_SERVICE_TYPE_DNS
 	cases := []struct {

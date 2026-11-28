@@ -2616,12 +2616,9 @@ integration-test-lb: build-devcontainer
 ## Without INTEGRATION_TEST_SERVER_ISO/CLIENT_ISO the suite validates its
 ## infrastructure (OVS bridges, policy engine) and stops before provisioning.
 ## Set both to paths under the repository (the container sees it at
-## /workspace) for the full provisioning run, with the serial-log lines the
-## ISOs print when done: INTEGRATION_TEST_SERVER_BOOT_MARKER (server services
-## up) and INTEGRATION_TEST_CLIENT_ENROLL_MARKER (client enrolled); Phases 2
-## and 3 fail unless they see them (#374).
+## /workspace) for the full provisioning run.
 integration-test-e2e: build-devcontainer
-	$(call run-integration-suite,e2e,-e INTEGRATION_TEST_SERVER_ISO -e INTEGRATION_TEST_CLIENT_ISO -e INTEGRATION_TEST_SERVER_BOOT_MARKER -e INTEGRATION_TEST_CLIENT_ENROLL_MARKER)
+	$(call run-integration-suite,e2e,-e INTEGRATION_TEST_SERVER_ISO -e INTEGRATION_TEST_CLIENT_ISO)
 
 .PHONY: integration-test-device-profile
 ## integration-test-device-profile: Test device profile network state transitions

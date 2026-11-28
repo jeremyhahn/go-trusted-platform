@@ -135,7 +135,6 @@ func gatewayRoot(server platformv1.PXEServiceServer, authorizer middleware.Scope
 		r.SetScopeAuthorizer(authorizer)
 	}
 	root := mux.NewRouter()
-	guardForSystem(r, root)
 	r.RegisterGatewayRoutes(root.PathPrefix("/api/v1").Subrouter())
 	return root
 }
