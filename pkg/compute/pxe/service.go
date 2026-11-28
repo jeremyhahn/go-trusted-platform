@@ -34,7 +34,7 @@ import (
 // rollback runs on a context detached from the request, because the request
 // may already be cancelled when the write fails (#2081 Codex): reusing it
 // would leave the widened flows in place.
-const rollbackTimeout = 30 * time.Second
+var rollbackTimeout = 30 * time.Second
 
 type Service interface {
 	// Lifecycle methods

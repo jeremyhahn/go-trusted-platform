@@ -556,6 +556,11 @@ func (m *ZoneFlowManager) GetPortVLAN(portID string) (uint16, error) {
 	return v, nil
 }
 
+// PortVLAN returns portID's access or native VLAN.
+func (m *ZoneFlowManager) PortVLAN(ctx context.Context, portID string) (uint16, error) {
+	return m.GetPortVLAN(portID)
+}
+
 // ZoneForVLAN returns the zone the network plan carries on VLAN v.
 func (m *ZoneFlowManager) ZoneForVLAN(v uint16) (zone.Zone, bool) {
 	return m.plan.ZoneForVLAN(v)

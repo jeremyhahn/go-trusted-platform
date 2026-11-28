@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -152,5 +153,76 @@ func TestService_RollbackRestoreFailureFallsBackToQuarantine(t *testing.T) {
 		require.Error(t, svc.UpdateDeviceState(context.Background(), id, StateInstalling, "install"))
 		assert.Equal(t, "quarantine", vlan.flows(),
 			"a refused restore must fail closed to the quarantine flows")
+	})
+}
+
+// deadlineRestoreVLAN is a ctxHonouringVLAN whose refused provisioning
+// restore waits for its context's deadline before it returns, so the
+// rollback context is spent when the quarantine fallback runs.
+type deadlineRestoreVLAN struct {
+	*ctxHonouringVLAN
+}
+
+func (d *deadlineRestoreVLAN) ApplyProvisioningFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
+	d.mu.Lock()
+	refuse := d.refuseProvisioning
+	d.mu.Unlock()
+	if refuse {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return d.ctxHonouringVLAN.ApplyProvisioningFlows(ctx, portID, mac)
+}
+
+// shortenRollbackTimeout makes the rollback deadline expire quickly.
+func shortenRollbackTimeout(t *testing.T) {
+	t.Helper()
+	old := rollbackTimeout
+	rollbackTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { rollbackTimeout = old })
+}
+
+// The quarantine fallback must not reuse a rollback context the failed
+// restore exhausted (#2081 Codex P1).
+func TestService_FailClosedGetsFreshContextAfterRollbackDeadline(t *testing.T) {
+	t.Run("authorize undo", func(t *testing.T) {
+		shortenRollbackTimeout(t)
+		svc, rec, store, id := newStoreBackedService(t, StateAuthorized)
+		vlan := &deadlineRestoreVLAN{&ctxHonouringVLAN{recordingFlowsVLAN: rec, refuseProvisioning: true}}
+		svc.vlanManager = vlan
+		setStoredDevice(t, svc, store, id, StateAuthorizing, svc.config.ProvisioningVLAN,
+			func(d *DeviceInfo) bool { return d.State == StateAuthorized })
+		vlan.set("provisioning")
+
+		require.Error(t, svc.AuthorizeDevice(context.Background(), id, 200))
+		assert.Equal(t, "quarantine", vlan.flows(),
+			"an undo that ran out its deadline must still fail closed to the quarantine flows")
+	})
+
+	t.Run("update restore", func(t *testing.T) {
+		shortenRollbackTimeout(t)
+		svc, rec, store, id := newStoreBackedService(t, StateQuarantined)
+		vlan := &deadlineRestoreVLAN{&ctxHonouringVLAN{recordingFlowsVLAN: rec}}
+		svc.vlanManager = vlan
+		setStoredDevice(t, svc, store, id, StateBooting, svc.config.ProvisioningVLAN,
+			func(d *DeviceInfo) bool { return d.State == StateInstalling })
+		vlan.set("provisioning")
+
+		store.mu.Lock()
+		hook := store.failPut
+		store.failPut = func(d *DeviceInfo) bool {
+			if !hook(d) {
+				return false
+			}
+			vlan.mu.Lock()
+			vlan.refuseProvisioning = true
+			vlan.mu.Unlock()
+			return true
+		}
+		store.mu.Unlock()
+
+		require.Error(t, svc.UpdateDeviceState(context.Background(), id, StateInstalling, "install"))
+		assert.Equal(t, "quarantine", vlan.flows(),
+			"a restore that ran out its deadline must still fail closed to the quarantine flows")
 	})
 }

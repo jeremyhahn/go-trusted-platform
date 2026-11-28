@@ -2103,6 +2103,122 @@ func TestService_QuarantinePendingSurvivesServiceRecreation(t *testing.T) {
 	}
 }
 
+// fakeSwitch is the OVSDB port state that survives a daemon restart.
+type fakeSwitch struct {
+	mu      sync.Mutex
+	tags    map[string]int64
+	readErr error
+}
+
+func (s *fakeSwitch) tag(port string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tags[port]
+}
+
+// switchPort is a recordingPort over a fakeSwitch: it records the access
+// tag it sets and reads it back as OVSDB does.
+type switchPort struct {
+	recordingPort
+	sw *fakeSwitch
+}
+
+func (p *switchPort) SetPortVLAN(_ context.Context, port string, v int64) error {
+	p.sw.mu.Lock()
+	defer p.sw.mu.Unlock()
+	p.sw.tags[port] = v
+	return nil
+}
+
+func (p *switchPort) PortAccessVLAN(_ context.Context, _, port string) (uint16, bool, error) {
+	p.sw.mu.Lock()
+	defer p.sw.mu.Unlock()
+	if p.sw.readErr != nil {
+		return 0, false, p.sw.readErr
+	}
+	v, ok := p.sw.tags[port]
+	return uint16(v), ok && v > 0, nil
+}
+
+// newSwitchVLAN builds the real VLAN wrapper over a fresh zone flow manager
+// on sw, as a daemon start does.
+func newSwitchVLAN(t *testing.T, sw *fakeSwitch) VLANIntegration {
+	t.Helper()
+	port := &switchPort{sw: sw}
+	zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName: "br-fabric", FlowController: port, PortController: port, Plan: testNetPlan,
+	})
+	require.NoError(t, err)
+	return NewVLANIntegrationWrapper(WithFlowManager(zfm))
+}
+
+// A daemon restart builds a new flow manager with an empty port map. The
+// quarantine whose write failed is still enforced on the switch, so the
+// restarted service must read it there and refuse a widening move
+// (#2081 Codex P1); a placement it cannot read refuses the move too.
+func TestService_QuarantinePendingSurvivesDaemonRestart(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name  string
+		state ProvisioningState
+		widen func(s *service, id string) error
+	}{
+		{"install_complete report", StateInstalling, func(s *service, id string) error {
+			return s.UpdateDeviceState(ctx, id, StateInstallComplete, "install complete")
+		}},
+		{"authorize", StateAuthorizing, func(s *service, id string) error {
+			return s.AuthorizeDevice(ctx, id, 200)
+		}},
+	}
+	for _, tc := range cases {
+		for _, readFails := range []bool{false, true} {
+			name := tc.name
+			if readFails {
+				name += " placement read error"
+			}
+			t.Run(name, func(t *testing.T) {
+				sw := &fakeSwitch{tags: map[string]int64{}}
+				svc, _, store, id := newStoreBackedService(t, StateQuarantined)
+				svc.vlanManager = newSwitchVLAN(t, sw)
+				setStoredDevice(t, svc, store, id, tc.state, svc.config.ProvisioningVLAN,
+					func(d *DeviceInfo) bool { return d.State == StateQuarantined })
+				device, err := svc.stateManager.Get(id)
+				require.NoError(t, err)
+				port := device.PortID
+
+				require.Error(t, svc.QuarantineDevice(ctx, id, "posture failed"))
+				require.Equal(t, int64(svc.config.QuarantineVLAN), sw.tag(port))
+
+				store.mu.Lock()
+				store.failPut = nil
+				store.mu.Unlock()
+				sw.mu.Lock()
+				if readFails {
+					sw.readErr = errors.New("ovsdb down")
+				}
+				sw.mu.Unlock()
+
+				restarted := &service{
+					logger:       logging.DefaultLogger(),
+					stateManager: reloadFrom(t, store),
+					vlanManager:  newSwitchVLAN(t, sw),
+					config:       svc.config,
+				}
+				restarted.initialized.Store(true)
+
+				err = tc.widen(restarted, id)
+				var refused ErrInvalidStateTransition
+				require.ErrorAs(t, err, &refused)
+				assert.Equal(t, int64(svc.config.QuarantineVLAN), sw.tag(port),
+					"the widening move must not reconnect the device")
+				stored, err := reloadFrom(t, store).Get(id)
+				require.NoError(t, err)
+				assert.Equal(t, tc.state, stored.State)
+			})
+		}
+	}
+}
+
 // A failed transition write must not consume the retry (#2081 Codex P1).
 func TestService_RetryDevice_FailedTransitionWriteKeepsRetry(t *testing.T) {
 	svc, _, store, id := newStoreBackedService(t, StateQuarantined)

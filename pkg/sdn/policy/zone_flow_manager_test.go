@@ -191,6 +191,60 @@ func newBridgeCheckZFM(t *testing.T, ctrl *bridgeCheckController) *ZoneFlowManag
 	return m
 }
 
+// vlanReaderController is an ofPortController that also answers the
+// switch's access tag for a port, as OVSDB does after a daemon restart.
+type vlanReaderController struct {
+	*ofPortController
+	tags    map[string]uint16
+	readErr error
+}
+
+func (c *vlanReaderController) PortAccessVLAN(_ context.Context, bridge, port string) (uint16, bool, error) {
+	if c.readErr != nil {
+		return 0, false, c.readErr
+	}
+	v, ok := c.tags[port]
+	return v, ok && bridge == "br0", nil
+}
+
+// A fresh zone flow manager has an empty port map; it must read a port's
+// placement from the switch rather than report it unknown (#2081 Codex P1).
+func TestZoneFlowManager_PortVLANReadsSwitchAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	newZFM := func(ctrl *vlanReaderController) *ZoneFlowManager {
+		m, err := NewZoneFlowManager(ZoneFlowManagerConfig{
+			BridgeName:     "br0",
+			FlowController: ctrl,
+			PortController: ctrl,
+			Plan:           testPlan(t),
+		})
+		require.NoError(t, err)
+		return m
+	}
+
+	m := newZFM(&vlanReaderController{
+		ofPortController: &ofPortController{ofPorts: map[string]int32{"tap0": 7}},
+		tags:             map[string]uint16{"tap0": 404},
+	})
+	vlan, err := m.PortVLAN(ctx, "tap0")
+	require.NoError(t, err)
+	require.Equal(t, uint16(404), vlan)
+
+	_, err = m.PortVLAN(ctx, "tap1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "port not found")
+
+	readErr := errors.New("ovsdb down")
+	failing := newZFM(&vlanReaderController{
+		ofPortController: &ofPortController{ofPorts: map[string]int32{"tap0": 7}},
+		readErr:          readErr,
+	})
+	_, err = failing.PortVLAN(ctx, "tap0")
+	require.Error(t, err)
+	require.ErrorIs(t, err, readErr)
+	require.NotContains(t, err.Error(), "port not found")
+}
+
 func TestZoneFlowManager_PortNotOnBridge_Refused(t *testing.T) {
 	cases := map[string]*bridgeCheckController{
 		"other bridge": {

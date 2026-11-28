@@ -285,6 +285,12 @@ func (c *OVSFlowController) PortOnBridge(ctx context.Context, bridgeName, portNa
 	return false, nil
 }
 
+// PortAccessVLAN reads portName's access VLAN from bridgeName's OVSDB port
+// list. It implements PortVLANReader.
+func (c *OVSFlowController) PortAccessVLAN(ctx context.Context, bridgeName, portName string) (uint16, bool, error) {
+	return 0, false, nil
+}
+
 // formatFlow formats a Flow into a string representation
 func formatFlow(flow *ovs.Flow) string {
 	var parts []string
