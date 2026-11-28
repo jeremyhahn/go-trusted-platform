@@ -61,4 +61,17 @@ for (const call of registry.matchAll(/browser\.newContext\(([^)]*)\)/g)) {
   assert.match(call[1], /\bbaseURL\b/, `registry-seeded.spec.ts newContext call names baseURL: ${call[0]}`);
 }
 
+const caPort = fs.readFileSync(path.join(import.meta.dirname, 'ca-port.spec.ts'), 'utf8');
+assert.ok(!caPort.includes("includes('ACTIVE')"), 'ca-port.spec.ts reads the server status CERTIFICATE_STATUS_VALID, not ACTIVE');
+assert.ok(caPort.includes('getCRL('), 'ca-port.spec.ts reads revocation from the CA CRL, not the listing');
+assert.ok(!caPort.includes('if (!res.success) return [];'), 'ca-port.spec.ts fails a failed certificate listing instead of reading it as empty');
+assert.ok(!caPort.includes('if (!res.success) return new Set();'), 'ca-port.spec.ts fails a failed CRL read instead of reading it as empty');
+assert.ok(caPort.includes('Failed to issue certificate: '), 'ca-port.spec.ts asserts the issue refusal the console shows');
+assert.ok(caPort.includes('Failed to revoke certificate: '), 'ca-port.spec.ts asserts the revoke refusal the console shows');
+assert.ok(caPort.includes('Certificate revoked successfully'), 'ca-port.spec.ts asserts the revoke success the console shows');
+
+const computeSpec = fs.readFileSync(path.join(import.meta.dirname, 'compute.spec.ts'), 'utf8');
+assert.ok(computeSpec.includes('startContainer('), 'compute.spec.ts: the Stop case starts the seeded container');
+assert.ok(computeSpec.includes("'CONTAINER_STATE_RUNNING'"), 'compute.spec.ts: the Stop case waits for the seeded container to run');
+
 console.log('specs.check: ok');
