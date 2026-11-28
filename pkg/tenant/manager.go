@@ -47,6 +47,11 @@ type TenantBarrierClient interface {
 	// TenantBarrierStatus reports the current sealed/initialized state and
 	// active strategy metadata of a per-tenant barrier.
 	TenantBarrierStatus(ctx context.Context, req *quicbaassdk.QRDBTenantBarrierStatusRequest) (*quicbaassdk.QRDBTenantBarrierStatusResponse, error)
+
+	// TenantIsolationType reports the tenant's engine isolation type. Only
+	// barrier, volume and raft tenants route their data through the
+	// per-tenant barrier.
+	TenantIsolationType(ctx context.Context, tenantID string) (string, error)
 }
 
 // TenantBarrierState describes the current state of a per-tenant barrier as
@@ -1015,6 +1020,8 @@ func (m *Manager) GetTenantDEKStatus(ctx context.Context, tenantID string) (*DEK
 // passed straight to the barrier and never stored, logged or defaulted; an
 // empty one is refused with ErrInvalidRequest before the barrier is called
 // (go-qrdb refuses it with ErrEmptyPassphrase too).
+// A tenant whose data does not route through a per-tenant barrier (prefix
+// isolation) is refused with ErrInvalidRequest.
 func (m *Manager) InitTenantBarrier(ctx context.Context, tenantID string, passphrase []byte) error {
 	if tenantID == "" {
 		return ErrInvalidRequest{Reason: "tenant ID is required"}
@@ -1032,11 +1039,17 @@ func (m *Manager) InitTenantBarrier(ctx context.Context, tenantID string, passph
 		return err
 	}
 
+	if err := m.requireBarrierIsolation(ctx, tenantID, "init"); err != nil {
+		return err
+	}
+
 	return m.initTenantBarrierInternal(ctx, tenantID, passphrase)
 }
 
 // UnsealTenantBarrier explicitly unseals a per-tenant barrier using the
 // provided key material.
+// A tenant whose data does not route through a per-tenant barrier (prefix
+// isolation) is refused with ErrInvalidRequest.
 func (m *Manager) UnsealTenantBarrier(ctx context.Context, tenantID string, key []byte) error {
 	if tenantID == "" {
 		return ErrInvalidRequest{Reason: "tenant ID is required"}
@@ -1052,6 +1065,10 @@ func (m *Manager) UnsealTenantBarrier(ctx context.Context, tenantID string, key 
 
 	// Verify tenant exists
 	if _, err := m.GetTenant(ctx, tenantID); err != nil {
+		return err
+	}
+
+	if err := m.requireBarrierIsolation(ctx, tenantID, "unseal"); err != nil {
 		return err
 	}
 
@@ -1079,12 +1096,17 @@ func (m *Manager) UnsealTenantBarrier(ctx context.Context, tenantID string, key 
 // state. Subsequent reads and writes against the tenant's namespace fail
 // until the barrier is unsealed again via UnsealTenantBarrier. The tenant
 // must exist and its barrier must have been previously initialized.
+// A tenant whose data does not route through a per-tenant barrier (prefix
+// isolation) is refused with ErrInvalidRequest.
 func (m *Manager) SealTenantBarrier(ctx context.Context, tenantID string) error {
 	if tenantID == "" {
 		return ErrInvalidRequest{Reason: "tenant ID is required"}
 	}
 	if m.tenantBarrierClient == nil {
 		return ErrBarrierNotSupported{Operation: "SealTenantBarrier"}
+	}
+	if err := m.requireBarrierIsolation(ctx, tenantID, "seal"); err != nil {
+		return err
 	}
 
 	req := &quicbaassdk.QRDBTenantBarrierSealRequest{TenantID: tenantID}
@@ -1399,4 +1421,23 @@ func (m *Manager) initTenantBarrierInternal(ctx context.Context, tenantID string
 	}
 
 	return nil
+}
+
+// requireBarrierIsolation refuses a barrier operation on a tenant whose data
+// does not route through a per-tenant barrier. Only barrier, volume and raft
+// tenants do; an empty type is the engine default, prefix. A failed lookup
+// fails closed.
+func (m *Manager) requireBarrierIsolation(ctx context.Context, tenantID, op string) error {
+	iso, err := m.tenantBarrierClient.TenantIsolationType(ctx, tenantID)
+	if err != nil {
+		return ErrStorageFailed{Operation: "TenantIsolationType", Err: err}
+	}
+	switch iso {
+	case string(quicbaassdk.TenantIsolationBarrier), string(quicbaassdk.TenantIsolationVolume), string(quicbaassdk.TenantIsolationRaft):
+		return nil
+	}
+	if iso == "" {
+		iso = "prefix"
+	}
+	return ErrInvalidRequest{Reason: fmt.Sprintf("tenant %s uses %s isolation: its data does not route through a per-tenant barrier, so barrier %s is refused", tenantID, iso, op)}
 }

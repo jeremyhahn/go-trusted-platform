@@ -234,6 +234,19 @@ func (ErrNilBarrierStatusType) Error() string {
 // the underlying SDK returns nil with no error.
 var ErrNilBarrierStatus = ErrNilBarrierStatusType{}
 
+// ErrNilTenantInfoType is returned when the QRDB GetTenant RPC returns nil
+// without an error. It is a sentinel for an inconsistent SDK state and
+// callers should treat it as a hard failure rather than retry.
+type ErrNilTenantInfoType struct{}
+
+func (ErrNilTenantInfoType) Error() string {
+	return "tenant: nil tenant info response from SDK"
+}
+
+// ErrNilTenantInfo is the sentinel returned from TenantIsolationType when the
+// underlying SDK returns nil with no error.
+var ErrNilTenantInfo = ErrNilTenantInfoType{}
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.

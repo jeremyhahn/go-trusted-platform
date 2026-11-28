@@ -13,6 +13,8 @@ import (
 // the manager's TenantBarrierClient boundary. The SDK's TenantBarrierInit
 // also returns an init response (Shamir shares for that strategy); the
 // manager's boundary carries only the error, so the response is dropped.
+//
+// It also reads the tenant's isolation type from GetTenant.
 type sdkTenantBarrierClient struct {
 	c quicbaassdk.QRDBTenantClient
 }
@@ -49,4 +51,17 @@ func (s *sdkTenantBarrierClient) TenantBarrierSeal(ctx context.Context, req *qui
 // TenantBarrierStatus reports the tenant's barrier state through the SDK.
 func (s *sdkTenantBarrierClient) TenantBarrierStatus(ctx context.Context, req *quicbaassdk.QRDBTenantBarrierStatusRequest) (*quicbaassdk.QRDBTenantBarrierStatusResponse, error) {
 	return s.c.TenantBarrierStatus(ctx, req)
+}
+
+// TenantIsolationType answers the tenant's engine isolation type from the QRDB
+// GetTenant response.
+func (s *sdkTenantBarrierClient) TenantIsolationType(ctx context.Context, tenantID string) (string, error) {
+	resp, err := s.c.GetTenant(ctx, tenantID)
+	if err != nil {
+		return "", err
+	}
+	if resp == nil {
+		return "", ErrNilTenantInfo
+	}
+	return string(resp.Tenant.IsolationType), nil
 }
