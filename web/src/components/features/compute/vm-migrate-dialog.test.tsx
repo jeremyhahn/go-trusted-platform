@@ -110,6 +110,23 @@ describe('VMMigrateButton', () => {
     });
   });
 
+  it('disables Migrate for a guest with a vTPM', async () => {
+    const reason = 'Live migration of a guest with a vTPM is not supported';
+    stubControlPlane({ 'GET /api/v1/capabilities': caps() });
+    render(withControlPlane(<VMMigrateButton vmId="vm-1" onMigrated={vi.fn()} unsupportedReason={reason} />));
+
+    await waitFor(() => {
+      const button = screen.getByRole('button', { name: 'Migrate' }) as HTMLButtonElement;
+      expect(button.getAttribute('data-capability-enabled')).toBe('true');
+      expect(button.disabled).toBe(true);
+    });
+    expect(screen.getByText(reason)).toBeDefined();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Migrate' }));
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it('shows a refused migration as a destructive toast and keeps the dialog open', async () => {
     stubControlPlane({
       'GET /api/v1/capabilities': caps(),
