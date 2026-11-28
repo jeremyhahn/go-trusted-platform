@@ -193,6 +193,22 @@ describe('SDNPoliciesPage', () => {
     expect(screen.getByRole('dialog')).toBeDefined();
   });
 
+  it('refuses to replace an existing policy from the metadata-only form', async () => {
+    render(<SDNPoliciesPage />);
+    fireEvent.click(button('Apply Policy'));
+
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Policy ID'), { target: { value: 'pol-1' } });
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'web-acl' } });
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    });
+
+    expect(await within(dialog).findByText(/already exists/)).toBeDefined();
+    expect(hook.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeDefined();
+  });
+
   it('gates Details on the one-policy route and shows the answer', async () => {
     render(<SDNPoliciesPage />);
 

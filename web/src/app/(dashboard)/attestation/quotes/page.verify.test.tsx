@@ -106,6 +106,48 @@ describe('QuotesPage quote verify', () => {
     expect(verifies[0].body).toEqual({ quote: Q, akPublicKeyPem: btoa(AK_PEM), expectedNonce: 'bm9uY2U=', channelBinding: 'Y2I=' });
   });
 
+  it('clears the verdict when the nonce changes', async () => {
+    stubControlPlane(
+      routes({
+        [QUOTE]: ok({ status: STATUS, quote: Q, channelBinding: 'Y2I=' }),
+        [QUOTE_VERIFY]: ok({ status: STATUS, verified: true }),
+      })
+    );
+    render(withControlPlane(<QuotesPage />));
+    const card = await askForQuote();
+    await screen.findByTestId('quote-result');
+
+    fireEvent.change(within(card).getByLabelText('AK public key (PEM)'), { target: { value: AK_PEM } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Verify quote' }));
+    await screen.findByTestId('quote-verdict');
+
+    fireEvent.change(within(card).getByLabelText('Nonce'), { target: { value: '!' } });
+    expect(screen.queryByTestId('quote-verdict')).toBeNull();
+  });
+
+  it('clears the verdict when a later verification is refused', async () => {
+    const r = routes({
+      [QUOTE]: ok({ status: STATUS, quote: Q, channelBinding: 'Y2I=' }),
+      [QUOTE_VERIFY]: ok({ status: STATUS, verified: true }),
+    });
+    stubControlPlane(r);
+    render(withControlPlane(<QuotesPage />));
+    const card = await askForQuote();
+    await screen.findByTestId('quote-result');
+
+    fireEvent.change(within(card).getByLabelText('AK public key (PEM)'), { target: { value: AK_PEM } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Verify quote' }));
+    await screen.findByTestId('quote-verdict');
+
+    r[QUOTE_VERIFY] = refused(400, 'illegal base64 data');
+    fireEvent.click(within(card).getByRole('button', { name: 'Verify quote' }));
+    await waitFor(() => {
+      const toasts = screen.getAllByTestId('toast');
+      expect(toasts.some((t) => t.dataset.variant === 'destructive' && t.textContent?.includes('illegal base64 data'))).toBe(true);
+    });
+    expect(screen.queryByTestId('quote-verdict')).toBeNull();
+  });
+
   it('shows a failed verification and a refused quote', async () => {
     const r = routes({
       [QUOTE]: ok({ status: STATUS, quote: Q, channelBinding: 'Y2I=' }),

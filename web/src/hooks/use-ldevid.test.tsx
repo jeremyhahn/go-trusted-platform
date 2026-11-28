@@ -99,6 +99,18 @@ describe('useLDevID', () => {
     expect(res.error?.status).toBe(400);
   });
 
+  it('does not replay the POST after a lost response', async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('fetch failed');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await create({ commonName: 'dev-1', overwrite: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(res.success).toBe(false);
+  }, 15000);
+
   it('builds the body pieces', () => {
     expect(ldevidAlgorithmProtoName('ECDSA_P384')).toBe('DEVICE_KEY_ALGORITHM_ECDSA_P384');
     expect(ldevidRequestBody({ commonName: 'x', profile: '', validityDays: 0, overwrite: false })).toEqual({
