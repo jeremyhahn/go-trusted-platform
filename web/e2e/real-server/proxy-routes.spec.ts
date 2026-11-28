@@ -1,6 +1,6 @@
 import type { Locator, Page, Response } from '@playwright/test';
 import type { ApiResponse, CapabilitiesResponse, Capability, ProxyRoute } from 'trusted-platform-sdk';
-import { expect, test } from './fixtures';
+import { expect, expectProxyFailsClosed, test } from './fixtures';
 import { unwrapPayload, wireCount } from './fixtures/wire';
 
 /**
@@ -15,7 +15,9 @@ import { unwrapPayload, wireCount } from './fixtures/wire';
  * The proxy API is system-tenant only (pkg/webservice/v1/router.go,
  * proxyRoutes requires the system tenant), so the cases run as the
  * system-tenant admin (systemAdminPage, systemSdk), and one case asserts a
- * tenant admin is refused with 403.
+ * tenant admin is refused with 403. Without a scope-authorized session
+ * (proxyAuthorized false) the system-admin cases assert the proxy's 403
+ * fail-closed guard (requireScope) for every enabled op instead.
  */
 
 /** The data of a successful SDK answer; fails the test on an error answer. */
@@ -56,9 +58,15 @@ const UPDATE = 'PUT /api/v1/proxy/routes/{id}';
 const DELETE = 'DELETE /api/v1/proxy/routes/{id}';
 
 test.describe('proxy routes against the real platformd (#2061)', () => {
-  test('lists the routes the server answers', async ({ systemAdminPage: adminPage, systemSdk: sdk }) => {
+  test('lists the routes the server answers', async ({ systemAdminPage: adminPage, systemSdk: sdk, proxyAuthorized }) => {
     const caps = sdkData(await sdk.capabilities.list(), 'capabilities');
     const on = (op: string) => capabilityOf(caps, op);
+    if (!proxyAuthorized) {
+      await expectProxyFailsClosed(adminPage.context().request, [LIST].filter((op) => on(op).enabled));
+      await adminPage.goto('/networking/proxy');
+      await expect(adminPage.locator('[data-testid^="proxy-route-"]')).toHaveCount(0);
+      return;
+    }
 
     if (!on(LIST).enabled) {
       await adminPage.goto('/networking/proxy');
@@ -81,9 +89,13 @@ test.describe('proxy routes against the real platformd (#2061)', () => {
     await expect(seeded).toContainText('public');
   });
 
-  test('shows the status the server answers and reloads it', async ({ systemAdminPage: adminPage, systemSdk: sdk }) => {
+  test('shows the status the server answers and reloads it', async ({ systemAdminPage: adminPage, systemSdk: sdk, proxyAuthorized }) => {
     const caps = sdkData(await sdk.capabilities.list(), 'capabilities');
     const on = (op: string) => capabilityOf(caps, op);
+    if (!proxyAuthorized) {
+      await expectProxyFailsClosed(adminPage.context().request, [STATUS, RELOAD].filter((op) => on(op).enabled));
+      return;
+    }
 
     await adminPage.goto('/networking/proxy');
 
@@ -105,9 +117,13 @@ test.describe('proxy routes against the real platformd (#2061)', () => {
     expect(r.ok(), `${r.url()} answered ${r.status()}`).toBeTruthy();
   });
 
-  test('creates, edits and deletes a route', async ({ systemAdminPage: adminPage, systemSdk: sdk }) => {
+  test('creates, edits and deletes a route', async ({ systemAdminPage: adminPage, systemSdk: sdk, proxyAuthorized }) => {
     const caps = sdkData(await sdk.capabilities.list(), 'capabilities');
     const on = (op: string) => capabilityOf(caps, op);
+    if (!proxyAuthorized) {
+      await expectProxyFailsClosed(adminPage.context().request, [CREATE, UPDATE, DELETE].filter((op) => on(op).enabled));
+      return;
+    }
 
     await adminPage.goto('/networking/proxy');
 

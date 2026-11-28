@@ -1,6 +1,6 @@
 import type { Page, Response } from '@playwright/test';
 import type { ApiResponse, CapabilitiesResponse, PlatformClient } from 'trusted-platform-sdk';
-import { expect, test } from './fixtures';
+import { expect, expectProxyFailsClosed, test } from './fixtures';
 import { unwrapPayload, wireCount } from './fixtures/wire';
 
 /**
@@ -15,7 +15,9 @@ import { unwrapPayload, wireCount } from './fixtures/wire';
  * The proxy API is system-tenant only (pkg/webservice/v1/router.go,
  * proxyRoutes requires the system tenant), so the cases run as the
  * system-tenant admin (systemAdminPage, systemSdk), and one case asserts a
- * tenant admin is refused with 403.
+ * tenant admin is refused with 403. Without a scope-authorized session
+ * (proxyAuthorized false) the system-admin cases assert the proxy's 403
+ * fail-closed guard (requireScope) for every enabled op instead.
  */
 
 const LIST_POOLS = 'GET /api/v1/proxy/pools';
@@ -71,9 +73,15 @@ function definition(page: Page, card: string, term: string) {
 }
 
 test.describe('proxy pools against the real platformd (#2061)', () => {
-  test('lists the pools the server answers', async ({ systemAdminPage: adminPage, systemSdk: sdk }) => {
+  test('lists the pools the server answers', async ({ systemAdminPage: adminPage, systemSdk: sdk, proxyAuthorized }) => {
     const caps = await capabilities(sdk);
     const on = caps.on;
+    if (!proxyAuthorized) {
+      await expectProxyFailsClosed(adminPage.context().request, [LIST_POOLS].filter((op) => on(op)));
+      await adminPage.goto('/networking/proxy/pools');
+      await expect(adminPage.locator('[data-testid^="proxy-pool-"]')).toHaveCount(0);
+      return;
+    }
 
     if (!on(LIST_POOLS)) {
       await adminPage.goto('/networking/proxy/pools');
@@ -93,9 +101,13 @@ test.describe('proxy pools against the real platformd (#2061)', () => {
     await expect(adminPage.getByTestId('proxy-not-enabled')).toHaveCount(0);
   });
 
-  test('shows the merged config and the zone matrix the server answers', async ({ systemAdminPage: adminPage, systemSdk: sdk }) => {
+  test('shows the merged config and the zone matrix the server answers', async ({ systemAdminPage: adminPage, systemSdk: sdk, proxyAuthorized }) => {
     const caps = await capabilities(sdk);
     const on = caps.on;
+    if (!proxyAuthorized) {
+      await expectProxyFailsClosed(adminPage.context().request, [GET_CONFIG, GET_ZONE_MATRIX].filter((op) => on(op)));
+      return;
+    }
     await adminPage.goto('/networking/proxy/pools');
 
     if (on(GET_CONFIG)) {
@@ -132,9 +144,13 @@ test.describe('proxy pools against the real platformd (#2061)', () => {
     }
   });
 
-  test('creates, edits and deletes a pool', async ({ systemAdminPage: adminPage, systemSdk: sdk }) => {
+  test('creates, edits and deletes a pool', async ({ systemAdminPage: adminPage, systemSdk: sdk, proxyAuthorized }) => {
     const caps = await capabilities(sdk);
     const on = caps.on;
+    if (!proxyAuthorized) {
+      await expectProxyFailsClosed(adminPage.context().request, [CREATE_POOL, UPDATE_POOL, DELETE_POOL].filter((op) => on(op)));
+      return;
+    }
 
     const writes = [CREATE_POOL, UPDATE_POOL, DELETE_POOL];
     if (!on(LIST_POOLS) || writes.some((op) => !on(op))) {
