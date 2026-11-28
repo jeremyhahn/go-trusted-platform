@@ -159,12 +159,15 @@ func TestService_UserMethods_Simulator(t *testing.T) {
 	t.Run("SetUserPrivilege", func(t *testing.T) {
 		t.Parallel()
 		svc := newSimUserService(t)
-		if err := svc.SetUserPrivilege(ctx, 1, 1, 1, bmc.PrivilegeOperator); err != nil {
+		if err := svc.CreateUser(ctx, 1, bmc.User{Slot: 3, Username: "operator1", Enabled: true, Privilege: bmc.PrivilegeUser}, "s3cret-pass"); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		if err := svc.SetUserPrivilege(ctx, 1, 3, 1, bmc.PrivilegeOperator); err != nil {
 			t.Fatalf("SetUserPrivilege: %v", err)
 		}
-		got, ok := userInSlot(t, svc, 1)
-		if !ok || got.Username != "admin" || got.Privilege != bmc.PrivilegeOperator {
-			t.Errorf("slot 1 = %+v (found %v), want admin at operator", got, ok)
+		got, ok := userInSlot(t, svc, 3)
+		if !ok || got.Username != "operator1" || got.Privilege != bmc.PrivilegeOperator {
+			t.Errorf("slot 3 = %+v (found %v), want operator1 at operator", got, ok)
 		}
 	})
 
@@ -188,6 +191,36 @@ func TestService_UserMethods_Simulator(t *testing.T) {
 		got, ok := userInSlot(t, svc, 1)
 		if !ok || got.Username != "admin" {
 			t.Errorf("slot 1 after the refusal = %+v (found %v), want admin", got, ok)
+		}
+	})
+
+	t.Run("DeleteUserRefusesTheProfileLoginAccount", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimUserService(t)
+		err := svc.DeleteUser(ctx, 1, 1)
+		var cfgErr bmc.ErrInvalidConfig
+		if !errors.As(err, &cfgErr) || cfgErr.Field != "slot" {
+			t.Fatalf("DeleteUser on the login account = %v, want ErrInvalidConfig on slot", err)
+		}
+		// A fresh session with the stored credential must still open.
+		got, ok := userInSlot(t, svc, 1)
+		if !ok || got.Username != "admin" || !got.Enabled {
+			t.Errorf("slot 1 after the refusal = %+v (found %v), want admin enabled", got, ok)
+		}
+	})
+
+	t.Run("SetUserPrivilegeRefusesTheProfileLoginAccount", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimUserService(t)
+		err := svc.SetUserPrivilege(ctx, 1, 1, 1, bmc.PrivilegeNoAccess)
+		var cfgErr bmc.ErrInvalidConfig
+		if !errors.As(err, &cfgErr) || cfgErr.Field != "slot" {
+			t.Fatalf("SetUserPrivilege on the login account = %v, want ErrInvalidConfig on slot", err)
+		}
+		// A fresh session with the stored credential must still open.
+		got, ok := userInSlot(t, svc, 1)
+		if !ok || got.Username != "admin" || got.Privilege != bmc.PrivilegeAdministrator {
+			t.Errorf("slot 1 after the refusal = %+v (found %v), want admin at administrator", got, ok)
 		}
 	})
 
