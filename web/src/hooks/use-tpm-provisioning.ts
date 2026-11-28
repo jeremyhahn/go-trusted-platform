@@ -52,20 +52,10 @@ export function tpmKeyRefLabel(ref?: TPMKeyRef): string {
 }
 
 /** Only the non-empty passwords and the three create flags. */
-export function provisionRequest(o: {
-  ownerPassword: string;
-  endorsementPassword: string;
-  createEk: boolean;
-  createSrk: boolean;
-  createAk: boolean;
-}): TPMProvisionRequest {
-  return {
-    ...(o.ownerPassword && { ownerPassword: o.ownerPassword }),
-    ...(o.endorsementPassword && { endorsementPassword: o.endorsementPassword }),
-    createEk: o.createEk,
-    createSrk: o.createSrk,
-    createAk: o.createAk,
-  };
+export function provisionRequest(o: { ownerPassword: string }): TPMProvisionRequest {
+  // The daemon reads only the owner password; it always creates the EK and
+  // SRK and never an AK, so nothing else is sent.
+  return o.ownerPassword ? { ownerPassword: o.ownerPassword } : {};
 }
 
 export function useTPMProvisioning() {

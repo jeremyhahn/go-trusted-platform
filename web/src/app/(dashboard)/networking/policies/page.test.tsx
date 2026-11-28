@@ -209,6 +209,56 @@ describe('SDNPoliciesPage', () => {
     expect(screen.getByRole('dialog')).toBeDefined();
   });
 
+  it('refuses to apply while the policy list is unavailable', async () => {
+    hook.policies = [];
+    hook.error = 'HTTP 500: list failed';
+    render(<SDNPoliciesPage />);
+    fireEvent.click(button('Apply Policy'));
+
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Policy ID'), { target: { value: 'pol-1' } });
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'web-acl' } });
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    });
+
+    expect(await within(dialog).findByText(/list is unavailable/)).toBeDefined();
+    expect(hook.apply).not.toHaveBeenCalled();
+  });
+
+  it('refuses an existing policy the cached list does not show', async () => {
+    hook.policies = [];
+    render(<SDNPoliciesPage />);
+    fireEvent.click(button('Apply Policy'));
+
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Policy ID'), { target: { value: 'pol-1' } });
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'web-acl' } });
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    });
+
+    expect(await within(dialog).findByText(/already exists/)).toBeDefined();
+    expect(hook.get).toHaveBeenCalledWith('pol-1');
+    expect(hook.apply).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the one-policy read fails for another reason', async () => {
+    hook.get = vi.fn(() => Promise.reject(new Error('HTTP 503: sdn unavailable')));
+    render(<SDNPoliciesPage />);
+    fireEvent.click(button('Apply Policy'));
+
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Policy ID'), { target: { value: 'pol-3' } });
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'dns-acl' } });
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    });
+
+    expect(await within(dialog).findByText('HTTP 503: sdn unavailable')).toBeDefined();
+    expect(hook.apply).not.toHaveBeenCalled();
+  });
+
   it('gates Details on the one-policy route and shows the answer', async () => {
     render(<SDNPoliciesPage />);
 

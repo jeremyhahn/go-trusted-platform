@@ -91,17 +91,36 @@ export default function SDNPoliciesPage() {
 
   const handleApply = React.useCallback(async () => {
     const id = form.policyId.trim();
+    const exists = `Policy ${id} already exists. Replacing it from this form would remove its enforcement rules; delete it first or edit it through the API.`;
     // ApplyPolicy replaces the whole config, and this form carries no rules
-    // or targets: refuse to overwrite a policy that already exists.
-    if (policies.some((p) => p.id === id)) {
+    // or targets: refuse unless the policy is proved absent. An unavailable
+    // list proves nothing, so refuse while it is loading or refused.
+    if (isLoading || error) {
       setApplyError(
-        `Policy ${id} already exists. Replacing it from this form would remove its enforcement rules; delete it first or edit it through the API.`
+        `The policy list is unavailable, so ${id} cannot be checked; refresh the list and apply again.`
       );
+      return;
+    }
+    if (policies.some((p) => p.id === id)) {
+      setApplyError(exists);
       return;
     }
     setApplying(true);
     setApplyError(null);
     try {
+      // The cached list may be stale: apply only when a fresh one-policy
+      // read is refused with HTTP 404.
+      try {
+        await get(id);
+        setApplyError(exists);
+        return;
+      } catch (err) {
+        const m = err instanceof Error ? err.message : String(err);
+        if (!m.startsWith('HTTP 404')) {
+          setApplyError(m);
+          return;
+        }
+      }
       const priority = Number.parseInt(form.priority, 10);
       await apply({
         policyId: id,
@@ -118,7 +137,7 @@ export default function SDNPoliciesPage() {
     } finally {
       setApplying(false);
     }
-  }, [form, apply, policies]);
+  }, [form, apply, get, policies, isLoading, error]);
 
   const openDetail = React.useCallback(
     async (policy: SDNPolicy) => {

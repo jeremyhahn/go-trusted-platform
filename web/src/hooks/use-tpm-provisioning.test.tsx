@@ -56,24 +56,16 @@ describe('useTPMProvisioning', () => {
     expect(res?.data?.ek?.handle).toBe(2164260865);
   });
 
-  it('provisions with the create flags and no empty password', async () => {
+  it('provisions with the owner password only', async () => {
     const sent = stubControlPlane({
       'POST /api/v1/tpm/provision': ok({ status: { success: true, message: 'provisioned' }, ekPublic: 'ZWs=' }),
     });
     const { result } = renderProvisioning();
     let res: Awaited<ReturnType<typeof result.current.provision>> | undefined;
     await act(async () => {
-      res = await result.current.provision(
-        provisionRequest({
-          ownerPassword: '',
-          endorsementPassword: 'e',
-          createEk: true,
-          createSrk: true,
-          createAk: false,
-        })
-      );
+      res = await result.current.provision(provisionRequest({ ownerPassword: 'o' }));
     });
-    expect(sent[0].body).toEqual({ endorsementPassword: 'e', createEk: true, createSrk: true, createAk: false });
+    expect(sent[0].body).toEqual({ ownerPassword: 'o' });
     expect(res?.data?.status?.message).toBe('provisioned');
   });
 
@@ -111,8 +103,7 @@ describe('useTPMProvisioning', () => {
     expect(tpmKeyRefLabel({ handle: 2164326401 })).toBe('0x81010001');
     expect(tpmKeyRefLabel()).toBe('not provisioned');
     expect(tpmKeyRefLabel({ algorithm: 'RSA' })).toBe('not provisioned');
-    expect(
-      provisionRequest({ ownerPassword: 'o', endorsementPassword: '', createEk: false, createSrk: true, createAk: true })
-    ).toEqual({ ownerPassword: 'o', createEk: false, createSrk: true, createAk: true });
+    expect(provisionRequest({ ownerPassword: '' })).toEqual({});
+    expect(provisionRequest({ ownerPassword: 'o' })).toEqual({ ownerPassword: 'o' });
   });
 });

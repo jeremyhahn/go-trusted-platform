@@ -19,7 +19,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -66,10 +65,6 @@ export default function TPMProvisionPage() {
   const [capabilitiesError, setCapabilitiesError] = React.useState<string | undefined>();
 
   const [ownerPassword, setOwnerPassword] = React.useState("");
-  const [endorsementPassword, setEndorsementPassword] = React.useState("");
-  const [createEk, setCreateEk] = React.useState(true);
-  const [createSrk, setCreateSrk] = React.useState(true);
-  const [createAk, setCreateAk] = React.useState(false);
   const [provisioning, setProvisioning] = React.useState(false);
   const [provisionedKeys, setProvisionedKeys] = React.useState<string | undefined>();
 
@@ -103,9 +98,7 @@ export default function TPMProvisionPage() {
   const onProvision = async () => {
     setProvisioning(true);
     try {
-      const res = await provision(
-        provisionRequest({ ownerPassword, endorsementPassword, createEk, createSrk, createAk })
-      );
+      const res = await provision(provisionRequest({ ownerPassword }));
       if (succeeded(res)) {
         const keys = [
           res.data?.ekPublic ? "EK" : undefined,
@@ -221,7 +214,7 @@ export default function TPMProvisionPage() {
       <Card>
         <CardHeader>
           <CardTitle>Provision</CardTitle>
-          <CardDescription>Take ownership of the TPM and create its keys</CardDescription>
+          <CardDescription>Take ownership of the TPM; the daemon creates the EK and SRK and creates no AK</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
@@ -232,31 +225,6 @@ export default function TPMProvisionPage() {
               value={ownerPassword}
               onChange={(e) => setOwnerPassword(e.target.value)}
             />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="endorsement-password">Endorsement password</Label>
-            <Input
-              id="endorsement-password"
-              type="password"
-              value={endorsementPassword}
-              onChange={(e) => setEndorsementPassword(e.target.value)}
-            />
-          </div>
-          <div className="flex flex-wrap gap-6">
-            {[
-              { id: "create-ek", label: "Create EK", checked: createEk, set: setCreateEk },
-              { id: "create-srk", label: "Create SRK", checked: createSrk, set: setCreateSrk },
-              { id: "create-ak", label: "Create AK", checked: createAk, set: setCreateAk },
-            ].map((box) => (
-              <div key={box.id} className="flex items-center gap-2">
-                <Checkbox
-                  id={box.id}
-                  checked={box.checked}
-                  onCheckedChange={(v) => box.set(v === true)}
-                />
-                <Label htmlFor={box.id}>{box.label}</Label>
-              </div>
-            ))}
           </div>
           <Gated op="POST /api/v1/tpm/provision">
             <Button onClick={onProvision} disabled={provisioning}>

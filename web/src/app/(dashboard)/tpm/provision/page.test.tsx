@@ -5,7 +5,7 @@ import { ok, refused, stubControlPlane, withControlPlane, type Answer } from '@/
 import TPMProvisionPage from './page';
 
 // #2068: the provisioning page reads the TPM's platform attributes and
-// capabilities on mount, provisions with the checked keys, and clears the
+// capabilities on mount, provisions with the owner password, and clears the
 // TPM only after the operator confirms; refusals reach the operator as
 // destructive toasts carrying the server's message.
 
@@ -100,7 +100,7 @@ describe('TPMProvisionPage', () => {
     expect(screen.getByTestId('platform-device').textContent).toBe('/dev/tpmrm0');
   });
 
-  it('provisions with the checked keys and re-reads the platform', async () => {
+  it('provisions with the owner password and re-reads the platform', async () => {
     const sent = stub({
       'POST /api/v1/tpm/provision': ok({
         status: { success: true, message: 'provisioned' },
@@ -109,15 +109,16 @@ describe('TPMProvisionPage', () => {
       }),
     });
     await renderPage();
-    await type('Endorsement password', 'e');
-    await act(async () => {
-      fireEvent.click(screen.getByRole('checkbox', { name: 'Create AK' }));
-    });
+    // The daemon reads only the owner password and always creates the EK
+    // and SRK, so the page offers no endorsement password and no key boxes.
+    expect(screen.queryByLabelText('Endorsement password')).toBeNull();
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+    await type('Owner password', 'o');
     await click('Provision TPM');
     expect((await screen.findByTestId('provisioned-keys')).textContent).toBe('EK, SRK');
     const provision = sent.filter((s) => s.path === '/api/v1/tpm/provision');
     expect(provision).toHaveLength(1);
-    expect(provision[0].body).toEqual({ endorsementPassword: 'e', createEk: true, createSrk: true, createAk: true });
+    expect(provision[0].body).toEqual({ ownerPassword: 'o' });
     await toastText('TPM provisioned');
     await waitFor(() => expect(sent.filter((s) => s.path === '/api/v1/tpm/platform')).toHaveLength(2));
   });
