@@ -65,8 +65,6 @@ const (
 	KindNetworks = "networks"
 	KindClusters = "clusters"
 	KindCA       = "ca"
-	KindVRFs     = "vrfs"
-	KindServices = "services"
 )
 
 // Category suffixes. A tenant resource's keys live under either params/ (non
@@ -105,12 +103,6 @@ const (
 	NodeSecretRootPassword = "root/password"
 	NodeSecretSSHHostKey   = "ssh/host_ed25519_key"
 	NodeSecretTPMSRKAuth   = "tpm/srk_auth"
-)
-
-// Well known VRF leaf paths, under tenants/<t>/vrfs/<v>/params/.
-const (
-	// VRFParamL3VNI holds the VRF's L3 VNI.
-	VRFParamL3VNI = "l3vni"
 )
 
 // ErrInvalidID is returned by the key helpers when an id segment contains
@@ -179,17 +171,6 @@ func NodePrefix(tenant, node string) (string, error) {
 	return ResourcePath(tenant, KindNodes, node)
 }
 
-// VRFParam is a convenience for ParamPath(tenant, KindVRFs, vrf, leaf).
-func VRFParam(tenant, vrf, leaf string) (string, error) {
-	return ParamPath(tenant, KindVRFs, vrf, leaf)
-}
-
-// VRFPrefix returns the aggregation prefix for a single tenant VRF, suitable
-// for a "give me everything about this VRF" query.
-func VRFPrefix(tenant, vrf string) (string, error) {
-	return ResourcePath(tenant, KindVRFs, vrf)
-}
-
 func validateID(id string) error {
 	if id == "" {
 		return ErrInvalidID
@@ -207,7 +188,7 @@ func validateID(id string) error {
 
 func validateKind(kind string) error {
 	switch kind {
-	case KindNodes, KindNetworks, KindClusters, KindCA, KindVRFs, KindServices:
+	case KindNodes, KindNetworks, KindClusters, KindCA:
 		return nil
 	default:
 		return &MessageError{Msg: fmt.Sprintf("tenant: unknown resource kind %q", kind)}
