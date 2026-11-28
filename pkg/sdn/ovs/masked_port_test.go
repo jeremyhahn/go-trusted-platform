@@ -2,6 +2,7 @@ package ovs
 
 import (
 	"net"
+	"slices"
 	"strings"
 	"testing"
 
@@ -124,10 +125,14 @@ func TestConvertToOpenFlow_ZoneFlowRulesWithBootServers(t *testing.T) {
 	for _, in := range ingresses {
 		rules := gs.Generate("7", zone.ZoneProvisioning, in)
 		require.NotEmpty(t, rules)
-		masked := 0
+		masked, tftp := 0, 0
 		for _, r := range rules {
 			if strings.Contains(r.Match, "tp_dst=0x") {
 				masked++
+			}
+			fields := strings.Split(r.Match, ",")
+			if slices.Contains(fields, "nw_proto=17") && slices.Contains(fields, "tp_dst=69") {
+				tftp++
 			}
 			_, err := convertToOpenFlow(&FlowMod{
 				Table:    r.Table,
@@ -138,6 +143,7 @@ func TestConvertToOpenFlow_ZoneFlowRulesWithBootServers(t *testing.T) {
 			})
 			assert.NoError(t, err, "rule match=%q actions=%q cookie=%q", r.Match, r.Actions, r.Cookie)
 		}
-		assert.Equal(t, 12, masked, "masked TFTP transfer-port rules (6 per boot server)")
+		assert.Equal(t, 0, masked, "no masked TFTP transfer-port rules: the boot server answers from port 69")
+		assert.Equal(t, 2, tftp, "one exact UDP 69 rule per boot server (IPv4 and IPv6)")
 	}
 }

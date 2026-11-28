@@ -160,7 +160,28 @@ revoked device either.
 4. **Data plane → platform networks.** An admitted client reaches only the
    zones its lease names (`ManagementVPNConfig.AllowTo`), enforced by the
    gateway's zone matrix — the same compiled matrix that programs the OVS flows
-   and the trusted proxy — not by a separate VPN ACL.
+   and the trusted proxy — not by a separate VPN ACL. Traffic entering on the
+   WireGuard hub interface (`vpn-hub0`) is classified into the
+   `management-vpn` zone, which the SDN zone declarations must name; a lease
+   zone the matrix does not open from `management-vpn` is refused at peer
+   install. The hub plane is built only once this enforcement, including a
+   filter on the forwarding path of `vpn-hub0`, is installed; a missing or
+   failed install refuses the plane (`ErrVPNHubZoneUnenforced`), failing
+   closed (#2093). That filter is the `ingress` chain of the gateway's own
+   `inet tp_vpn_hub` table: for each lease it accepts the lease's address to
+   the subnets of the zones the matrix opens for it, and reply-direction
+   established/related packets only from that address to those same
+   subnets, so connection state that outlives a lease, or a re-lease of its
+   address with narrower zones, opens nothing the current lease does not;
+   and it drops everything else entering on `vpn-hub0`. Replies from
+   `vpn-hub0` to connections the gateway itself opened toward a peer are
+   accepted only when the gateway's address lies in a lease-opened zone
+   subnet. The chain is reprogrammed at every peer install,
+   removal and reconcile. The table's `forward` and `input` hook chains both
+   jump to it for `vpn-hub0` traffic, so traffic addressed to the gateway's
+   own addresses is held to the same lease zones as forwarded traffic: an
+   address outside every lease-opened zone subnet, such as the hub's own, is
+   dropped from `vpn-hub0`.
 5. **Keys.** The WireGuard server private key and the MASQUE listener's TLS
    identity are issued and stored through the SDK KMS; the WireGuard key is
    handed to the kernel at start and never written to disk in the clear.

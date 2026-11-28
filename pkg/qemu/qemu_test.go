@@ -16,7 +16,9 @@ package qemu
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1279,4 +1281,42 @@ func TestConfigValidate_InvalidDiskCache(t *testing.T) {
 	var msgErr *MessageError
 	require.ErrorAs(t, err, &msgErr)
 	assert.Contains(t, msgErr.Error(), "invalid disk cache mode")
+}
+
+// TestKill_ReachesProcessThatIgnoresSIGTERM covers the receiver kill
+// fallback: Stop sends SIGTERM and marks the VM stopped at once, so a
+// process that ignores SIGTERM must still be reachable by Kill (#2021).
+func TestKill_ReachesProcessThatIgnoresSIGTERM(t *testing.T) {
+	vm := &VM{config: &Config{}, logger: logging.DefaultLogger()}
+	vm.cmd = exec.Command("sh", "-c", "trap '' TERM; echo ready; sleep 30")
+	stdout, err := vm.cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, vm.cmd.Start())
+	t.Cleanup(func() { _ = vm.cmd.Process.Kill() })
+	// Wait until the trap is installed before sending SIGTERM.
+	buf := make([]byte, 6)
+	_, err = stdout.Read(buf)
+	require.NoError(t, err)
+	vm.running.Store(true)
+
+	waited := make(chan error, 1)
+	go func() { waited <- vm.Wait() }()
+
+	require.NoError(t, vm.Stop())
+	time.Sleep(200 * time.Millisecond)
+	require.NoError(t, vm.cmd.Process.Signal(syscall.Signal(0)), "process should survive SIGTERM")
+	select {
+	case <-waited:
+		t.Fatal("process exited on SIGTERM; the test needs one that ignores it")
+	default:
+	}
+
+	require.NoError(t, vm.Kill())
+	select {
+	case <-waited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Kill did not end a process that ignores SIGTERM")
+	}
+
+	require.ErrorIs(t, vm.Kill(), ErrVMNotRunning, "Kill after Wait reaped the process")
 }

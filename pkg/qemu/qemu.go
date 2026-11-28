@@ -53,6 +53,7 @@ type VM struct {
 	logger    *logging.Logger
 	cmd       *exec.Cmd
 	running   atomic.Bool
+	reaped    atomic.Bool // set once Wait has collected the process
 	mu        sync.Mutex
 	stdoutBuf bytes.Buffer
 	stderrBuf bytes.Buffer
@@ -538,6 +539,7 @@ func (vm *VM) Start(ctx context.Context, mode string) error {
 	}
 
 	started = true
+	vm.reaped.Store(false)
 	vm.running.Store(true)
 	vm.logger.Infof("VM started (PID: %d)", vm.cmd.Process.Pid)
 
@@ -573,6 +575,7 @@ func (vm *VM) Wait() error {
 	vm.logger.Debug("Waiting for VM to exit...")
 
 	err := cmd.Wait()
+	vm.reaped.Store(true)
 	vm.running.Store(false)
 
 	// Close monitor connection if active
@@ -745,6 +748,58 @@ func (vm *VM) ForceStop() error {
 	vm.logger.Info("VM force stopped")
 
 	return nil
+}
+
+// Kill SIGKILLs the launched process whenever Wait has not reaped it,
+// whatever vm.running says. StopWithTimeout marks the VM stopped as soon as
+// SIGTERM is sent, so ForceStop refuses a process that ignored SIGTERM;
+// Kill is the fallback that still reaches it.
+func (vm *VM) Kill() error {
+	vm.mu.Lock()
+	defer vm.mu.Unlock()
+
+	if vm.cmd == nil || vm.cmd.Process == nil || vm.reaped.Load() {
+		return ErrVMNotRunning
+	}
+
+	vm.logger.Warnf("Killing VM process (PID: %d) with SIGKILL", vm.cmd.Process.Pid)
+
+	if vm.monitor != nil {
+		_ = vm.monitor.Close()
+		vm.monitor = nil
+	}
+
+	if err := vm.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return &WrappedError{Msg: "failed to kill VM process", Err: err}
+	}
+
+	vm.running.Store(false)
+	return nil
+}
+
+// ProcessKiller returns a func that SIGKILLs the process the VM runs now and
+// never a later one: a caller that stops a run outside the VM lock (and may
+// race a new Start of the same VM) binds its kill to the run it started
+// from. Go's os.Process refuses a signal once its Wait has reaped it, so a
+// reused PID is never signalled; that answer is nil. Without a started
+// process the func answers ErrVMNotRunning.
+func (vm *VM) ProcessKiller() func() error {
+	vm.mu.Lock()
+	var proc *os.Process
+	if vm.cmd != nil {
+		proc = vm.cmd.Process
+	}
+	vm.mu.Unlock()
+
+	if proc == nil {
+		return func() error { return ErrVMNotRunning }
+	}
+	return func() error {
+		if err := proc.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return &WrappedError{Msg: "failed to kill VM process", Err: err}
+		}
+		return nil
+	}
 }
 
 // ConnectMonitor establishes a connection to the QMP socket.

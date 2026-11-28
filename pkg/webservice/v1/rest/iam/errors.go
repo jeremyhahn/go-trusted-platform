@@ -13,7 +13,12 @@
 
 package iam
 
-import "fmt"
+import (
+	"fmt"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
 
 // ErrMissingTenantID is returned when tenant ID is required but not provided
 type ErrMissingTenantID struct{}
@@ -134,6 +139,27 @@ func (e ErrAppNotFound) Error() string {
 	return fmt.Sprintf("application not found: tenant=%s, app=%s", e.TenantID, e.AppID)
 }
 
+// ErrAppOperationUnsupported is returned when the pinned IAM service does not
+// implement an app verb (the embedded transport dispatches only App
+// Register/Get/List/Delete). It answers codes.Unimplemented (HTTP 501) and is
+// never a success.
+type ErrAppOperationUnsupported struct {
+	Op  string
+	Err error
+}
+
+func (e ErrAppOperationUnsupported) Error() string {
+	return fmt.Sprintf("%s is not implemented by the pinned IAM service: %v", e.Op, e.Err)
+}
+
+// Unwrap returns the upstream error.
+func (e ErrAppOperationUnsupported) Unwrap() error { return e.Err }
+
+// GRPCStatus answers codes.Unimplemented.
+func (e ErrAppOperationUnsupported) GRPCStatus() *status.Status {
+	return status.New(codes.Unimplemented, e.Error())
+}
+
 // ErrInvalidPolicySpec is returned when policy spec is invalid
 type ErrInvalidPolicySpec struct {
 	Reason string
@@ -216,6 +242,15 @@ type ErrPEPClientMissing struct{}
 
 func (e ErrPEPClientMissing) Error() string {
 	return "rest/iam: no policy enforcement point is wired to check permissions"
+}
+
+// ErrTokenVerifierMissing is returned when a token verification reaches a
+// router built without a TokenVerifier: the route answers 503 rather than
+// a verdict.
+type ErrTokenVerifierMissing struct{}
+
+func (e ErrTokenVerifierMissing) Error() string {
+	return "rest/iam: no token verifier is wired to verify tokens"
 }
 
 // ErrRoleClientMissing is returned when role references are resolved without

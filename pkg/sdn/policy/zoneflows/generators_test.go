@@ -249,7 +249,7 @@ func TestProvisioning_TFTPReachesOnlyBootServers(t *testing.T) {
 // The TFTP server answers each transfer from an ephemeral UDP port, so the
 // device's ACKs to that port need an allowance: UDP 1024-65535, to the boot
 // servers only.
-func TestProvisioning_TFTPTransferPortReachesOnlyBootServers(t *testing.T) {
+func TestProvisioning_UnrelatedUDPToBootServerDenied(t *testing.T) {
 	deny := zoneflows.FlowRule{Table: 0, Priority: 200,
 		Match: "in_port=7,dl_vlan=100,dl_type=0x0800,nw_dst=198.51.100.0/24", Actions: "drop"}
 	udp4 := func(dst, port string) map[string]string {
@@ -267,28 +267,86 @@ func TestProvisioning_TFTPTransferPortReachesOnlyBootServers(t *testing.T) {
 
 	gs.SetProvisioningBootServers(net.ParseIP("192.0.2.10"), net.ParseIP("2001:db8::10"))
 	rules = append(gs.Generate("7", zone.ZoneProvisioning, zoneflows.Untagged(100)), deny)
-	for _, r := range rules {
-		if strings.Contains(r.Match, "tp_dst=0x") {
-			t.Logf("provisioning flow: priority=%d %s actions=%s", r.Priority, r.Match, r.Actions)
-		}
+	// The TFTP server answers every transfer from port 69, so 69 is the
+	// only UDP port a provisioning device may reach on a boot server.
+	if w, ok := winner(rules, udp4("192.0.2.10", "69")); !ok || w.Actions != "normal" {
+		t.Errorf("UDP 69 to the IPv4 boot server: winner %q (%s), want a normal rule", w.Match, w.Actions)
 	}
-	for _, port := range []string{"49152", "1024", "65535"} {
-		if w, ok := winner(rules, udp4("192.0.2.10", port)); !ok || w.Actions != "normal" {
-			t.Errorf("UDP %s to the IPv4 boot server: winner %q (%s), want a normal rule", port, w.Match, w.Actions)
+	if w, ok := winner(rules, udp6("2001:db8::10", "69")); !ok || w.Actions != "normal" {
+		t.Errorf("UDP 69 to the IPv6 boot server: winner %q (%s), want a normal rule", w.Match, w.Actions)
+	}
+	for _, port := range []string{"4789", "9444", "49152", "1024", "65535"} {
+		if w, ok := winner(rules, udp4("192.0.2.10", port)); !ok || w.Actions != "drop" {
+			t.Errorf("UDP %s to the IPv4 boot server: winner %q (%s, priority %d), want a drop", port, w.Match, w.Actions, w.Priority)
 		}
-		if w, ok := winner(rules, udp6("2001:db8::10", port)); !ok || w.Actions != "normal" {
-			t.Errorf("UDP %s to the IPv6 boot server: winner %q (%s), want a normal rule", port, w.Match, w.Actions)
+		if w, ok := winner(rules, udp6("2001:db8::10", port)); !ok || w.Actions != "drop" {
+			t.Errorf("UDP %s to the IPv6 boot server: winner %q (%s, priority %d), want a drop", port, w.Match, w.Actions, w.Priority)
 		}
 	}
 	if w, ok := winner(rules, udp4("198.51.100.7", "49152")); !ok || w.Actions != "drop" {
 		t.Errorf("UDP 49152 to a denied destination: winner %q (%s), want a drop", w.Match, w.Actions)
 	}
-	if w, ok := winner(rules, udp4("192.0.2.10", "1023")); !ok || w.Actions != "drop" {
-		t.Errorf("UDP 1023 to the boot server: winner %q (%s, priority %d), want a drop", w.Match, w.Actions, w.Priority)
-	}
 	tcp := map[string]string{"dl_type": "0x0800", "nw_proto": "6", "nw_dst": "192.0.2.10", "tp_dst": "49152"}
 	if w, ok := winner(rules, tcp); !ok || w.Actions != "drop" {
 		t.Errorf("TCP 49152 to the boot server: winner %q (%s), want a drop", w.Match, w.Actions)
+	}
+}
+
+// TestMatrixServiceRules_ScopedToDestinationZone proves a service permit
+// for one destination zone does not open the same service toward a zone
+// the matrix denies: service permits sit above the destination denies, so
+// each must carry its destination subnet. DHCP client broadcasts (to
+// 255.255.255.255 and ff02::1:2) still match, since a client has no
+// unicast destination before it holds a lease.
+func TestMatrixServiceRules_ScopedToDestinationZone(t *testing.T) {
+	zones := []zone.ZoneConfig{
+		{
+			Name:    zone.ZoneProvisioning,
+			Isolate: true,
+			AllowTo: []zone.ZonePath{
+				{Zone: zone.ZoneStorage, Services: []string{"tftp", "dhcp"}},
+			},
+		},
+		{Name: zone.ZoneStorage},
+		{Name: zone.ZoneBackup},
+	}
+	nets := map[zone.Zone]zoneflows.NetworkSummary{
+		zone.ZoneProvisioning: {VLAN: 201, Subnet: "192.0.2.0/24", Subnet6: "2001:db8:1::/64"},
+		zone.ZoneStorage:      {VLAN: 202, Subnet: "198.51.100.0/24", Subnet6: "2001:db8:2::/64"},
+		zone.ZoneBackup:       {VLAN: 203, Subnet: "203.0.113.0/24", Subnet6: "2001:db8:3::/64"},
+	}
+	rules := zoneflows.CompileMatrixRulesForPort(zoneflows.MatrixRuleConfig{
+		Matrix:         zone.CompileMatrix(zones),
+		Zones:          zones,
+		NetworksByZone: nets,
+	}, "7", zone.ZoneProvisioning)
+	udp4 := func(dst, port string) map[string]string {
+		return map[string]string{"dl_type": "0x0800", "nw_proto": "17", "nw_dst": dst, "tp_dst": port}
+	}
+	udp6 := func(dst, port string) map[string]string {
+		return map[string]string{"dl_type": "0x86dd", "nw_proto": "17", "ipv6_dst": dst, "tp_dst": port}
+	}
+
+	for _, tc := range []struct {
+		name string
+		pkt  map[string]string
+		want string
+	}{
+		{"IPv4 TFTP to the allowed zone", udp4("198.51.100.10", "69"), "normal"},
+		{"IPv4 TFTP to the denied zone", udp4("203.0.113.10", "69"), "drop"},
+		{"IPv6 TFTP to the allowed zone", udp6("2001:db8:2::10", "69"), "normal"},
+		{"IPv6 TFTP to the denied zone", udp6("2001:db8:3::10", "69"), "drop"},
+		{"DHCPv4 to the allowed zone", udp4("198.51.100.10", "67"), "normal"},
+		{"DHCPv4 to the denied zone", udp4("203.0.113.10", "67"), "drop"},
+		{"DHCPv6 to the allowed zone", udp6("2001:db8:2::10", "547"), "normal"},
+		{"DHCPv6 to the denied zone", udp6("2001:db8:3::10", "547"), "drop"},
+		{"DHCPv4 client broadcast", udp4("255.255.255.255", "67"), "normal"},
+		{"DHCPv6 client multicast", udp6("ff02::1:2", "547"), "normal"},
+	} {
+		w, ok := winner(rules, tc.pkt)
+		if !ok || w.Actions != tc.want {
+			t.Errorf("%s: winner %q (%s, priority %d), want %s", tc.name, w.Match, w.Actions, w.Priority, tc.want)
+		}
 	}
 }
 

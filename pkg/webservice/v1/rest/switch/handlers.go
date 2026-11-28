@@ -230,6 +230,12 @@ func (h *Handlers) extractSwitchAndPort(w http.ResponseWriter, r *http.Request) 
 		h.responseWriter.Error400(w, r, ErrMissingPortName{})
 		return "", "", false
 	}
+	// The port name reaches switch CLI text, so it must be one interface
+	// identifier before any manager is called.
+	if err := switchmgmt.ValidatePortName(portName); err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return "", "", false
+	}
 
 	return switchName, portName, true
 }
@@ -246,11 +252,24 @@ func decodeVar(raw string) string {
 
 // handlePortError translates switchmgmt errors to appropriate HTTP responses:
 // a port the switch does not have is 404 for every port operation, so the
-// SDK sees NotFound whether it reads or changes the port (#452).
+// SDK sees NotFound whether it reads or changes the port (#452). An invalid
+// config or a malformed port range from the manager, bare or wrapped, is the
+// caller's input and answers 400 (#2066); anything else is 500.
 func (h *Handlers) handlePortError(w http.ResponseWriter, r *http.Request, switchName, portName, operation string, err error) {
 	var notFound switchmgmt.ErrPortNotFound
 	if errors.As(err, &notFound) {
 		h.responseWriter.Error404(w, r, ErrPortOperationFailed{
+			Operation: operation,
+			Switch:    switchName,
+			Port:      portName,
+			Cause:     err,
+		})
+		return
+	}
+	var invalidConfig switchmgmt.ErrInvalidConfig
+	var invalidRange switchmgmt.ErrInvalidPortRange
+	if errors.As(err, &invalidConfig) || errors.As(err, &invalidRange) {
+		h.responseWriter.Error400(w, r, ErrPortOperationFailed{
 			Operation: operation,
 			Switch:    switchName,
 			Port:      portName,

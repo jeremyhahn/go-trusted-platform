@@ -462,14 +462,26 @@ func serviceFlowRules(f family, ingress string, toSubnet, service string, priori
 
 	switch service {
 	case "dhcp":
-		flows = append(flows,
-			FlowRule{
-				Table:    0,
-				Priority: priority,
-				Match:    fmt.Sprintf("%s,%s", ingress, f.dhcpMatch()),
-				Actions:  "normal",
-			},
-		)
+		// Unicast DHCP only toward the destination zone: the permit sits
+		// above the matrix denies, so an unscoped match would open the
+		// server port toward every denied zone too (#1896). A client
+		// without a lease sends to the all-servers broadcast (DHCPv4) or
+		// multicast group (DHCPv6), which no zone subnet contains.
+		client, server, bcast := portDHCPClient, portDHCPServer, "255.255.255.255"
+		if f.name == ipv6.name {
+			client, server, bcast = portDHCP6Client, portDHCP6Server, "ff02::1:2"
+		}
+		ports := fmt.Sprintf("nw_proto=17,tp_src=%d,tp_dst=%d", client, server)
+		for _, dst := range []string{toSubnet, bcast} {
+			flows = append(flows,
+				FlowRule{
+					Table:    0,
+					Priority: priority,
+					Match:    fmt.Sprintf("%s,%s", ingress, f.ipMatch(ports, f.toDst(dst))),
+					Actions:  "normal",
+				},
+			)
+		}
 	case "dns":
 		for _, p := range []uint16{portDNS, portDNSAlt1, portDNSAlt2} {
 			flows = append(flows,
@@ -503,7 +515,7 @@ func serviceFlowRules(f family, ingress string, toSubnet, service string, priori
 			FlowRule{
 				Table:    0,
 				Priority: priority,
-				Match:    fmt.Sprintf("%s,%s", ingress, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portTFTP))),
+				Match:    fmt.Sprintf("%s,%s", ingress, f.ipMatch("nw_proto=17", f.toDst(toSubnet), fmt.Sprintf("tp_dst=%d", portTFTP))),
 				Actions:  "normal",
 			},
 		)
@@ -660,12 +672,8 @@ func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 	// UDP 69.
 	flows = append(flows, gs.serverRules(portID, in, prioTFTP, "nw_proto=17", cfg.BootServerIPs, []uint16{portTFTP})...)
 
-	// TFTP transfers: the TFTP server answers each read request from a
-	// fresh ephemeral UDP port, and table 0 forwards with normal (no
-	// conntrack), so the device's ACKs to that port need their own
-	// allowance. UDP 1024-65535, to the boot servers only; with no boot
-	// server nothing opens.
-	flows = append(flows, gs.serverMaskedPortRules(portID, in, prioTFTP, "nw_proto=17", cfg.BootServerIPs, tftpTransferPorts)...)
+	// TFTP transfers ride port 69 too: the PXE TFTP server runs in
+	// single-port mode, so no other UDP port to a boot server opens.
 
 	// PXE boot server ports (iPXE boot script and payloads, NBD), each only
 	// to a boot server in its own family. A destination-unrestricted allow
@@ -735,36 +743,6 @@ func (gs *GeneratorSet) serverRules(portID string, in Ingress, priority int, pro
 				Table:    0,
 				Priority: priority,
 				Match:    matchInVLAN(portID, in, f.ipMatch(proto, f.toDst(ip.String()), fmt.Sprintf("tp_dst=%d", p))),
-				Actions:  "normal",
-			})
-		}
-	}
-	return flows
-}
-
-// tftpTransferPorts is UDP 1024-65535 as OVS masked tp_dst matches
-// (value/mask): the range a TFTP server picks its transfer port from.
-var tftpTransferPorts = []string{
-	"0x0400/0xfc00", // 1024-2047
-	"0x0800/0xf800", // 2048-4095
-	"0x1000/0xf000", // 4096-8191
-	"0x2000/0xe000", // 8192-16383
-	"0x4000/0xc000", // 16384-32767
-	"0x8000/0x8000", // 32768-65535
-}
-
-// serverMaskedPortRules is serverRules for masked port matches: each server
-// address gets one rule per value/mask port in its own family, and with no
-// server configured it emits nothing.
-func (gs *GeneratorSet) serverMaskedPortRules(portID string, in Ingress, priority int, proto string, servers []net.IP, ports []string) []FlowRule {
-	var flows []FlowRule
-	for _, ip := range servers {
-		f := familyOf(ip)
-		for _, p := range ports {
-			flows = append(flows, FlowRule{
-				Table:    0,
-				Priority: priority,
-				Match:    matchInVLAN(portID, in, f.ipMatch(proto, f.toDst(ip.String()), "tp_dst="+p)),
 				Actions:  "normal",
 			})
 		}

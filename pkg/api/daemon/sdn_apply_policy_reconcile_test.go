@@ -20,6 +20,8 @@ package daemon
 
 import (
 	"context"
+	"fmt"
+	"hash/fnv"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
@@ -253,4 +255,67 @@ func TestSDNService_ApplyPolicy_ConflictKeyUsesCanonicalMatch(t *testing.T) {
 			assert.ElementsMatch(t, before, fake.matches(t, "br0"))
 		})
 	}
+}
+
+// Flows written before per-rule cookies carry the policy's legacy cookie,
+// owner bits over the low 48 bits of the policy id's FNV-64a hash.
+func TestApplyPolicy_AdoptsLegacyNonzeroCookieFlows(t *testing.T) {
+	ctx := context.Background()
+	seed := func(t *testing.T, owner string) (*SDNService, *replacingOVS) {
+		t.Helper()
+		svc, fake := newReplacingOVSFixture(t)
+		_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+		require.NoError(t, err)
+		fake.mu.Lock()
+		for _, fl := range fake.flows["br0"] {
+			fl.Cookie = fmt.Sprintf("0x%x", testLegacyPolicyCookie(owner))
+		}
+		fake.mu.Unlock()
+		// A restarted daemon: no record of the pre-upgrade flows.
+		fresh, err := NewSDNService("", WithOVSClient(fake))
+		require.NoError(t, err)
+		return fresh, fake
+	}
+	cookies := func(t *testing.T, fake *replacingOVS) []string {
+		t.Helper()
+		flows, err := fake.ListFlows(ctx, "br0")
+		require.NoError(t, err)
+		out := make([]string, 0, len(flows))
+		for _, fl := range flows {
+			out = append(out, fl.Cookie)
+		}
+		return out
+	}
+
+	t.Run("own legacy flows are adopted and restored on a failed apply", func(t *testing.T) {
+		svc, fake := seed(t, "p1")
+		legacy := fmt.Sprintf("0x%x", testLegacyPolicyCookie("p1"))
+
+		fake.failAddOn = fake.addCalls + 2
+		_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+		require.Equal(t, codes.Internal, status.Code(err), "err = %v", err)
+		assert.Equal(t, []string{legacy, legacy}, cookies(t, fake))
+
+		fake.failAddOn = 0
+		_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{
+			fmt.Sprintf("0x%x", policyFlowCookie("p1", 0)),
+			fmt.Sprintf("0x%x", policyFlowCookie("p1", 1)),
+		}, cookies(t, fake))
+	})
+
+	t.Run("another policy's legacy flow is foreign", func(t *testing.T) {
+		svc, fake := seed(t, "other")
+		before := cookies(t, fake)
+		_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+		require.Equal(t, codes.FailedPrecondition, status.Code(err), "err = %v", err)
+		assert.Equal(t, before, cookies(t, fake))
+	})
+}
+
+func testLegacyPolicyCookie(policyID string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(policyID))
+	return policyFlowCookieOwner | h.Sum64()&(1<<48-1)
 }

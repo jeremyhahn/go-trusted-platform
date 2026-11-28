@@ -61,6 +61,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vpn"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
@@ -265,7 +266,10 @@ type Daemon struct {
 	zoneSvc     gateway.ZoneService
 
 	// Concrete server references for accessor methods (set only for real servers)
-	concreteRestServer    *RESTServer
+	concreteRestServer *RESTServer
+	// restGuard is the REST scope guard every daemon REST route runs behind;
+	// MountSwitchREST mounts the switch routes behind it after construction.
+	restGuard             *restapi.ScopeGuard
 	concreteMcpServer     *mcp.Server
 	concreteGrpcUDSServer *grpc.Server // Store concrete gRPC UDS server for service registration
 
@@ -953,6 +957,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		})
 	}
 	eabGRPCService := NewEABGRPCService(logger, eabServicer, eabDeliveryServicer)
+	eabGRPCService.SetSystemTenant(config.PlatformTenantID)
 	if grpcServer != nil {
 		platformv1.RegisterEABServiceServer(grpcServer, eabGRPCService)
 	}
@@ -1069,9 +1074,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("Cache, Scheduler, Messaging and ObjectStorage gRPC services registered")
 
-	// Create the Switch gRPC service. It has no switch backend yet, so every
-	// method answers Unavailable (not configured); the QUIC opcodes, the MCP
-	// tools and the embedded transport call this same servicer.
+	// Create the Switch gRPC service. It starts with no backend; serve builds
+	// the switch service from the switches config block and wires it in
+	// through SetSwitchService. When no switch is configured every method
+	// answers Unavailable (not configured). The QUIC opcodes, the MCP tools
+	// and the embedded transport call this same servicer.
 	switchGRPCService := NewSwitchGRPCService(logger, nil)
 	if grpcServer != nil {
 		platformv1.RegisterSwitchServiceServer(grpcServer, switchGRPCService)
@@ -1519,6 +1526,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			logger.Error(constructErr, "component", "rest_server")
 			return nil, constructErr
 		}
+		daemon.restGuard = restGuard
 		if ntpGRPCService != nil {
 			daemon.concreteRestServer.SetNTPHandlers(ntpGRPCService, restGuard)
 		}
@@ -1636,6 +1644,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			if sdkPEP := iamService.PEP(); sdkPEP != nil {
 				iamRESTPEP = restiam.NewQuicBaaSPEPAdapter(sdkPEP)
 			}
+			daemon.concreteRestServer.SetIAMTokenService(iamTokenService)
 			iamErr := daemon.concreteRestServer.SetIAMHandlers(logger, restiam.NewQuicBaaSIAMAdapter(iamService.Client()), iamRESTPEP, restGuard, config.PlatformTenantID)
 			if iamErr != nil {
 				constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: iamErr}
@@ -2137,16 +2146,24 @@ func pxeGRPCServiceWithStore(ctx context.Context, logger *logging.Logger, a *app
 	if section == nil || !section.Enabled {
 		return svc, nil
 	}
+	// SDNConfig.Zones holds the raw operator overrides; the plan is built
+	// from the resolved zones (the overrides merged onto the built-ins), as
+	// sdn.Config.Validate builds it, so a config that tunes one zone still
+	// carries quarantine and provisioning at their built-in offsets.
 	var plan *netplan.Plan
-	if zones, env := zoneServiceSeed(a); env != nil {
-		if len(zones) == 0 {
-			zones = zone.Defaults()
+	if a != nil && a.SDNConfig != nil && a.SDNConfig.Enabled && a.SDNConfig.Environment != nil {
+		plan = a.SDNConfig.Plan()
+		if plan == nil {
+			resolved, err := zone.Resolve(a.SDNConfig.Zones)
+			if err != nil {
+				return nil, err
+			}
+			p, err := netplan.New(*a.SDNConfig.Environment, resolved)
+			if err != nil {
+				return nil, err
+			}
+			plan = p
 		}
-		p, err := netplan.New(*env, zones)
-		if err != nil {
-			return nil, err
-		}
-		plan = p
 	}
 	// http-port+1 is the device-script port, so 65535 cannot carry both;
 	// refused here as well as by the config (a second line).
@@ -4141,6 +4158,16 @@ func (d *Daemon) SwitchService() *SwitchGRPCService {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.switchGRPCService
+}
+
+// MountSwitchREST mounts the switch port routes on the daemon REST listener
+// behind the REST scope guard. It is a no-op without a REST listener or a
+// switch service; a refused mount is returned so startup stops.
+func (d *Daemon) MountSwitchREST(svc device.SwitchServiceProvider) error {
+	if d.concreteRestServer == nil || svc == nil {
+		return nil
+	}
+	return d.concreteRestServer.SetSwitchHandlers(svc, d.restGuard)
 }
 
 // BMCService returns the BMC gRPC service, or nil when not wired.

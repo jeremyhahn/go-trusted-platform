@@ -62,11 +62,11 @@ service) `503`, and anything else `500`. The daemon's error body is
 | `POST /vlans` | `CreateVLANRequest` | `CreateVLANResponse` | both |
 | `GET /vlans?bridge_id=` | `ListVLANsRequest` (optional) | `ListVLANsResponse` | both |
 | `POST`, `GET` `/bridges/{bridge_id}/vlans` | as `/vlans` | as `/vlans` | webservice |
-| `DELETE /vlans/{vlan_id}?bridge_id=` | — | `DeleteVLANResponse` | daemon |
+| `DELETE /vlans/{vlan_id}?bridge_id=` | — | `DeleteVLANResponse` | both |
 | `POST /policies` | `ApplyPolicyRequest` | `ApplyPolicyResponse` | both (webservice answers `201`) |
 | `GET /policies` | `ListPoliciesRequest` (optional) | `ListPoliciesResponse` | both |
 | `GET /policies/{policy_id}` | — | `GetPolicyResponse` | both |
-| `DELETE /policies/{policy_id}` | — | `DeletePolicyResponse` | daemon |
+| `DELETE /policies/{policy_id}` | — | `DeletePolicyResponse` | both |
 
 ### Scopes (daemon stack, #997)
 
