@@ -54,6 +54,18 @@ includes any trailing `:tag`; the handler splits it.
 `ListImages` and `PushImage` are each registered on both `""` and `"/"` so a
 trailing slash does not 404.
 
+**The SDK REST client (#1970, #1971).** `RegistryService.List`, `Status`,
+`Inspect` and `Delete` over the SDK REST transport reach these routes
+(`sdk/go/transport/rest/registry_reads.go`, `registry_delete.go`). `List`
+sends `repository`, `limit` and `offset` as query parameters and reads
+`images` and `total`; there is no cursor, `has_more` or other pagination over
+REST. `Inspect` and `Delete` need both `repository` and `reference` and send
+`{repository}:{reference}` in the path; an empty one is refused with
+`InvalidArgument` before the wire, so a digest-only `Inspect` is not carried
+over REST. `Inspect` decodes the artifact and its tags only, never signatures
+or scan results. The daemon serves none of these routes
+(`pkg/api/daemon/rest_route_claims_test.go` `registryImagesOnWebservice`).
+
 **QUIC carries no registry opcode.** Grepped `pkg/api/quic/` on 2026-08-18: no
 `Op*Registry*` or `Op*Image*` constant exists. Registry is a Tier 1 platform
 capability, so this is a real six-transport hole and belongs in the gap register

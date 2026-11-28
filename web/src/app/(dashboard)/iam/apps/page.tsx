@@ -7,11 +7,12 @@
  * Uses the trusted-platform-sdk for API interactions.
  */
 
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useCallback, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ColumnDef } from '@tanstack/react-table';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCapabilities } from '@/hooks/use-capabilities';
 import { DataTable, createSelectColumn } from '@/components/ui/data-table';
 import { DataTableColumnHeader } from '@/components/ui/data-table-column-header';
 import { DataTableRowActions } from '@/components/ui/data-table-row-actions';
@@ -37,11 +38,15 @@ interface DisplayApplication {
 /**
  * Applications list page component
  */
+/** The server's op the Rotate Secret action performs (#2054). */
+const ROTATE_OP = 'POST /api/v1/iam/tenants/{tenant}/apps/{id}/rotate';
+
 export default function AppsPage() {
   const router = useRouter();
   const { toast } = useToast();
   const { tenantId, isLoading: authLoading } = useAuth();
   const iam = useIAM();
+  const rotate = useCapabilities().capability(ROTATE_OP);
 
   // Fetch applications using SDK
   const {
@@ -107,6 +112,51 @@ export default function AppsPage() {
       },
     }
   );
+
+  // The rotated secret is shown once, until dismissed (#2054).
+  const [rotatedSecret, setRotatedSecret] = useState<{ name: string; secret: string } | null>(null);
+
+  // Rotate secret mutation
+  const rotateSecretMutation = useMutation(
+    async (clientId: string) => {
+      if (!tenantId) {
+        throw new Error('No tenant ID available');
+      }
+      return iam.rotateAppSecret(tenantId, clientId);
+    },
+    {
+      onSuccess: (data, clientId) => {
+        // The REST handler writes snake_case client_secret; the SDK type
+        // names it clientSecret.
+        const secret =
+          data?.clientSecret ?? (data as { client_secret?: string } | undefined)?.client_secret;
+        toast({
+          title: 'Client secret rotated',
+          variant: 'success',
+        });
+        if (secret) {
+          setRotatedSecret({ name: data?.name || clientId, secret });
+        }
+      },
+      onError: (error) => {
+        toast({
+          title: 'Error rotating secret',
+          description: error.message,
+          variant: 'destructive',
+        });
+      },
+    }
+  );
+
+  const handleRotateSecret = useCallback((app: DisplayApplication) => {
+    if (
+      window.confirm(
+        `Rotate the client secret of "${app.name}"? The old secret stops working at once.`
+      )
+    ) {
+      rotateSecretMutation.mutate(app.clientId);
+    }
+  }, [rotateSecretMutation]);
 
   const handleView = useCallback((app: DisplayApplication) => {
     router.push(`/iam/apps/${app.clientId}`);
@@ -234,13 +284,10 @@ export default function AppsPage() {
               },
               {
                 label: 'Rotate Secret',
-                onClick: () => {
-                  toast({
-                    title: 'Feature coming soon',
-                    description: 'Secret rotation will be available in a future update',
-                  });
-                },
+                onClick: () => handleRotateSecret(app),
                 separator: true,
+                disabled: !rotate.enabled,
+                title: rotate.enabled ? undefined : rotate.reason,
               },
               {
                 label: 'Delete',
@@ -252,7 +299,7 @@ export default function AppsPage() {
         );
       },
     },
-  ], [handleView, handleEdit, handleDelete, toast]);
+  ], [handleView, handleEdit, handleDelete, handleRotateSecret, rotate.enabled, rotate.reason]);
 
   // Show auth loading state
   if (authLoading) {
@@ -320,6 +367,29 @@ export default function AppsPage() {
           Register Application
         </Button>
       </div>
+
+      {rotatedSecret && (
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>New client secret for {rotatedSecret.name}</AlertTitle>
+          <AlertDescription>
+            <p>
+              Copy this secret now: it is shown only once and cannot be read back.
+            </p>
+            <code className="mt-2 block break-all rounded bg-muted px-2 py-1 text-xs">
+              {rotatedSecret.secret}
+            </code>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-2"
+              onClick={() => setRotatedSecret(null)}
+            >
+              Dismiss
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-3">

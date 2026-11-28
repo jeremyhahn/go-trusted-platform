@@ -16,6 +16,8 @@ package iam
 import (
 	"context"
 	"errors"
+	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -24,6 +26,8 @@ import (
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/transport/embedded"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,38 +35,7 @@ import (
 // IAM Policy YAML document. Returns nil when the YAML cannot be parsed;
 // callers should treat that as "no rules" and substitute a default.
 func parsePolicyRulesFromYAML(specYAML string) []iamsdk.Rule {
-	if specYAML == "" {
-		return nil
-	}
-	var doc struct {
-		Spec struct {
-			Rules []struct {
-				Name      string                   `yaml:"name"`
-				Effect    string                   `yaml:"effect"`
-				Priority  int                      `yaml:"priority"`
-				Actions   []string                 `yaml:"actions"`
-				Resources []string                 `yaml:"resources"`
-				When      []map[string]interface{} `yaml:"when"`
-				Unless    []map[string]interface{} `yaml:"unless"`
-			} `yaml:"rules"`
-		} `yaml:"spec"`
-		Rules []struct {
-			Name      string                   `yaml:"name"`
-			Effect    string                   `yaml:"effect"`
-			Priority  int                      `yaml:"priority"`
-			Actions   []string                 `yaml:"actions"`
-			Resources []string                 `yaml:"resources"`
-			When      []map[string]interface{} `yaml:"when"`
-			Unless    []map[string]interface{} `yaml:"unless"`
-		} `yaml:"rules"`
-	}
-	if err := yaml.Unmarshal([]byte(specYAML), &doc); err != nil {
-		return nil
-	}
-	src := doc.Spec.Rules
-	if len(src) == 0 {
-		src = doc.Rules
-	}
+	src := policyYAMLRules(specYAML)
 	if len(src) == 0 {
 		return nil
 	}
@@ -89,6 +62,106 @@ func parsePolicyRulesFromYAML(specYAML string) []iamsdk.Rule {
 		})
 	}
 	return out
+}
+
+// policyYAMLRule is one rule of a policy document, under `spec.rules` or a
+// top-level `rules`.
+type policyYAMLRule struct {
+	Name      string   `yaml:"name"`
+	Effect    string   `yaml:"effect"`
+	Priority  int      `yaml:"priority"`
+	Actions   []string `yaml:"actions"`
+	Resources []string `yaml:"resources"`
+	// Any form of condition, so that one in an unexpected shape is still
+	// seen and refused rather than failing the parse.
+	When   interface{} `yaml:"when"`
+	Unless interface{} `yaml:"unless"`
+}
+
+// policyYAMLRules returns the rules of a policy document, `spec.rules` first
+// and a top-level `rules` otherwise; nil when there are none or the document
+// does not parse.
+func policyYAMLRules(specYAML string) []policyYAMLRule {
+	if specYAML == "" {
+		return nil
+	}
+	var doc struct {
+		Spec struct {
+			Rules []policyYAMLRule `yaml:"rules"`
+		} `yaml:"spec"`
+		Rules []policyYAMLRule `yaml:"rules"`
+	}
+	if err := yaml.Unmarshal([]byte(specYAML), &doc); err != nil {
+		return nil
+	}
+	if len(doc.Spec.Rules) > 0 {
+		return doc.Spec.Rules
+	}
+	return doc.Rules
+}
+
+// policyRuleCondition names the first rule of a policy document carrying a
+// `when` or `unless` condition, and which; kind is "" when none does.
+func policyRuleCondition(specYAML string) (rule, kind string) {
+	for _, r := range policyYAMLRules(specYAML) {
+		switch {
+		case r.When != nil:
+			return r.Name, "when"
+		case r.Unless != nil:
+			return r.Name, "unless"
+		}
+	}
+	return "", ""
+}
+
+// policySubjects reports whether the policy YAML carries a non-empty subject
+// selector, under spec.subjects or a top-level subjects key. The pinned
+// backend stores only the flat rules and drops the selector, and an empty
+// selector matches every subject.
+func policySubjects(specYAML string) (bool, error) {
+	if specYAML == "" {
+		return false, nil
+	}
+	var doc struct {
+		Spec struct {
+			Subjects interface{} `yaml:"subjects"`
+		} `yaml:"spec"`
+		Subjects interface{} `yaml:"subjects"`
+	}
+	// policyYAMLRules decodes a struct without the selector, so its rules
+	// can survive a selector that fails to decode here; refuse the
+	// document rather than create those rules for every subject.
+	if err := yaml.Unmarshal([]byte(specYAML), &doc); err != nil {
+		return false, fmt.Errorf("policy subjects could not be decoded: %w", err)
+	}
+	found := false
+	for _, v := range []interface{}{doc.Spec.Subjects, doc.Subjects} {
+		switch s := v.(type) {
+		case nil:
+		case map[string]interface{}:
+			if len(s) > 0 {
+				found = true
+			}
+		default:
+			// A list or scalar is a malformed selector, not an absent one:
+			// the rules would still reach the upstream and apply to every
+			// subject.
+			return false, fmt.Errorf("policy subjects must be a mapping, got %T", v)
+		}
+	}
+	return found, nil
+}
+
+// policyRuleBadEffect names the first rule of a policy document whose effect
+// is neither "allow" nor "deny", and that effect; bad is false when every
+// rule's effect is one of the two.
+func policyRuleBadEffect(specYAML string) (rule, effect string, bad bool) {
+	for _, r := range policyYAMLRules(specYAML) {
+		if r.Effect != "allow" && r.Effect != "deny" {
+			return r.Name, r.Effect, true
+		}
+	}
+	return "", "", false
 }
 
 // QuicBaaSIAMAdapter wraps a quicbaassdk.IAMClient to satisfy the
@@ -400,6 +473,28 @@ func (a *QuicBaaSIAMAdapter) CreatePolicy(ctx context.Context, tenantID string, 
 		SpecYAML:    []byte(req.SpecYAML),
 		Labels:      req.Labels,
 	}
+	// The pinned upstream persists only the flat Rules and drops the subject
+	// selector; its evaluator treats an empty selector as every subject, so
+	// a subject-scoped policy would apply to everyone. Refuse it first.
+	hasSubjects, err := policySubjects(req.SpecYAML)
+	if err != nil {
+		return nil, ErrInvalidRequestBody{Reason: err.Error()}
+	}
+	if hasSubjects {
+		return nil, ErrInvalidRequestBody{Reason: "policy subjects (spec.subjects) are not persisted by the IAM backend, which would apply the rules to every subject; remove them"}
+	}
+	// The flat Rules translation maps every effect but "deny" to allow, and
+	// the pinned upstream never sees the original value: refuse any other
+	// effect before anything is created.
+	if rule, effect, bad := policyRuleBadEffect(req.SpecYAML); bad {
+		return nil, ErrInvalidRequestBody{Reason: fmt.Sprintf("policy rule %q has effect %q; it must be allow or deny", rule, effect)}
+	}
+	// The pinned upstream persists only the flat Rules, which carry no
+	// conditions, and ignores SpecYAML: a conditional rule would be stored
+	// as an unconditional one. Refuse it before anything is created.
+	if rule, kind := policyRuleCondition(req.SpecYAML); kind != "" {
+		return nil, ErrInvalidRequestBody{Reason: fmt.Sprintf("policy rule %q has a %q condition, which the IAM backend does not support; remove it", rule, kind)}
+	}
 	// The IAM SDK validates `req.Rules` length at create time even when
 	// SpecYAML carries the canonical document. The REST contract only
 	// surfaces SpecYAML; parse the YAML's `spec.rules` into the SDK's
@@ -430,20 +525,35 @@ func (a *QuicBaaSIAMAdapter) GetPolicy(ctx context.Context, tenantID, policyName
 	return decodePolicy(tenantID, p), nil
 }
 
+// ListPolicies returns the page [offset, offset+limit) of the tenant's
+// policies, or every policy from offset when limit <= 0. The upstream pages
+// by cursor, so the adapter walks it from the start until it holds
+// offset+limit policies or the upstream has no more, and reports the
+// upstream total.
 func (a *QuicBaaSIAMAdapter) ListPolicies(ctx context.Context, tenantID string, limit, offset int32) (*ListPoliciesResponse, error) {
-	sdkReq := &iamsdk.ListPoliciesRequest{}
-	if limit > 0 {
-		sdkReq.Limit = int(limit)
+	if offset < 0 {
+		offset = 0
 	}
-	resp, err := a.client.Policy().List(ctx, tenantID, sdkReq)
+	// The pinned upstream transports apply Limit to the head of the
+	// collection and return no cursor and no total, so the whole collection
+	// is listed (no Limit) and the page is cut from it here.
+	resp, err := a.client.Policy().List(ctx, tenantID, &iamsdk.ListPoliciesRequest{})
 	if err != nil {
 		return nil, err
 	}
-	out := &ListPoliciesResponse{
-		Policies: make([]PolicyResponse, 0, len(resp.Policies)),
+	collected := resp.Policies
+	start := min(int(offset), len(collected))
+	end := len(collected)
+	if limit > 0 {
+		end = min(start+int(limit), end)
 	}
-	for i := range resp.Policies {
-		out.Policies = append(out.Policies, *decodePolicy(tenantID, &resp.Policies[i]))
+	page := collected[start:end]
+	out := &ListPoliciesResponse{
+		Policies: make([]PolicyResponse, 0, len(page)),
+		Total:    int64(len(collected)),
+	}
+	for i := range page {
+		out.Policies = append(out.Policies, *decodePolicy(tenantID, &page[i]))
 	}
 	return out, nil
 }
@@ -452,12 +562,11 @@ func (a *QuicBaaSIAMAdapter) UpdatePolicy(ctx context.Context, tenantID, policyN
 	if req == nil {
 		return nil, errors.New("update policy request is required")
 	}
-	// SDK does not accept raw SpecYAML on update — to reapply YAML we must
-	// delete and re-create the policy. Surface the limitation as an error so
-	// callers fall through to the create+delete path or use the partial
-	// pointer-field updates the SDK does support.
+	// The SDK's UpdatePolicyRequest carries no SpecYAML: reapplying YAML
+	// means deleting and re-creating the policy. Refuse it as a bad request
+	// (400, InvalidArgument over the SDK) before the upstream is called.
 	if req.SpecYAML != "" {
-		return nil, errors.New("update via spec_yaml not supported by IAM SDK; delete and re-create instead")
+		return nil, ErrInvalidRequestBody{Reason: "spec_yaml cannot be updated in place; delete and re-create the policy"}
 	}
 	desc := req.Description
 	prio := int(req.Priority)
@@ -468,7 +577,7 @@ func (a *QuicBaaSIAMAdapter) UpdatePolicy(ctx context.Context, tenantID, policyN
 	}
 	p, err := a.client.Policy().Update(ctx, tenantID, policyName, sdkReq)
 	if err != nil {
-		return nil, err
+		return nil, upstreamUnimplemented("policy update", err)
 	}
 	return decodePolicy(tenantID, p), nil
 }
@@ -484,7 +593,7 @@ func (a *QuicBaaSIAMAdapter) ValidatePolicy(ctx context.Context, tenantID, specY
 	}
 	resp, err := a.client.Policy().Validate(ctx, tenantID, policy)
 	if err != nil {
-		return nil, err
+		return nil, upstreamUnimplemented("policy validation", err)
 	}
 	out := &ValidatePolicyResponse{Valid: resp.Valid}
 	for _, e := range resp.Errors {
@@ -497,48 +606,15 @@ func (a *QuicBaaSIAMAdapter) TestPolicy(ctx context.Context, tenantID string, re
 	if req == nil {
 		return nil, errors.New("test policy request is required")
 	}
-	// The QuicBaaS SDK runs test cases against a named policy. The REST
-	// shape only describes a single inline check; wrap it as a one-element
-	// test case so the underlying engine evaluates the same scenario.
-	contextMap := make(map[string]interface{}, len(req.Context))
-	for k, v := range req.Context {
-		contextMap[k] = v
-	}
-	subject := iamsdk.Subject{
-		ID:       req.SubjectID,
-		TenantID: tenantID,
-		Roles:    req.Roles,
-		Groups:   req.Groups,
-	}
-	sdkReq := &iamsdk.TestPolicyRequest{
-		TestCases: []iamsdk.TestCase{{
-			Name:     "rest-inline",
-			Subject:  subject,
-			Action:   req.Action,
-			Resource: req.Resource,
-			Context:  contextMap,
-		}},
-	}
-	resp, err := a.client.Policy().Test(ctx, tenantID, sdkReq)
-	if err != nil {
-		return nil, err
-	}
-	return testPolicyResponseFromSDK(resp), nil
+	// The pinned QuicBaaS SDK runs test cases against one named policy only
+	// and has no tenant-wide evaluation; the SDK's TestIAMPolicyRequest names
+	// no policy. Refuse every request as Unimplemented (501).
+	return nil, status.Error(codes.Unimplemented, "policy evaluation is not implemented by the pinned IAM service: it evaluates one named policy and the request names none")
 }
 
 // testPolicyResponseFromSDK maps the inline case's result to the REST shape.
 // Allowed is the actual authorization decision: the SDK's Passed only says
 // whether the case met its expected result, so a passing deny case is denied.
-func testPolicyResponseFromSDK(resp *iamsdk.TestPolicyResponse) *TestPolicyResponse {
-	out := &TestPolicyResponse{}
-	if len(resp.Results) > 0 {
-		first := resp.Results[0]
-		out.MatchedRule = first.MatchedRule
-		out.Allowed = first.ActualResult == iamsdk.EffectAllow
-	}
-	return out
-}
-
 // -----------------------------------------------------------------------------
 // Application operations.
 // -----------------------------------------------------------------------------
@@ -698,6 +774,7 @@ func decodePolicy(tenantID string, p *iamsdk.Policy) *PolicyResponse {
 		Description: p.Description,
 		Priority:    int32(p.Priority),
 		SpecYAML:    string(p.SpecYAML),
+		Labels:      maps.Clone(p.Labels),
 	}
 	if !p.CreatedAt.IsZero() {
 		ts := p.CreatedAt

@@ -86,7 +86,7 @@
 //   - GET    /api/v1/iam/tenants/{tenant}/apps            - List apps
 //   - PUT    /api/v1/iam/tenants/{tenant}/apps/{id}       - Update app
 //   - DELETE /api/v1/iam/tenants/{tenant}/apps/{id}       - Delete app
-//   - POST   /api/v1/iam/tenants/{tenant}/apps/{id}/rotate-secret - Rotate secret
+//   - POST   /api/v1/iam/tenants/{tenant}/apps/{id}/rotate - Rotate secret
 //
 // Authorization:
 //

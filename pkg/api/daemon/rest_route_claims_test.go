@@ -151,11 +151,15 @@ var daemonDivergentClaims = map[string]string{
 	"/platform.v1.KeyManagementService/VerifyHMAC":             "#452: the daemon has no HMAC verify route; the claim is the webservice's /hmac/{name}/verify",
 	"/platform.v1.KeyManagementService/GenerateDataKey":        "#452: the daemon's KMS routes have no data-keys",
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": "#452: the daemon's KMS routes have no data-keys/wrapped",
+	"/platform.v1.KeyManagementService/UpdateKeyStatus":        "#452: the daemon's KMS routes have no /keys/{id}/status; the claim is the webservice's PUT /api/v1/kms/keys/{name}/status",
+	"/platform.v1.KeyManagementService/BackendStatus":          "#452: the daemon serves KMS backend status at /api/v1/kms/status; the claim is the webservice's /api/v1/kms/backend/status",
 
 	"/platform.v1.ProvisioningGateway/GetBootConfig":         "#452: no server serves it; platformd holds no per-MAC boot configuration (route_coverage_test.go unroutedClaims)",
 	"/platform.v1.ProvisioningGateway/NotifyInstallComplete": pxeGatewayOnWebservice,
 	"/platform.v1.ProvisioningGateway/RegisterPXEDevice":     pxeGatewayOnWebservice,
 	"/platform.v1.ProvisioningGateway/ReportDeviceState":     pxeGatewayOnWebservice,
+
+	"/platform.v1.RegistryService/Inspect": registryImagesOnWebservice,
 
 	"/platform.v1.TenantService/CheckQuota":             "#452 (claim from #304): the daemon checks at POST /api/v1/tenants/{id}/check-quota with its own JSON; the claim is the webservice's /quota-check (sdk_rest_roundtrip_test.go)",
 	"/platform.v1.TenantService/GetTenantBarrierStatus": "#452: the daemon serves GET /api/v1/tenants/{id}/barrier/status (docs/tenant/api.md); the claim is the webservice's /barrier",
@@ -171,6 +175,10 @@ const (
 	idevidOnTPMPrefix      = "#452: the daemon serves IDevID and IAK under /api/v1/tpm/idevid and /api/v1/tpm/iak (rest_idevid.go, registerIDevIDRoutes); the claim is the webservice's /api/v1/idevid shape"
 	kmsKeyInBody           = "#452: the daemon takes the key in the body at POST /api/v1/kms/{encrypt,decrypt,sign,verify}; the claim is the webservice's /{name} path"
 	pxeGatewayOnWebservice = "#452: the per-MAC PXE gateway routes are the webservice's (rest/pxe/gateway.go); the daemon mounts none"
+	// registryImagesOnWebservice: the registry Inspect read is served by the
+	// webservice under /api/v1/compute/images (rest/registry, #1970); the
+	// daemon now serves List and Status itself.
+	registryImagesOnWebservice = "#452 (#1970): the registry Inspect route under /api/v1/compute/images is the webservice's (rest/registry); the daemon does not mount it"
 	// attestationQuoteOnWebservice and deviceMachineFacingOnWebservice are the
 	// caller-gated quote routes and the machine-facing device routes, which
 	// the daemon does not mount (#997 s3).

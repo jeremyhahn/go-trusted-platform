@@ -159,21 +159,36 @@ func TestCreateInvitation_DefaultsTenantAndInviterFromTheSession(t *testing.T) {
 	assert.True(t, proto.Equal(want, srv.last), "service received %v, want %v", srv.last, want)
 }
 
-// TestCreateInvitation_KeepsExplicitTenantAndInviter: values the caller
-// set are not overwritten by the session defaults.
+// TestCreateInvitation_KeepsExplicitTenantAndInviter: an explicit tenant_id
+// must be the verified session's tenant (another tenant answers 403 before
+// the service is called); the explicit inviter is still kept.
 func TestCreateInvitation_KeepsExplicitTenantAndInviter(t *testing.T) {
-	srv := &fakeInvitationServer{}
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/invitations",
-		strings.NewReader(`{"tenant_id":"other","email":"new@example.com","invited_by_id":5}`))
-	req = withSession(req, "caller-tenant", "42")
+	t.Run("another tenant", func(t *testing.T) {
+		srv := &fakeInvitationServer{}
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/invitations",
+			strings.NewReader(`{"tenant_id":"other","email":"new@example.com","invited_by_id":5}`))
+		req = withSession(req, "caller-tenant", "42")
 
-	rec := serve(srv, req)
+		rec := serve(srv, req)
 
-	assert.Equal(t, http.StatusCreated, rec.Code)
-	got, ok := srv.last.(*platformv1.CreateInvitationRequest)
-	require.True(t, ok, "service received %T", srv.last)
-	assert.Equal(t, "other", got.GetTenantId())
-	assert.Equal(t, uint64(5), got.GetInvitedById())
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.Nil(t, srv.last, "the service must not be called")
+	})
+
+	t.Run("own tenant", func(t *testing.T) {
+		srv := &fakeInvitationServer{}
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/invitations",
+			strings.NewReader(`{"tenant_id":"caller-tenant","email":"new@example.com","invited_by_id":5}`))
+		req = withSession(req, "caller-tenant", "42")
+
+		rec := serve(srv, req)
+
+		assert.Equal(t, http.StatusCreated, rec.Code)
+		got, ok := srv.last.(*platformv1.CreateInvitationRequest)
+		require.True(t, ok, "service received %T", srv.last)
+		assert.Equal(t, "caller-tenant", got.GetTenantId())
+		assert.Equal(t, uint64(5), got.GetInvitedById())
+	})
 }
 
 // TestListInvitations_ScopesToTheSessionTenant: the list is scoped by the
@@ -188,6 +203,42 @@ func TestListInvitations_ScopesToTheSessionTenant(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.True(t, proto.Equal(&platformv1.ListInvitationsRequest{TenantId: "caller-tenant"}, srv.last),
 		"service received %v", srv.last)
+}
+
+// otherTenantGetServer answers GetInvitation with an invitation of tenant-b.
+type otherTenantGetServer struct{ fakeInvitationServer }
+
+func (f *otherTenantGetServer) GetInvitation(_ context.Context, r *platformv1.GetInvitationRequest) (*platformv1.GetInvitationResponse, error) {
+	f.last = r
+	return &platformv1.GetInvitationResponse{
+		Invitation: &platformv1.Invitation{Id: r.GetInvitationId(), TenantId: "tenant-b", Email: "victim@example.com"},
+	}, nil
+}
+
+// TestGetInvitation_RefusesAnotherTenantsInvitation: GET invitations/{id}
+// answers 403 when the invitation belongs to a tenant other than the
+// verified session's, and 200 for the session's own tenant (#2056).
+func TestGetInvitation_RefusesAnotherTenantsInvitation(t *testing.T) {
+	t.Run("another tenant", func(t *testing.T) {
+		srv := &otherTenantGetServer{}
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/invitations/42", nil)
+		req = withSession(req, "tenant-a", "42")
+
+		rec := serve(srv, req)
+
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.False(t, strings.Contains(rec.Body.String(), "victim@example.com"),
+			"the body leaks the other tenant's invitation: %s", rec.Body.String())
+	})
+	t.Run("own tenant", func(t *testing.T) {
+		srv := &otherTenantGetServer{}
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/invitations/42", nil)
+		req = withSession(req, "tenant-b", "42")
+
+		rec := serve(srv, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+	})
 }
 
 // TestInvitationHandlers_MalformedBodyIs400: a body that is not the

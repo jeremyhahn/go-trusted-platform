@@ -231,6 +231,39 @@ func TestInvitationGRPCService_WithService_GetByID_Error(t *testing.T) {
 	assertInvitationStatus(t, err, codes.Internal, sentinel.Error())
 }
 
+// TestInvitationGRPCService_GetInvitation_CallerTenantEnforced pins the
+// own-tenant rule on GetInvitation by id (#2056): a caller bound to another
+// tenant is refused, a same-tenant or unbound caller is served.
+func TestInvitationGRPCService_GetInvitation_CallerTenantEnforced(t *testing.T) {
+	fake := &fakeInvitationServicer{getByIDResult: newTestInvitation()}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+	req := &platformv1.GetInvitationRequest{InvitationId: 42}
+
+	resp, err := svc.GetInvitation(tokenCallerContext("tenant-a"), req)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("cross-tenant GetInvitation: want PermissionDenied, got %v", err)
+	}
+	if resp != nil {
+		t.Fatalf("cross-tenant GetInvitation: want nil response, got %v", resp)
+	}
+
+	resp, err = svc.GetInvitation(tokenCallerContext("tenant-1"), req)
+	if err != nil {
+		t.Fatalf("same-tenant GetInvitation: unexpected error: %v", err)
+	}
+	if got := resp.GetInvitation().GetId(); got != 42 {
+		t.Fatalf("same-tenant GetInvitation: want id 42, got %d", got)
+	}
+
+	resp, err = svc.GetInvitation(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unbound GetInvitation: unexpected error: %v", err)
+	}
+	if got := resp.GetInvitation().GetId(); got != 42 {
+		t.Fatalf("unbound GetInvitation: want id 42, got %d", got)
+	}
+}
+
 func TestInvitationGRPCService_WithService_GetByToken(t *testing.T) {
 	fake := &fakeInvitationServicer{getByTokenResult: newTestInvitation()}
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)

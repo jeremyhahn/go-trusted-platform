@@ -245,7 +245,7 @@ Examples:
   # Delete NV index
   platformctl tpm nvram delete --index 0x01000001
 
-  # Delete with password
+  # Delete when the owner hierarchy has a password
   platformctl tpm nvram delete --index 0x01000001 --password mypassword`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
@@ -254,7 +254,7 @@ Examples:
 	}
 
 	cmd.Flags().Uint32Var(&index, "index", 0, "NV index to delete")
-	cmd.Flags().StringVar(&password, "password", "", "authorization password")
+	cmd.Flags().StringVar(&password, "password", "", "owner hierarchy authorization (not the NV index password)")
 
 	cli.MarkFlagsRequired(cmd, "index")
 

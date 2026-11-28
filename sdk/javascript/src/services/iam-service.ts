@@ -417,9 +417,18 @@ export class IAMService extends BaseService {
    * Create a policy
    */
   async createPolicy(request: CreateIAMPolicyRequest): Promise<ApiResponse<IAMPolicyResponse>> {
+    // POST /v1/iam/tenants/{tenantId}/policies: the body is the snake_case
+    // CreatePolicyRequest the server decodes (spec_yaml is required).
     return this.client.post<IAMPolicyResponse>(
       this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/policies`),
-      request
+      {
+        tenant_id: request.tenantId,
+        name: request.name,
+        description: request.description,
+        priority: request.priority,
+        spec_yaml: request.specYaml,
+        labels: request.labels,
+      }
     );
   }
 
@@ -448,9 +457,18 @@ export class IAMService extends BaseService {
    * Update a policy
    */
   async updatePolicy(request: UpdateIAMPolicyRequest): Promise<ApiResponse<IAMPolicyResponse>> {
+    // PUT /v1/iam/tenants/{tenantId}/policies/{policyName}: the body is the
+    // snake_case UpdatePolicyRequest the server decodes; the policy name
+    // travels in the path only.
     return this.client.put<IAMPolicyResponse>(
       this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/policies/${this.encodePathSegment(request.policyName)}`),
-      request
+      {
+        tenant_id: request.tenantId,
+        description: request.description,
+        priority: request.priority,
+        spec_yaml: request.specYaml,
+        labels: request.labels,
+      }
     );
   }
 
@@ -464,22 +482,35 @@ export class IAMService extends BaseService {
   }
 
   /**
-   * Validate a policy
+   * Validate a policy: POST /v1/iam/tenants/{tenant}/policies/validate with
+   * the snake_case body the server decodes ({tenant_id, spec_yaml}).
    */
   async validatePolicy(request: ValidateIAMPolicyRequest): Promise<ApiResponse<ValidateIAMPolicyResponse>> {
     return this.client.post<ValidateIAMPolicyResponse>(
       this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/policies/validate`),
-      request
+      { tenant_id: request.tenantId, spec_yaml: request.specYaml }
     );
   }
 
   /**
-   * Test a policy
+   * Test a policy: POST /v1/iam/tenants/{tenant}/policies/test with the
+   * snake_case body the server decodes ({tenant_id, subject_id, roles, groups,
+   * action, resource, context, attributes}). Omitted optional fields stay
+   * undefined and drop out of the JSON.
    */
   async testPolicy(request: TestIAMPolicyRequest): Promise<ApiResponse<TestIAMPolicyResponse>> {
     return this.client.post<TestIAMPolicyResponse>(
       this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/policies/test`),
-      request
+      {
+        tenant_id: request.tenantId,
+        subject_id: request.subjectId,
+        roles: request.roles,
+        groups: request.groups,
+        action: request.action,
+        resource: request.resource,
+        context: request.context,
+        attributes: request.attributes,
+      }
     );
   }
 
@@ -522,9 +553,19 @@ export class IAMService extends BaseService {
    * Update an application
    */
   async updateApp(request: UpdateIAMAppRequest): Promise<ApiResponse<IAMAppResponse>> {
+    // PUT /v1/iam/tenants/{tenantId}/apps/{clientId} decodes the server's
+    // snake_case UpdateAppRequest (tenant_id, name, redirect_uris, grant_types,
+    // response_types, resource_prefix); the client ID travels in the path only.
     return this.client.put<IAMAppResponse>(
       this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/apps/${this.encodePathSegment(request.clientId)}`),
-      request
+      {
+        tenant_id: request.tenantId,
+        name: request.name,
+        redirect_uris: request.redirectUris,
+        grant_types: request.grantTypes,
+        response_types: request.responseTypes,
+        resource_prefix: request.resourcePrefix,
+      }
     );
   }
 
@@ -539,10 +580,12 @@ export class IAMService extends BaseService {
 
   /**
    * Rotate application secret
+   *
+   * Posts to the served route `POST /v1/iam/tenants/{tenant}/apps/{id}/rotate`.
    */
   async rotateAppSecret(tenantId: string, clientId: string): Promise<ApiResponse<RotateIAMAppSecretResponse>> {
     return this.client.post<RotateIAMAppSecretResponse>(
-      this.buildUrl(`/tenants/${this.encodePathSegment(tenantId)}/apps/${this.encodePathSegment(clientId)}/rotate-secret`),
+      this.buildUrl(`/tenants/${this.encodePathSegment(tenantId)}/apps/${this.encodePathSegment(clientId)}/rotate`),
       {}
     );
   }

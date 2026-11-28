@@ -10,3 +10,4 @@ export { RolePicker } from './role-picker';
 export { PermissionTree } from './permission-tree';
 export { TokenForm } from './token-form';
 export { TokenDisplay } from './token-display';
+export { PolicyValidateCard } from './policy-validate-card';

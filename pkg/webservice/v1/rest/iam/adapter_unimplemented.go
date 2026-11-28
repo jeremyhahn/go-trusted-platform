@@ -31,16 +31,17 @@ func upstreamUnimplemented(op string, err error) error {
 	if err == nil {
 		return nil
 	}
-	if qberrors.IsUnimplemented(err) || status.Code(err) == codes.Unimplemented {
-		return status.Errorf(codes.Unimplemented, "%s is not implemented by the pinned IAM service: %v", op, err)
-	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "unknown method") ||
-		strings.Contains(msg, "not implemented") ||
-		strings.Contains(msg, "unimplemented") {
+	if qberrors.IsUnimplemented(err) || status.Code(err) == codes.Unimplemented || isUnimplementedMessage(err.Error()) {
 		return status.Errorf(codes.Unimplemented, "%s is not implemented by the pinned IAM service: %v", op, err)
 	}
 	return err
+}
+
+func isUnimplementedMessage(msg string) bool {
+	msg = strings.ToLower(msg)
+	return strings.Contains(msg, "unknown method") ||
+		strings.Contains(msg, "not implemented") ||
+		strings.Contains(msg, "unimplemented")
 }
 
 // appOperationUnsupported types an upstream error that upstreamUnimplemented

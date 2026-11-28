@@ -133,6 +133,15 @@ func handlerName(h any) (string, bool) {
 	return strings.TrimSuffix(short, "-fm"), true
 }
 
+// getAsksForCollection reports whether a Get rpc names the collection its
+// List handler serves: GetKeyVersions on ListKeyVersions asks for the
+// collection by name, so the List handler is its route. A singular Get
+// (GetDevice on ListDevices) does not share the noun and still fails.
+func getAsksForCollection(method, handler string) bool {
+	noun := strings.TrimPrefix(method, "Get")
+	return noun != "" && noun == strings.TrimPrefix(handler, "List")
+}
+
 // builtHandlers maps "METHOD /normalised/path" to the handler's short name for
 // every route whose handler identity survived registration.
 func builtHandlers(t *testing.T) (resolved map[string]string, wrapped []string) {
@@ -199,6 +208,9 @@ func TestSDKRouteClaims_NoGetResolvesToList(t *testing.T) {
 		if !strings.HasPrefix(method, "Get") || !strings.HasPrefix(handler, "List") {
 			continue
 		}
+		if getAsksForCollection(method, handler) {
+			continue
+		}
 		if _, known := getListDefects[claim.GRPCMethod]; known {
 			continue
 		}
@@ -226,6 +238,28 @@ func TestSDKRouteClaims_NoGetResolvesToList(t *testing.T) {
 			t.Errorf("getListDefects lists %s (%s) but it no longer resolves to a "+
 				"List* handler -- it resolves to %q. Remove the entry; this list "+
 				"only shrinks", grpcMethod, why, handler)
+		}
+	}
+}
+
+// TestGetAsksForCollection pins the guard's exemption: a Get rpc whose noun
+// is the List handler's noun asks for the collection by name, while a
+// singular Get on a plural List handler is still a defect.
+func TestGetAsksForCollection(t *testing.T) {
+	cases := []struct {
+		method, handler string
+		want            bool
+	}{
+		{"GetKeyVersions", "ListKeyVersions", true},
+		{"GetDevice", "ListDevices", false},
+		{"GetKey", "ListKeys", false},
+		{"GetRecord", "ListRecords", false},
+		{"GetStatus", "ListStatus", true},
+		{"Get", "List", false},
+	}
+	for _, c := range cases {
+		if got := getAsksForCollection(c.method, c.handler); got != c.want {
+			t.Errorf("getAsksForCollection(%q, %q) = %v, want %v", c.method, c.handler, got, c.want)
 		}
 	}
 }

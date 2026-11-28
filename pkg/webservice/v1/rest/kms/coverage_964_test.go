@@ -506,6 +506,16 @@ func TestCoverage964_KeyReadHandlersEncodeSDKValues(t *testing.T) {
 	}
 }
 
+// TestCoverage964_ListKeyVersionsHandlerIsExported pins the exported
+// handler name: callers register Handlers.ListKeyVersions themselves,
+// so the SDK's GetKeyVersions RPC must not rename it (#1954 Codex round 4).
+func TestCoverage964_ListKeyVersionsHandlerIsExported(t *testing.T) {
+	var h http.HandlerFunc = (&Handlers{}).ListKeyVersions
+	if h == nil {
+		t.Fatal("Handlers.ListKeyVersions is nil")
+	}
+}
+
 func TestCoverage964_DeleteKeyAndUpdateStatusTargetNamedKey(t *testing.T) {
 	f := newCovFakes(nil)
 	h := f.handlers()

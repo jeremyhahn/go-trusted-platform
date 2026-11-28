@@ -83,6 +83,7 @@ const navigation = [
       { title: "Certificate Requests", href: "/ca/requests" },
       { title: "CA Bundle", href: "/ca/bundle" },
       { title: "CRL", href: "/ca/crl" },
+      { title: "EAB Credentials", href: "/ca/eab" },
       { title: "Key Management", href: "/kms" },
       { title: "Key Encryption", href: "/kms/encrypt" },
     ],

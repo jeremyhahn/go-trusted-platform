@@ -16,6 +16,8 @@ import {
 import { Badge } from '@/components/ui/badge';
 
 // Application record as the REST API sends it: camelCase or snake_case keys (#445).
+import { AppRenameForm } from '@/components/features/iam/app-rename-form';
+
 interface AppWire {
   name?: string;
   redirect_uris?: string[];
@@ -36,7 +38,7 @@ export default function AppDetailClient() {
   // Apps use `clientId` not `id` as the path param.
   const clientId = resolveDynamicId(params, pathname, 'apps', 'clientId');
 
-  const { data: app, isLoading, error } = useApi(
+  const { data: app, isLoading, error, refetch } = useApi(
     () => {
       if (!tenantId) return Promise.reject(new Error('No tenant ID'));
       return iam.getApp(tenantId, clientId);
@@ -57,6 +59,26 @@ export default function AppDetailClient() {
       onError: (err) => {
         toast({
           title: 'Failed to delete application',
+          description: err instanceof Error ? err.message : 'Unknown error',
+          variant: 'destructive',
+        });
+      },
+    },
+  );
+
+  const updateMutation = useMutation(
+    async (name: string) => {
+      if (!tenantId) throw new Error('No tenant ID');
+      return iam.updateApp({ tenantId, clientId, name });
+    },
+    {
+      onSuccess: () => {
+        toast({ title: 'Application updated', variant: 'success' });
+        refetch();
+      },
+      onError: (err) => {
+        toast({
+          title: 'Failed to update application',
           description: err instanceof Error ? err.message : 'Unknown error',
           variant: 'destructive',
         });
@@ -149,6 +171,11 @@ export default function AppDetailClient() {
               </ul>
             )}
           </div>
+          <AppRenameForm
+            name={a?.name ?? ''}
+            saving={updateMutation.isLoading}
+            onSave={(name) => updateMutation.mutate(name)}
+          />
           {a?.created_at && (
             <div className="text-xs text-muted-foreground">
               Created {new Date(a.created_at).toLocaleString()}

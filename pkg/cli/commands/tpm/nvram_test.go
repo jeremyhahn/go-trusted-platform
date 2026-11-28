@@ -526,6 +526,13 @@ func TestRunNVRAMDeleteWithClient_WithPassword(t *testing.T) {
 	assert.Contains(t, base.output.String(), "true")
 }
 
+func TestNewNVRAMDeleteCommand_PasswordIsOwnerAuthorization(t *testing.T) {
+	cmd := newNVRAMDeleteCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
+	f := cmd.Flags().Lookup("password")
+	require.NotNil(t, f)
+	assert.Contains(t, f.Usage, "owner hierarchy")
+}
+
 func TestRunNVRAMDeleteWithClient_Error(t *testing.T) {
 	flags := &cli.CommonFlags{
 		OutputFormat: cli.OutputFormatJSON,

@@ -244,17 +244,17 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `EABService.CreateCredential` | `POST /credentials` | - | - | - | missing |
-| `EABService.GetCredential` | `GET /credentials/{id:[0-9]+}` | - | - | - | missing |
-| `EABService.GetCredentialByKeyID` | `GET /credentials/key/{key}` | - | - | - | missing |
-| `EABService.ListCredentials` | `GET /credentials` | - | - | - | missing |
-| `EABService.RevokeCredential` | `POST /credentials/{id:[0-9]+}/revoke` | - | - | - | missing |
-| `EABService.ValidateCredential` | `POST /credentials/validate` | - | - | - | missing |
-| `EABService.DeleteCredential` | `DELETE /credentials/{id:[0-9]+}` | - | - | - | missing |
-| `EABService.GetCredentialQRCode` | `GET /credentials/{id:[0-9]+}/qrcode` | - | - | - | missing |
-| `EABService.GetEnrollmentURL` | `GET /credentials/{id:[0-9]+}/url` | - | - | - | missing |
-| `EABService.MarkCredentialUsed` | `POST /credentials/{id:[0-9]+}/used` | - | - | - | missing |
-| `EABService.CleanupExpiredCredentials` | `POST /credentials/cleanup` | - | - | - | missing |
+| `EABService.CreateCredential` | `POST /credentials` | `(dashboard)/ca/eab/page.tsx`<br>`(dashboard)/ca/eab/new/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.GetCredential` | `GET /credentials/{id:[0-9]+}` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.GetCredentialByKeyID` | `GET /credentials/key/{key}` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.ListCredentials` | `GET /credentials` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.RevokeCredential` | `POST /credentials/{id:[0-9]+}/revoke` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.ValidateCredential` | `POST /credentials/validate` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.DeleteCredential` | `DELETE /credentials/{id:[0-9]+}` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.GetCredentialQRCode` | `GET /credentials/{id:[0-9]+}/qrcode` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.GetEnrollmentURL` | `GET /credentials/{id:[0-9]+}/url` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
+| `EABService.MarkCredentialUsed` | `POST /credentials/{id:[0-9]+}/used` | - | - | - | not-UI: ACME account binding marks it |
+| `EABService.CleanupExpiredCredentials` | `POST /credentials/cleanup` | `(dashboard)/ca/eab/page.tsx` | - | `real-server/eab.spec.ts` | covered |
 
 ## FIDO2Service (`fido2.proto`)
 
@@ -332,17 +332,17 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `PlatformIAMService.ListTenants` | `GET /tenants` | - | - | - | missing |
 | `PlatformIAMService.UpdateTenant` | `PUT /tenants/{tenant}` | - | - | - | missing |
 | `PlatformIAMService.DeleteTenant` | `DELETE /tenants/{tenant}` | - | - | - | missing |
-| `PlatformIAMService.CreatePolicy` | `POST /policies` | `(dashboard)/iam/policies/new/page.tsx` | - | - | partial |
-| `PlatformIAMService.GetPolicy` | `GET /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx` | - | - | partial |
+| `PlatformIAMService.CreatePolicy` | `POST /policies` | `(dashboard)/iam/policies/new/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
+| `PlatformIAMService.GetPolicy` | `GET /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
 | `PlatformIAMService.ListPolicies` | `GET /policies` | `(dashboard)/iam/permissions/page.tsx`<br>`(dashboard)/iam/policies/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.UpdatePolicy` | `PUT /policies/{id}` | `(dashboard)/iam/permissions/page.tsx`<br>`(dashboard)/iam/policies/[name]/page.tsx`<br>`(dashboard)/iam/policies/new/page.tsx` (+1) (read-only) | - | - | partial |
+| `PlatformIAMService.UpdatePolicy` | `PUT /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
 | `PlatformIAMService.DeletePolicy` | `DELETE /policies/{id}` | `(dashboard)/iam/policies/[name]/page.tsx`<br>`(dashboard)/iam/policies/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.ValidatePolicy` | `POST /policies/validate` | - | - | - | missing |
+| `PlatformIAMService.ValidatePolicy` | `POST /policies/validate` | `(dashboard)/iam/policies/[name]/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
 | `PlatformIAMService.TestPolicy` | `POST /policies/test` | - | - | - | missing |
 | `PlatformIAMService.RegisterApp` | `POST /apps` | `(dashboard)/iam/apps/new/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.GetApp` | `GET /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx` | - | - | partial |
+| `PlatformIAMService.GetApp` | `GET /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
 | `PlatformIAMService.ListApps` | `GET /apps` | `(dashboard)/iam/apps/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` | - | `iam.spec.ts` | covered |
-| `PlatformIAMService.UpdateApp` | `PUT /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx`<br>`(dashboard)/iam/apps/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` (read-only) | - | - | partial |
+| `PlatformIAMService.UpdateApp` | `PUT /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx` | - | `iam-policies-apps.spec.ts` | covered |
 | `PlatformIAMService.DeleteApp` | `DELETE /apps/{id}` | `(dashboard)/iam/apps/[clientId]/page.tsx`<br>`(dashboard)/iam/apps/page.tsx`<br>`(dashboard)/iam/tokens/page.tsx` | - | `iam.spec.ts` | covered |
 | `PlatformIAMService.RotateAppSecret` | `POST /apps/{id}/rotate` | `(dashboard)/iam/tokens/page.tsx` | - | `iam.spec.ts` | covered |
 
@@ -376,8 +376,8 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `InvitationService.CreateInvitation` | - | `(dashboard)/tenant/invitations/page.tsx` | - | `tenant-management.spec.ts` | covered |
-| `InvitationService.GetInvitation` | `GET /{id:[0-9]+}` | - | - | - | missing |
-| `InvitationService.GetInvitationByToken` | `GET /token/{token}` | - | - | - | missing |
+| `InvitationService.GetInvitation` | `GET /{id:[0-9]+}` | `(dashboard)/tenant/invitations/page.tsx` | - | `real-server/invitations.spec.ts` | covered |
+| `InvitationService.GetInvitationByToken` | `GET /token/{token}` | `auth/webauthn/page.tsx` | - | `real-server/invitations.spec.ts` | covered |
 | `InvitationService.ListInvitations` | - | `(dashboard)/tenant/invitations/page.tsx` | - | `tenant-management.spec.ts` | covered |
 | `InvitationService.RevokeInvitation` | `POST /{id:[0-9]+}/revoke` | `(dashboard)/tenant/invitations/page.tsx` | - | `tenant-management.spec.ts` | covered |
 | `InvitationService.AcceptInvitation` | `POST /accept` | - | - | - | missing |
