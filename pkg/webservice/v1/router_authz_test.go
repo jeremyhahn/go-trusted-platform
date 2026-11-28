@@ -346,7 +346,9 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.attestationService = &stubAttestationServer{}
 	registry.deviceGRPCService = &stubDeviceGRPCServer{}
 	registry.deviceTemplateService = &stubDeviceTemplateService{}
-	registry.deviceProfileService = &stubDeviceProfileService{}
+	if registry.deviceProfileService == nil {
+		registry.deviceProfileService = &stubDeviceProfileService{}
+	}
 	registry.invitationService = &stubInvitationServer{}
 	registry.iamClient = &probeIAM{}
 	registry.pepClient = &probePEP{}
@@ -685,10 +687,7 @@ var pendingRoutes = map[string]string{
 // fixture did not build the services. That is the sharpest form of the rule
 // below: a nil in a fixture can hide a route that production always serves.
 //
-// Slice 1 also named /bmc here. That was wrong: the webservice serves no
-// /bmc route. The live BMC surface belongs to the daemon REST server
-// (#232), so it is not this audit's blind spot. The unreferenced webservice
-// BMC router (pkg/webservice/v1/router/bmc.go) was deleted (#239).
+// /bmc is now mounted admin-gated by bmcRoutes, and is covered by this walk.
 func TestRegisterRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
@@ -1988,13 +1987,13 @@ func TestPXEOperatorRoutes_ScopeAloneDoesNotPassTheRoleGate(t *testing.T) {
 // matching only it answers 404).
 //
 // It requires the count rather than merely the presence: rest/iam/router.go
-// registers each capability twice (docs/iam/api.md §2) — 33 flat routes and
+// registers each capability twice (docs/iam/api.md §2) — 34 flat routes and
 // 38 tenant-scoped ones — and a fixture that silently lost one tree would
 // otherwise pass the per-route assertions over the other.
 func iamRoutesUnderAudit(t *testing.T, router *mux.Router) []string {
 	t.Helper()
 
-	const wantIAMRoutes = 71
+	const wantIAMRoutes = 72
 	var routes []string
 	for _, route := range testutil.WalkRoutes(t, router) {
 		_, template := splitRoute(route)
@@ -2102,7 +2101,7 @@ func TestIAMRoutes_TenantGuardsAreWiredToThePlatformSession(t *testing.T) {
 		assert.NotEqualf(t, http.StatusForbidden, code, "%s refused the admin authorization", route)
 	}
 	require.Equal(t, 38, tenantGuarded, "tenant-record plus tenant-scoped routes")
-	require.Equal(t, 33, flat, "flat routes")
+	require.Equal(t, 34, flat, "flat routes")
 }
 
 // TestIAMRoutes_SystemTenantAdminReachesTenantLifecycle is the other half of

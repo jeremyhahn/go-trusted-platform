@@ -336,6 +336,63 @@ func TestService_CreateTemplate_InvalidID(t *testing.T) {
 	}
 }
 
+// TestService_CreateTemplate_RefusesAPathTraversingID checks that a template
+// ID that is not a single path element is refused before anything is written,
+// so CreateTemplate cannot place a bundle outside the templates directory
+// (#2021 Codex round 2).
+func TestService_CreateTemplate_RefusesAPathTraversingID(t *testing.T) {
+	for _, id := range []string{"../outside", "a/b", "..", "/abs"} {
+		t.Run(id, func(t *testing.T) {
+			config := createTestConfig(t)
+			service, err := NewService(config, nil, &mockCA{})
+			if err != nil {
+				t.Fatalf("NewService failed: %v", err)
+			}
+
+			_, err = service.CreateTemplate(context.Background(), &CreateTemplateOptions{ID: id})
+			if err == nil {
+				t.Fatalf("CreateTemplate(%q) succeeded, want an invalid template ID error", id)
+			}
+			if !strings.Contains(err.Error(), "invalid template ID") {
+				t.Fatalf("CreateTemplate(%q) error = %v, want it to contain %q", id, err, "invalid template ID")
+			}
+			if _, statErr := os.Stat(filepath.Join(config.BaseDir, "outside")); !os.IsNotExist(statErr) {
+				t.Fatalf("CreateTemplate(%q) wrote outside the templates directory (stat err %v)", id, statErr)
+			}
+		})
+	}
+}
+
+// TestService_DeleteTemplate_RefusesAPathTraversingID checks that
+// DeleteTemplate refuses an ID that leaves the templates directory and does
+// not remove the directory it names (#2021 Codex round 2).
+func TestService_DeleteTemplate_RefusesAPathTraversingID(t *testing.T) {
+	config := createTestConfig(t)
+	service, err := NewService(config, nil, &mockCA{})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	keep := filepath.Join(config.BaseDir, "keep")
+	if err := os.MkdirAll(keep, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(keep, "manifest.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	err = service.DeleteTemplate(context.Background(), "../keep")
+	if err == nil {
+		t.Fatal(`DeleteTemplate("../keep") succeeded, want an invalid template ID error`)
+	}
+	if !strings.Contains(err.Error(), "invalid template ID") {
+		t.Fatalf(`DeleteTemplate("../keep") error = %v, want it to contain "invalid template ID"`, err)
+	}
+	if _, statErr := os.Stat(keep); statErr != nil {
+		t.Fatalf("DeleteTemplate removed a directory outside the templates directory: %v", statErr)
+	}
+}
+
 func TestService_GetTemplate_NotFound(t *testing.T) {
 	config := createTestConfig(t)
 	service, err := NewService(config, nil, &mockCA{})
@@ -1510,6 +1567,83 @@ func TestService_ListBundles_Pagination(t *testing.T) {
 
 }
 
+// TestService_ListBundles_OffsetAtOrPastTheEndIsEmpty checks that an offset
+// at or beyond the number of matching bundles answers an empty page, so a
+// client paging a multiple of the page size stops instead of receiving the
+// first page again.
+func TestService_ListBundles_OffsetAtOrPastTheEndIsEmpty(t *testing.T) {
+	config := createTestConfig(t)
+	service, err := NewService(config, nil, &mockCA{})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	// Create 5 test bundles
+	for i := 0; i < 5; i++ {
+		bundlePath := filepath.Join(config.BundlesDir(), "bundle-"+string(rune('a'+i)))
+		if err := os.MkdirAll(bundlePath, 0700); err != nil {
+			t.Fatalf("MkdirAll failed: %v", err)
+		}
+
+		manifest := &Manifest{
+			Version:   ManifestVersion,
+			ID:        "bundle-" + string(rune('a'+i)),
+			Mode:      BundleModePreAssigned,
+			CreatedAt: time.Now(),
+		}
+		manifestData, _ := json.Marshal(manifest)
+		if err := os.WriteFile(filepath.Join(bundlePath, "manifest.json"), manifestData, 0600); err != nil {
+			t.Fatalf("WriteFile failed: %v", err)
+		}
+	}
+
+	ctx := context.Background()
+
+	for _, opts := range []*ListOptions{{Offset: 5}, {Offset: 6, Limit: 2}} {
+		result, err := service.ListBundles(ctx, opts)
+		if err != nil {
+			t.Fatalf("ListBundles(offset %d, limit %d) failed: %v", opts.Offset, opts.Limit, err)
+		}
+		if result == nil {
+			t.Errorf("ListBundles(offset %d, limit %d) returned nil, want an empty list", opts.Offset, opts.Limit)
+		}
+		if len(result) != 0 {
+			t.Errorf("ListBundles(offset %d, limit %d) returned %d bundles, want 0", opts.Offset, opts.Limit, len(result))
+		}
+	}
+
+	result, err := service.ListBundles(ctx, &ListOptions{Offset: 4, Limit: 2})
+	if err != nil {
+		t.Fatalf("ListBundles failed: %v", err)
+	}
+	if len(result) != 1 {
+		t.Errorf("Expected 1 bundle with offset 4 and limit 2, got %d", len(result))
+	}
+
+	// Walk the list a page at a time: the pages end at the end and no
+	// bundle is seen twice.
+	seen := make(map[string]bool)
+	want := []int{2, 2, 1, 0}
+	for page, offset := range []int{0, 2, 4, 6} {
+		result, err := service.ListBundles(ctx, &ListOptions{Offset: offset, Limit: 2})
+		if err != nil {
+			t.Fatalf("ListBundles(offset %d) failed: %v", offset, err)
+		}
+		if len(result) != want[page] {
+			t.Errorf("page at offset %d: got %d bundles, want %d", offset, len(result), want[page])
+		}
+		for _, b := range result {
+			if seen[b.ID] {
+				t.Errorf("bundle %s seen twice (offset %d)", b.ID, offset)
+			}
+			seen[b.ID] = true
+		}
+	}
+	if len(seen) != 5 {
+		t.Errorf("walk saw %d distinct bundles, want 5", len(seen))
+	}
+}
+
 // =============================================================================
 // Template Clone Tests
 // =============================================================================
@@ -1812,6 +1946,65 @@ func TestService_ListBundles_SkipsInvalidBundles(t *testing.T) {
 	// Should only return the valid bundle
 	if len(bundles) != 1 {
 		t.Errorf("Expected 1 valid bundle, got %d", len(bundles))
+	}
+}
+
+func TestService_ListBundles_ShowsAnImportedStagingPrefixID(t *testing.T) {
+	config := createTestConfig(t)
+	service, err := NewService(config, nil, &mockCA{})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+	writeManifest := func(dir, id string) {
+		t.Helper()
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
+		data, _ := json.Marshal(&Manifest{Version: ManifestVersion, ID: id, Mode: BundleModePreAssigned, CreatedAt: time.Now()})
+		if err := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0600); err != nil {
+			t.Fatalf("write manifest: %v", err)
+		}
+	}
+	// No published ID can carry the staging prefix, so a staging directory is
+	// never listed, while a normal bundle beside it is.
+	if err := os.MkdirAll(filepath.Join(config.BundlesDir(), importStagingPrefix+"x-1"), 0700); err != nil {
+		t.Fatalf("create staging dir: %v", err)
+	}
+	writeManifest(filepath.Join(config.BundlesDir(), importStagingPrefix+"normal-2"), "normal")
+	writeManifest(config.BundlePath("normal"), "normal")
+
+	bundles, err := service.ListBundles(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListBundles failed: %v", err)
+	}
+	if len(bundles) != 1 || bundles[0].ID != "normal" {
+		t.Fatalf("ListBundles = %v, want only the bundle normal", bundles)
+	}
+
+	_, err = service.CloneTemplate(context.Background(), &CloneOptions{TemplateID: "t", Hostname: importStagingPrefix + "c"})
+	var cfgErr ErrInvalidConfig
+	if !errors.As(err, &cfgErr) || cfgErr.Field != "Hostname" {
+		t.Fatalf("CloneTemplate error = %v, want ErrInvalidConfig on Hostname", err)
+	}
+}
+
+func TestService_CreateBundle_RefusesAStagingPrefixHostname(t *testing.T) {
+	config := createTestConfig(t)
+	service, err := NewService(config, nil, &mockCA{})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+	_, err = service.CreateBundle(context.Background(), &CreateBundleOptions{Hostname: importStagingPrefix + "h"})
+	var cfgErr ErrInvalidConfig
+	if !errors.As(err, &cfgErr) || cfgErr.Field != "Hostname" {
+		t.Fatalf("CreateBundle error = %v, want ErrInvalidConfig on Hostname", err)
+	}
+	entries, err := os.ReadDir(config.BundlesDir())
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read bundles dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("bundles dir holds %d entries after the refusal, want none", len(entries))
 	}
 }
 

@@ -477,6 +477,7 @@ POST /api/v1/iam/tenants/{tenant}/policies/validate
 POST /api/v1/iam/tenants/{tenant}/roles
 POST /api/v1/iam/tenants/{tenant}/users
 POST /api/v1/iam/tenants/{tenant}/users/{id}/roles/{role}
+POST /api/v1/iam/tokens/verify
 POST /api/v1/iam/users
 POST /api/v1/iam/users/{id}/roles/{role}
 POST /api/v1/idevid/activate-credential
