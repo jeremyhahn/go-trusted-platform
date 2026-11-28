@@ -103,14 +103,15 @@ describe('PlatformService', () => {
       expectOnlyGet('/v1/platform/config');
     });
 
-    it('sends includeSensitive=true in the query', async () => {
+    // The server reads `redact` (config_handlers.go), not includeSensitive.
+    it('sends redact=false when includeSensitive is true', async () => {
       await service.getConfig({ includeSensitive: true });
-      expectOnlyGet('/v1/platform/config?includeSensitive=true');
+      expectOnlyGet('/v1/platform/config?redact=false');
     });
 
-    it('sends includeSensitive=false in the query', async () => {
+    it('sends no redact parameter when includeSensitive is false', async () => {
       await service.getConfig({ includeSensitive: false });
-      expectOnlyGet('/v1/platform/config?includeSensitive=false');
+      expectOnlyGet('/v1/platform/config');
     });
 
     it('propagates a transport error', async () => {

@@ -172,7 +172,7 @@ export function useBMC(profileID: string): UseBMCResult {
     errors: current?.errors ?? {},
     refetch,
     setBootDevice: (request) => mutate(() => bmc.setBootDevice(profileID, request)),
-    mountISO: (isoURL) => mutate(() => bmc.mountISO(profileID, { iso_url: isoURL })),
+    mountISO: (isoURL) => mutate(() => bmc.mountISO(profileID, isoURL)),
     unmountISO: () => mutate(() => bmc.unmountISO(profileID)),
     provision: () => mutate(() => bmc.provision(profileID)),
   };
