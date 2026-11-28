@@ -82,7 +82,13 @@ const (
 	// serves pushes and same-repository pull requests.
 	docsOnlyGuardedSameRepoIf = "${{ needs.preflight.outputs.docs_only != 'true' && " + draftGuard + " && (" + scheduleGuardExpr + ") && (" + sameRepoExpr + ") }}"
 	fullTierGuardedIf         = "${{ (" + fullTierExpr + ") && " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
-	nightlyGuardedIf          = "${{ (" + nightlyExpr + ") && " + scheduleGuardExpr + " }}"
+	// webFullTierGuardedIf is fullTierGuardedIf that also runs on a pull
+	// request whose diff touches web/ (preflight's web_changed output,
+	// Tenant 15:45Z 11-28): web-e2e runs the real-server Playwright specs in
+	// a web PR's own run. It is a full-tier job: the gate lets its skip
+	// through only off the full tier, and a run that fails fails the gate.
+	webFullTierGuardedIf = "${{ (" + fullTierExpr + " || needs.preflight.outputs.web_changed == 'true') && " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
+	nightlyGuardedIf     = "${{ (" + nightlyExpr + ") && " + scheduleGuardExpr + " }}"
 
 	// scheduleEnv and scheduleGuardEnv are the gate's schedule flag and the
 	// guard's verdict: on a schedule run the gate fails on any verdict but
@@ -230,6 +236,7 @@ var tierByIf = map[string]string{
 	docsOnlyGuardedIf:         tierDocs,
 	docsOnlyGuardedSameRepoIf: tierDocs,
 	fullTierGuardedIf:         tierFull,
+	webFullTierGuardedIf:      tierFull,
 	mainOnlyGuardedIf:         tierMain,
 	nightlyGuardedIf:          tierNightly,
 }
@@ -240,6 +247,7 @@ var scheduleGuardedIf = map[string]bool{
 	docsOnlyGuardedIf:         true,
 	docsOnlyGuardedSameRepoIf: true,
 	fullTierGuardedIf:         true,
+	webFullTierGuardedIf:      true,
 	mainOnlyGuardedIf:         true,
 	nightlyGuardedIf:          true,
 }

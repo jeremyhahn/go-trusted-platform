@@ -386,6 +386,10 @@ jobs:
       OBJSTORE_SEAMS: ''      # CUSTOMIZE: no seam here
     outputs:
       docs_only: ${{ steps.diff.outputs.docs_only }}
+      # Tenant 15:45Z 11-28: true on a pull request that changes web/, so
+      # Web Console E2E runs in that PR's own run (#2369 merged on a run
+      # that skipped it).
+      web_changed: ${{ steps.diff.outputs.web_changed }}
       verdict: ${{ steps.guard.outputs.verdict }}
       proof: ${{ steps.guard.outputs.proof }}   # v1.30
       # v1.48 (ruling 1024): runs-on JSON for the two hosted-capable classes,
@@ -698,17 +702,24 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           docs_only=false
-          if [ "$EVENT" = pull_request ] && [ "$CI_FULL_TIER" != true ]; then
+          web_changed=false
+          if [ "$EVENT" = pull_request ]; then
             if files=$(git diff --name-only --no-renames "$BASE...$HEAD") && [ -n "$files" ]; then
-              if ! printf '%s\n' "$files" | grep -qvE "$DOCS_ONLY_PATTERN" \
+              if [ "$CI_FULL_TIER" != true ] \
+                && ! printf '%s\n' "$files" | grep -qvE "$DOCS_ONLY_PATTERN" \
                 && ! printf '%s\n' "$files" | grep -qE "$DOCS_TESTED_PATTERN"; then
                 docs_only=true
+              fi
+              if printf '%s\n' "$files" | grep -qE '^web/'; then
+                web_changed=true
               fi
               printf '%s\n' "$files"
             fi
           fi
           echo "docs only: $docs_only"
+          echo "web changed: $web_changed"
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "web_changed=$web_changed" >> "$GITHUB_OUTPUT"
 
       # ci-template v1.53 (ruling 1124): the LAN mask script, its step before
       # the first build step of every job that builds, and the registry reads
@@ -1544,7 +1555,7 @@ jobs:
   web-e2e:
     name: Web Console E2E
     runs-on: ${{ github.server_url == 'https://github.com' && fromJSON(needs.preflight.outputs.runner_docker) || 'ubuntu-latest' }}   # v1.48
-    if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
+    if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') || needs.preflight.outputs.web_changed == 'true') && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight
     timeout-minutes: 30
     env:
