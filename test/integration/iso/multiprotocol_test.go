@@ -33,6 +33,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -452,6 +453,28 @@ func customizeInputs(t *testing.T) (platformdPath, platformctlStaticPath, platfo
 	return filepath.Join(binDir, "platformd"), platformctlStaticPath, platformConfig
 }
 
+// createStaticInstaller returns the CGO_ENABLED=0 platformctl the runner
+// exports (prepare_iso_customize) for iso create to install on the media.
+func createStaticInstaller(t *testing.T) string {
+	t.Helper()
+	path := os.Getenv(EnvPlatformCTLStatic)
+	if path == "" {
+		t.Fatalf("missing prerequisite: %s is unset; it names the CGO_ENABLED=0 platformctl iso create installs", EnvPlatformCTLStatic)
+	}
+	if !FileExists(path) {
+		t.Fatalf("missing prerequisite: %v", ErrBinaryNotFound{Name: "platformctl-static", Path: path})
+	}
+	return path
+}
+
+// isDynamicInstallerRefusal reports whether err carries the
+// DynamicBinaryError text (pkg/iso): the media got a dynamically linked
+// installer, a regression of the static-installer input, never an
+// environment gap to tolerate.
+func isDynamicInstallerRefusal(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "is dynamically linked")
+}
+
 // ensureBuiltISO returns an ISO customized and rebuilt from the extracted tree,
 // building it first. Its callers boot it in a VM: the customization installs the
 // autoinstaller, whose inittab ends with a power-off, so the guest exits whether
@@ -850,21 +873,25 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		seeded := statSeededISO(t, createWorkDir)
 
 		opts := CreateOptions{
-			AlpineVersion: DefaultAlpineVersion,
-			Mirror:        DefaultMirror,
-			Arch:          DefaultArch,
-			WorkDir:       createWorkDir,
-			SecureBoot:    false, // Disable for faster tests
-			TPMUnseal:     true,
-			LUKS:          true,
-			GenerateKeys:  false, // Skip key generation for tests
-			Force:         false,
+			PlatformctlStaticPath: createStaticInstaller(t),
+			AlpineVersion:         DefaultAlpineVersion,
+			Mirror:                DefaultMirror,
+			Arch:                  DefaultArch,
+			WorkDir:               createWorkDir,
+			SecureBoot:            false, // Disable for faster tests
+			TPMUnseal:             true,
+			LUKS:                  true,
+			GenerateKeys:          false, // Skip key generation for tests
+			Force:                 false,
 		}
 
 		result, err := cmd.Create(testCtx, opts)
 		// Create downloads before it builds, so check the seed even when it fails.
 		assertSeededISOKept(t, seeded, createWorkDir)
 		if err != nil {
+			if isDynamicInstallerRefusal(err) {
+				t.Fatalf("iso create refused the installer: %v", err)
+			}
 			t.Logf("Create not available (expected): %v", err)
 			return
 		}
@@ -883,22 +910,26 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		seeded := statSeededISO(t, createWorkDir)
 
 		opts := CreateOptions{
-			AlpineVersion: DefaultAlpineVersion,
-			Mirror:        DefaultMirror,
-			Arch:          DefaultArch,
-			WorkDir:       createWorkDir,
-			SecureBoot:    false,
-			TPMUnseal:     true,
-			LUKS:          true,
-			FIPS:          true, // Enable FIPS mode
-			GenerateKeys:  false,
-			Force:         false,
+			PlatformctlStaticPath: createStaticInstaller(t),
+			AlpineVersion:         DefaultAlpineVersion,
+			Mirror:                DefaultMirror,
+			Arch:                  DefaultArch,
+			WorkDir:               createWorkDir,
+			SecureBoot:            false,
+			TPMUnseal:             true,
+			LUKS:                  true,
+			FIPS:                  true, // Enable FIPS mode
+			GenerateKeys:          false,
+			Force:                 false,
 		}
 
 		result, err := cmd.Create(testCtx, opts)
 		// Create downloads before it builds, so check the seed even when it fails.
 		assertSeededISOKept(t, seeded, createWorkDir)
 		if err != nil {
+			if isDynamicInstallerRefusal(err) {
+				t.Fatalf("iso create refused the installer: %v", err)
+			}
 			t.Logf("Create with FIPS not available (expected): %v", err)
 			return
 		}
@@ -917,20 +948,24 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		seeded := statSeededISO(t, createWorkDir)
 
 		opts := CreateOptions{
-			AlpineVersion: DefaultAlpineVersion,
-			Mirror:        DefaultMirror,
-			Arch:          DefaultArch,
-			PlatformType:  "server",
-			WorkDir:       createWorkDir,
-			SecureBoot:    false,
-			GenerateKeys:  false,
-			Force:         false,
+			PlatformctlStaticPath: createStaticInstaller(t),
+			AlpineVersion:         DefaultAlpineVersion,
+			Mirror:                DefaultMirror,
+			Arch:                  DefaultArch,
+			PlatformType:          "server",
+			WorkDir:               createWorkDir,
+			SecureBoot:            false,
+			GenerateKeys:          false,
+			Force:                 false,
 		}
 
 		result, err := cmd.Create(testCtx, opts)
 		// Create downloads before it builds, so check the seed even when it fails.
 		assertSeededISOKept(t, seeded, createWorkDir)
 		if err != nil {
+			if isDynamicInstallerRefusal(err) {
+				t.Fatalf("iso create refused the installer: %v", err)
+			}
 			t.Logf("Create server type not available (expected): %v", err)
 			return
 		}
@@ -945,20 +980,24 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		seeded := statSeededISO(t, createWorkDir)
 
 		opts := CreateOptions{
-			AlpineVersion: DefaultAlpineVersion,
-			Mirror:        DefaultMirror,
-			Arch:          DefaultArch,
-			PlatformType:  "client",
-			WorkDir:       createWorkDir,
-			SecureBoot:    false,
-			GenerateKeys:  false,
-			Force:         false,
+			PlatformctlStaticPath: createStaticInstaller(t),
+			AlpineVersion:         DefaultAlpineVersion,
+			Mirror:                DefaultMirror,
+			Arch:                  DefaultArch,
+			PlatformType:          "client",
+			WorkDir:               createWorkDir,
+			SecureBoot:            false,
+			GenerateKeys:          false,
+			Force:                 false,
 		}
 
 		result, err := cmd.Create(testCtx, opts)
 		// Create downloads before it builds, so check the seed even when it fails.
 		assertSeededISOKept(t, seeded, createWorkDir)
 		if err != nil {
+			if isDynamicInstallerRefusal(err) {
+				t.Fatalf("iso create refused the installer: %v", err)
+			}
 			t.Logf("Create client type not available (expected): %v", err)
 			return
 		}

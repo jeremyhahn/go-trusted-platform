@@ -464,7 +464,7 @@ re-applies only the flags cobra reports as `Changed`.
 | `disk.encryption.password` / `passphrase` | string, `secret:"true"` | — |
 | `disk.encryption.tpm.enabled` | bool | — |
 | `disk.encryption.tpm.handle` | uint32 | `DefaultLUKSTPMHandle` = `0x81000001` (SSRK) |
-| `disk.encryption.tpm.seal-pcrs` | []uint | falls back to top-level `pcrs`; recorded in `pcr-banks` only and never applied to the seal, which uses the platform policy (`sealKeyToTPM`, `pkg/firstboot/strategy.go:1261-1412`) |
+| `disk.encryption.tpm.seal-pcrs` | []uint | falls back to top-level `pcrs`, then to `installer.DefaultSealPCRs` = PCRs 7 and 11 (`pkg/installer/types.go`; the generator, profiles, config loader and `pkg/iso` all use it); recorded in `pcr-banks` only and never applied to the seal, which uses the platform policy (`sealKeyToTPM`, `pkg/firstboot/strategy.go:1261-1412`) |
 | `disk.encryption.tpm.pcr-banks` | []string | falls back to the TPM config value |
 | `disk.encryption.tpm.platform-policy` | bool | should be `false` — the initrd unseals before platformd creates the platform policy |
 | `disk.encryption.tpm.factory-reset-on-firstboot` | bool | `false` in Go, `true` in reference templates |

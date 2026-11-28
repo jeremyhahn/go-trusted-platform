@@ -129,6 +129,9 @@ func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*CreateRes
 	if opts.PlatformType != "" {
 		args = append(args, "--platform-type", opts.PlatformType)
 	}
+	if opts.PlatformctlStaticPath != "" {
+		args = append(args, "--platformctl-static-binary", opts.PlatformctlStaticPath)
+	}
 
 	// Security flags
 	args = append(args, fmt.Sprintf("--secure-boot=%t", opts.SecureBoot))

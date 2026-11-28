@@ -117,6 +117,8 @@ func TestLoadSealPCRsFromConfig_NoConfigIsTypedError(t *testing.T) {
 	assert.Contains(t, msgErr.Msg, "seal-pcrs not found in config.yaml")
 	assert.Contains(t, msgErr.Msg, installerMountPoint)
 	assert.Contains(t, msgErr.Msg, rootConfigPath)
+	assert.Contains(t, msgErr.Msg, "seal-pcrs: [7, 11]")
+	assert.NotContains(t, msgErr.Msg, "[7, 9]")
 }
 
 func TestDefaultInstallerCloserWaitsTheLockInterval(t *testing.T) {

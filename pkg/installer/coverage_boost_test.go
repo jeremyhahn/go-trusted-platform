@@ -398,6 +398,8 @@ func TestAlpineInstaller_ConfigureSystem_AllFalse(t *testing.T) {
 	assert.Contains(t, string(tpmConfContent), "TPM_AUTO_UPGRADE_SEAL=0")
 	assert.Contains(t, string(tpmConfContent), "LOCKDOWN=0")
 	assert.Contains(t, string(tpmConfContent), "FIPS=0")
+	assert.Contains(t, string(tpmConfContent), "TPM_SEAL_PCR=7,11\n")
+	assert.NotContains(t, string(tpmConfContent), "0,7,9")
 }
 
 func TestAlpineInstaller_ConfigureSystem_WithPlatformdBinary(t *testing.T) {
@@ -1206,7 +1208,7 @@ security:
 	assert.True(t, cfg.OS.EnableFIDO2)
 	assert.True(t, cfg.EnableTPMSealing)
 	// TPM enabled with no PCRs should get default PCRs
-	assert.Equal(t, []uint{0, 7, 9}, cfg.PCRs)
+	assert.Equal(t, []uint{7, 11}, cfg.PCRs)
 }
 
 // =============================================================================

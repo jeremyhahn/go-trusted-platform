@@ -2470,7 +2470,7 @@ func (i *installer) findPlatformConfig() ([]byte, error) {
 				if !bytes.Contains(data, []byte("seal-pcrs:")) {
 					i.logger.Warn("[TPM] Config found but missing seal-pcrs",
 						"path", testPath,
-						"HINT", "Config MUST have 'seal-pcrs: [7, 9]' at root level for TPM sealing")
+						"HINT", "Config MUST have 'seal-pcrs: [7, 11]' (DefaultSealPCRs) at root level for TPM sealing")
 					continue // Try next config file
 				}
 
