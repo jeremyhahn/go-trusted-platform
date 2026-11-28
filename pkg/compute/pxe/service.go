@@ -873,7 +873,9 @@ func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, 
 		// quarantine VLAN the durable intent marker stored above also
 		// survives a restart (#2081 Codex round 9).
 		if state != StateQuarantined && state != StateFailed {
-			s.restoreEnforcedFlows(ctx, device)
+			if rErr := s.restoreEnforcedFlows(ctx, device); rErr != nil {
+				err = errors.Join(err, rErr)
+			}
 		} else if s.vlanManager != nil {
 			s.setPendingQuarantine(deviceID, true)
 		}
@@ -1224,9 +1226,9 @@ func (s *service) undoFlows(ctx context.Context, before *DeviceInfo) {
 // enforced, after a state write failed. A device on the quarantine VLAN, in
 // quarantined or failed state, or with no known VLAN goes back to the
 // quarantine flows (fail closed).
-func (s *service) restoreEnforcedFlows(ctx context.Context, before *DeviceInfo) {
+func (s *service) restoreEnforcedFlows(ctx context.Context, before *DeviceInfo) error {
 	if s.vlanManager == nil || before == nil {
-		return
+		return nil
 	}
 	// The request may already be cancelled (#2081 Codex): restore on a
 	// bounded context of our own.
@@ -1248,39 +1250,57 @@ func (s *service) restoreEnforcedFlows(ctx context.Context, before *DeviceInfo) 
 		err = s.vlanManager.ApplyQuarantineFlows(cctx, before.PortID, before.MACAddress)
 	}
 	if err == nil {
-		return
+		return nil
 	}
+	// A failed restore, quarantine included, gets a fresh quarantine attempt
+	// and then drop-all (#2081 Codex round 11).
+	step := "restore"
 	if quarantine {
-		s.logger.Error(&WrappedError{Msg: "failed to restore quarantine flows after a failed state write; the device may keep wider access", Err: err},
-			"device_id", before.ID,
-		)
-		return
+		step = "restore quarantine"
 	}
-	s.failClosed(ctx, before, "restore", err)
+	return s.failClosed(ctx, before, step, err)
 }
 
 // failClosed applies the quarantine flows when a rollback could not put the
 // prior flows back, so a failed state write never leaves wider access than
 // the stored record allows.
-func (s *service) failClosed(ctx context.Context, device *DeviceInfo, step string, rollbackErr error) {
+func (s *service) failClosed(ctx context.Context, device *DeviceInfo, step string, rollbackErr error) error {
 	// A bounded context of its own, detached from the request and from the
 	// rollback's deadline, which a slow failed restore may have spent.
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failClosedTimeout)
 	defer cancel()
 	qErr := s.vlanManager.ApplyQuarantineFlows(fctx, device.PortID, device.MACAddress)
-	if qErr != nil {
-		s.logger.Error(&WrappedError{Msg: "failed to quarantine device after a failed flow rollback; the device may keep wider access", Err: qErr},
+	if qErr == nil {
+		s.logger.Warn("Flow rollback after a failed state write failed; device quarantined",
 			"device_id", device.ID,
 			"step", step,
 			"rollback_error", rollbackErr.Error(),
 		)
-		return
+		return nil
 	}
-	s.logger.Warn("Flow rollback after a failed state write failed; device quarantined",
+	// Quarantine could not be installed, and a flow manager may have rolled
+	// the failed install back to a wider placement: drop all of the port's
+	// traffic rather than leave that access in place (#2081 Codex round 11).
+	bErr := errors.New("VLAN integration cannot block a port")
+	if b, ok := s.vlanManager.(interface {
+		BlockPort(context.Context, string) error
+	}); ok {
+		bErr = b.BlockPort(fctx, device.PortID)
+	}
+	if bErr != nil {
+		s.logger.Error(&WrappedError{Msg: "failed to quarantine or block device after a failed flow rollback; the device may keep wider access", Err: errors.Join(qErr, bErr)},
+			"device_id", device.ID,
+			"step", step,
+			"rollback_error", rollbackErr.Error(),
+		)
+		return errors.Join(rollbackErr, qErr, bErr)
+	}
+	s.logger.Error(&WrappedError{Msg: "failed to quarantine device after a failed flow rollback; port traffic dropped", Err: qErr},
 		"device_id", device.ID,
 		"step", step,
 		"rollback_error", rollbackErr.Error(),
 	)
+	return errors.Join(rollbackErr, qErr)
 }
 
 // RetryDevice resets a device to discovered state for retry. A retry is a new

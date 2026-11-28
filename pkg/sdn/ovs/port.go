@@ -502,19 +502,58 @@ func parsePort(row map[string]interface{}) (*Port, error) {
 		port.Name = name
 	}
 
-	// Parse tag
+	// Parse tag: an optional column, so OVSDB sends a scalar or a set of
+	// at most one element (["set",[401]] or ["set",[]]). A tag that does
+	// not decode is an error, never "no tag" (#2081 Codex round 11).
 	if tagVal, ok := row["tag"]; ok {
+		if arr, ok := tagVal.([]interface{}); ok {
+			if len(arr) != 2 || arr[0] != "set" {
+				return nil, fmt.Errorf("port tag: malformed set %v", tagVal)
+			}
+			items, ok := arr[1].([]interface{})
+			if !ok || len(items) > 1 {
+				return nil, fmt.Errorf("port tag: want at most one element, got %v", arr[1])
+			}
+			tagVal = nil
+			if len(items) == 1 {
+				tagVal = items[0]
+			}
+		}
 		switch v := tagVal.(type) {
+		case nil:
+			port.Tag = 0
 		case float64:
 			port.Tag = int64(v)
 		case int64:
 			port.Tag = v
-		case []interface{}:
-			// Empty set: ["set", []]
-			if len(v) == 2 && v[0] == "set" {
-				port.Tag = 0
+		case int:
+			port.Tag = int64(v)
+		default:
+			return nil, fmt.Errorf("port tag: unexpected value %v", tagVal)
+		}
+	}
+
+	// Parse vlan_mode: an optional enum, a scalar string or a set of at
+	// most one string.
+	if modeVal, ok := row["vlan_mode"]; ok {
+		if arr, ok := modeVal.([]interface{}); ok {
+			if len(arr) != 2 || arr[0] != "set" {
+				return nil, fmt.Errorf("port vlan_mode: malformed set %v", modeVal)
+			}
+			items, ok := arr[1].([]interface{})
+			if !ok || len(items) > 1 {
+				return nil, fmt.Errorf("port vlan_mode: want at most one element, got %v", arr[1])
+			}
+			modeVal = ""
+			if len(items) == 1 {
+				modeVal = items[0]
 			}
 		}
+		mode, ok := modeVal.(string)
+		if !ok {
+			return nil, fmt.Errorf("port vlan_mode: unexpected value %v", modeVal)
+		}
+		port.VLANMode = mode
 	}
 
 	// Parse interfaces
