@@ -24,9 +24,13 @@ import (
 // caches them here. The platform User retains tenant ownership, roles,
 // and the foreign-key handles consumed by the rest of the system.
 type User struct {
-	ID             uint64    `yaml:"id" json:"id"`
-	TenantID       string    `yaml:"tenant-id" json:"tenant_id"`
-	IsTenantOwner  bool      `yaml:"is-tenant-owner" json:"is_tenant_owner"`
+	ID            uint64 `yaml:"id" json:"id"`
+	TenantID      string `yaml:"tenant-id" json:"tenant_id"`
+	IsTenantOwner bool   `yaml:"is-tenant-owner" json:"is_tenant_owner"`
+	// InvitationID is the ID of the invitation whose redemption saved
+	// this user, zero for a user no redemption saved. Only that
+	// invitation, while still pending, may retry the redemption (#2362).
+	InvitationID   uint64    `yaml:"invitation-id,omitempty" json:"invitation_id,omitempty"`
 	DisplayName    string    `yaml:"display" json:"display"`
 	Email          string    `yaml:"email" json:"email"`
 	Password       string    `yaml:"password" json:"password" secret:"true"`

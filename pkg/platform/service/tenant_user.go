@@ -188,13 +188,16 @@ func (s *TenantUserService) claimRedemption(email string) (release func(), ok bo
 }
 
 // unacceptedRedemption reports whether existing is the user an earlier
-// redemption of this invitation saved before its Accept failed: the
-// invitation is still pending, names existing's email and tenant, and
-// predates it. InvitationService refuses to invite an email the tenant
-// already holds, so the tenant can hold a pending invitation's email only
-// through a redemption of it (#2362).
+// redemption of this invitation saved before its Accept failed.
+// Provenance is the invitation ID the redemption persisted on the user
+// (User.InvitationID), not the email, tenant and creation time: several
+// pending invitations can name one email, and each of them matches those.
+// The redemption is unfinished while that invitation is still pending;
+// once it is accepted no retry passes. A user with no originating
+// invitation (self-registered, or saved before the ID was recorded) and
+// a different pending invitation for the same account never pass (#2362).
 func (s *TenantUserService) unacceptedRedemption(ctx context.Context, existing *entities.User, token string) bool {
-	if existing.TenantID == "" {
+	if existing.TenantID == "" || existing.InvitationID == 0 {
 		return false
 	}
 	inv, err := s.invitationService.GetByToken(ctx, token)
@@ -202,6 +205,7 @@ func (s *TenantUserService) unacceptedRedemption(ctx context.Context, existing *
 		return false
 	}
 	return inv.Status == entities.InvitationStatusPending &&
+		existing.InvitationID == inv.ID &&
 		inv.Email == existing.Email &&
 		inv.TenantID == existing.TenantID &&
 		!existing.CreatedAt.Before(inv.CreatedAt)
@@ -477,6 +481,7 @@ func (s *TenantUserService) RegisterInvitedUser(
 	// that made #171 read the tenant from the verified session rather than
 	// from a caller-supplied field.
 	user.TenantID = invitation.TenantID
+	user.InvitationID = invitation.ID
 	user.IsTenantOwner = invitation.InitialAdmin
 	user.CreatedAt = now
 	user.UpdatedAt = now
