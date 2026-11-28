@@ -65,6 +65,46 @@ func TestService_UpdateDeviceState_FailedRestrictiveWriteKeepsQuarantineFlows(t 
 	}
 }
 
+// TestService_UpdateDeviceState_FailedRestrictiveWriteBlocksWidening checks
+// that a generic restrictive update whose state write fails keeps the
+// quarantine flows and refuses every widening report until the restrictive
+// state is stored, both during the outage and after it (#2081 Codex round 4
+// P1).
+func TestService_UpdateDeviceState_FailedRestrictiveWriteBlocksWidening(t *testing.T) {
+	for _, target := range []ProvisioningState{StateQuarantined, StateFailed} {
+		t.Run(string(target), func(t *testing.T) {
+			ctx := context.Background()
+			svc, vlan, store, id := newStoreBackedService(t, StateQuarantined)
+			setStoredDevice(t, svc, store, id, StateInstalling, svc.config.ProvisioningVLAN,
+				func(d *DeviceInfo) bool { return d.State == target })
+			vlan.set("provisioning")
+
+			// The failed restrictive write.
+			require.Error(t, svc.UpdateDeviceState(ctx, id, target, "posture failed"))
+			assert.Equal(t, "quarantine", vlan.flows())
+
+			// A widening report during the outage.
+			require.Error(t, svc.UpdateDeviceState(ctx, id, StateInstallComplete, "install complete"))
+			assert.Equal(t, "quarantine", vlan.flows(), "a widening report in the outage must not lift the restrictive flows")
+
+			// End the outage.
+			store.mu.Lock()
+			store.failPut = nil
+			store.mu.Unlock()
+
+			// A widening report after the outage.
+			require.Error(t, svc.UpdateDeviceState(ctx, id, StateInstallComplete, "install complete"))
+			assert.Equal(t, "quarantine", vlan.flows(), "widening is refused until the restrictive state is stored")
+
+			// The restrictive retry.
+			require.NoError(t, svc.UpdateDeviceState(ctx, id, target, "posture failed"))
+			got, err := reloadFrom(t, store).Get(id)
+			require.NoError(t, err)
+			assert.Equal(t, target, got.State)
+		})
+	}
+}
+
 // A quarantine whose state write fails stays enforced: a later widening
 // report in the same outage must not lift it, and after the outage the
 // widening move is still refused until the quarantine is stored (#2081

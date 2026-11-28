@@ -30,8 +30,15 @@ type fakeDeviceStore struct {
 	devices map[string]*DeviceInfo
 	// putErr, when set, fails the next Put once (a transient outage).
 	putErr error
+	// putStoredErr, when set, makes the next Put store the device and then
+	// return this error once (a write whose outcome is unknown: it
+	// committed, the caller saw an error).
+	putStoredErr error
 	// deleteErr, when set, fails every Delete (a datastore outage).
 	deleteErr error
+	// deleteStoredErr, when set, makes the next Delete remove the record and
+	// then return this error once.
+	deleteStoredErr error
 	// deleteStarted and deleteGate, when set, make Delete signal its start
 	// and wait for the gate before it removes the record.
 	deleteStarted chan struct{}
@@ -47,6 +54,11 @@ func (f *fakeDeviceStore) Put(_ context.Context, device *DeviceInfo) error {
 	defer f.mu.Unlock()
 	if err := f.putErr; err != nil {
 		f.putErr = nil
+		return err
+	}
+	if err := f.putStoredErr; err != nil {
+		f.putStoredErr = nil
+		f.devices[device.ID] = copyDeviceInfo(device)
 		return err
 	}
 	f.devices[device.ID] = copyDeviceInfo(device)
@@ -68,6 +80,11 @@ func (f *fakeDeviceStore) Delete(_ context.Context, deviceID string) error {
 	defer f.mu.Unlock()
 	if f.deleteErr != nil {
 		return f.deleteErr
+	}
+	if err := f.deleteStoredErr; err != nil {
+		f.deleteStoredErr = nil
+		delete(f.devices, deviceID)
+		return err
 	}
 	delete(f.devices, deviceID)
 	return nil
@@ -183,6 +200,97 @@ func TestStateManager_UnregisterDeleteFailureIsRetryable(t *testing.T) {
 	var notFound ErrDeviceNotFound
 	if _, err := sm.Get("dev-2081"); !errors.As(err, &notFound) {
 		t.Fatalf("Get after Unregister: want ErrDeviceNotFound, got %v", err)
+	}
+}
+
+// TestStateManager_AmbiguousTransitionPutLeavesOldRecord checks that a
+// transition whose store write committed but reported an error leaves the
+// store at the old record, so a restart never restores a transition that was
+// reported as failed (#2081 Codex round 4 P1).
+func TestStateManager_AmbiguousTransitionPutLeavesOldRecord(t *testing.T) {
+	store := newFakeDeviceStore()
+	sm := NewStateManager(WithDeviceStore(store))
+	mac, _ := net.ParseMAC("02:00:00:00:20:82")
+	if err := sm.Register(&DeviceInfo{ID: "dev-2081a", MACAddress: mac, State: StateDiscovered}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	store.mu.Lock()
+	store.putStoredErr = errors.New("write outcome unknown")
+	store.mu.Unlock()
+	if err := sm.Transition("dev-2081a", StateBooting, "pxe boot"); err == nil {
+		t.Fatal("Transition with an ambiguous datastore Put returned nil")
+	}
+	if d, err := sm.Get("dev-2081a"); err != nil || d.State != StateDiscovered {
+		t.Fatalf("Get after failed Transition: %v %v", d, err)
+	}
+	if d, err := reloadFrom(t, store).Get("dev-2081a"); err != nil || d.State != StateDiscovered {
+		t.Fatalf("a restart must not restore a transition reported as failed: %v %v", d, err)
+	}
+
+	if err := sm.Transition("dev-2081a", StateBooting, "pxe boot"); err != nil {
+		t.Fatalf("Transition retry: %v", err)
+	}
+	if d, err := reloadFrom(t, store).Get("dev-2081a"); err != nil || d.State != StateBooting {
+		t.Fatalf("reload after the retried Transition: %v %v", d, err)
+	}
+}
+
+// TestStateManager_AmbiguousRegisterPutLeavesNoRecord checks that a
+// registration whose store write committed but reported an error leaves no
+// stored record.
+func TestStateManager_AmbiguousRegisterPutLeavesNoRecord(t *testing.T) {
+	store := newFakeDeviceStore()
+	sm := NewStateManager(WithDeviceStore(store))
+	mac, _ := net.ParseMAC("02:00:00:00:20:83")
+
+	store.mu.Lock()
+	store.putStoredErr = errors.New("write outcome unknown")
+	store.mu.Unlock()
+	if err := sm.Register(&DeviceInfo{ID: "dev-2081b", MACAddress: mac, State: StateDiscovered}); err == nil {
+		t.Fatal("Register with an ambiguous datastore Put returned nil")
+	}
+	if n := reloadFrom(t, store).Count(); n != 0 {
+		t.Fatalf("a restart must not restore a registration reported as failed: %d stored", n)
+	}
+
+	if err := sm.Register(&DeviceInfo{ID: "dev-2081b", MACAddress: mac, State: StateDiscovered}); err != nil {
+		t.Fatalf("Register retry: %v", err)
+	}
+	if n := reloadFrom(t, store).Count(); n != 1 {
+		t.Fatalf("reload after the retried Register: %d stored, want 1", n)
+	}
+}
+
+// TestStateManager_AmbiguousUnregisterDeleteKeepsRecord checks that an
+// unregistration whose store delete committed but reported an error puts the
+// record back, so memory and store agree.
+func TestStateManager_AmbiguousUnregisterDeleteKeepsRecord(t *testing.T) {
+	store := newFakeDeviceStore()
+	sm := NewStateManager(WithDeviceStore(store))
+	mac, _ := net.ParseMAC("02:00:00:00:20:84")
+	if err := sm.Register(&DeviceInfo{ID: "dev-2081c", MACAddress: mac, State: StateDiscovered}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	store.mu.Lock()
+	store.deleteStoredErr = errors.New("write outcome unknown")
+	store.mu.Unlock()
+	if err := sm.Unregister("dev-2081c"); err == nil {
+		t.Fatal("Unregister with an ambiguous datastore Delete returned nil")
+	}
+	if _, err := sm.Get("dev-2081c"); err != nil {
+		t.Fatalf("Get after failed Unregister: %v", err)
+	}
+	if _, err := reloadFrom(t, store).Get("dev-2081c"); err != nil {
+		t.Fatalf("the device stays registered and stored, so a retried Unregister deletes it: %v", err)
+	}
+
+	if err := sm.Unregister("dev-2081c"); err != nil {
+		t.Fatalf("Unregister retry: %v", err)
+	}
+	if n := reloadFrom(t, store).Count(); n != 0 {
+		t.Fatalf("reload after the retried Unregister: %d stored, want 0", n)
 	}
 }
 
