@@ -1303,6 +1303,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			if svc := platformDaemon.ComputeGRPCService(); svc != nil {
 				params.ComputeServiceServer = svc
 			}
+			// The console's IAM router answers POST /api/v1/iam/tokens/verify
+			// through the daemon's token verifier, as every transport does.
+			if v := platformDaemon.IAMRESTTokenVerifier(); v != nil {
+				params.IAMTokenVerifier = v
+			}
 			if svc := platformDaemon.DNSGRPCServiceServer(); svc != nil {
 				params.DNSServiceServer = svc
 			}
@@ -1351,6 +1356,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			// registry — surface their daemon-side server impls so REST
 			// /api/v1/{sdn,vtpm,switches} stop returning the
 			// "endpoint does not exist" envelope.
+			if h := platformDaemon.BMCRestHandler(); h != nil {
+				params.BMCRestHandler = h
+			}
 			if svc := platformDaemon.SDNService(); svc != nil {
 				params.SDNService = svc
 				// Reconcile configured VLANs into the in-memory SDN

@@ -519,8 +519,8 @@ func TestCov964_DefaultNewIncomingReceiverHostFailures(t *testing.T) {
 		assert.ErrorIs(t, err, qemu.ErrOVMFNotFound)
 		dirs, globErr := filepath.Glob(filepath.Join(orch.config.WorkDir, "incoming-*"))
 		require.NoError(t, globErr)
-		require.Len(t, dirs, 1)
-		assert.NoFileExists(t, filepath.Join(dirs[0], "disk.qcow2"))
+		// A receiver that fails to launch leaves no work directory (#2021 C6).
+		assert.Empty(t, dirs, "a failed launch must remove its incoming-* work directory")
 	})
 }
 

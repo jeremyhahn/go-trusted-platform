@@ -69,6 +69,11 @@ func defaultVMRunControlFor(ctx context.Context, inst *qemuInstance) (vmRunContr
 // otherwise ACPI powerdown over QMP, then SIGTERM when the guest does not
 // answer within the timeout (the QEMU default when opts has none).
 func defaultStopVMProcess(inst *qemuInstance, opts StopOptions) error {
+	// An instance without a VM handle (an adopted migrated guest whose
+	// receiver exposed none) has no process to stop: it counts as not running.
+	if inst.vm == nil {
+		return qemu.ErrVMNotRunning
+	}
 	switch {
 	case opts.Force:
 		return inst.vm.ForceStop()

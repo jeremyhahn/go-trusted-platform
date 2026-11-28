@@ -65,17 +65,16 @@ func (h *Handlers) extendWriteDeadline(w http.ResponseWriter, opts compute.StopO
 	h.extendWriteDeadlineBy(w, opts.ReplyWindow())
 }
 
-// migrateReplyWindow is how long a MigrateVM reply may take. A migration
-// copies the guest's memory and disks to the destination, which outlasts the
-// server's write timeout; the web client waits the same window.
+// migrateReplyWindow is how long a migrate reply may take: the call waits on
+// the transfer and the receiver's finalize, which outlasts the server's write
+// timeout; the web client waits the same window
+// (MIGRATE_REQUEST_TIMEOUT_MS in web/src/hooks/use-vm-migration.ts).
 const migrateReplyWindow = 2 * time.Hour
 
-// extendWriteDeadlineBy moves the connection's write deadline window past
-// now, so a reply that takes longer than the server's write timeout still
-// reaches the client.
+// extendWriteDeadlineBy moves the reply's write deadline to window from now,
+// logging (and serving the request anyway) when the writer refuses.
 func (h *Handlers) extendWriteDeadlineBy(w http.ResponseWriter, window time.Duration) {
-	deadline := time.Now().Add(window)
-	if err := http.NewResponseController(w).SetWriteDeadline(deadline); err != nil {
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(window)); err != nil {
 		h.logger.Warnf("compute: cannot extend the reply deadline: %v", err)
 	}
 }

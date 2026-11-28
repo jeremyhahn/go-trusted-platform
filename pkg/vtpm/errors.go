@@ -110,6 +110,17 @@ func (e ErrTemplateNotFound) Error() string {
 	return fmt.Sprintf("vtpm: template not found: %s", e.ID)
 }
 
+// ErrInvalidTemplateID indicates a template ID that is not a single path
+// element, so it would resolve outside the templates directory.
+type ErrInvalidTemplateID struct {
+	ID     string
+	Reason string
+}
+
+func (e ErrInvalidTemplateID) Error() string {
+	return fmt.Sprintf("invalid template ID %q: %s", e.ID, e.Reason)
+}
+
 // ErrTemplateAlreadyExists indicates a template with the ID already exists.
 type ErrTemplateAlreadyExists struct {
 	ID string
@@ -253,6 +264,26 @@ func (e ErrArchiveOperationFailed) Error() string {
 
 func (e ErrArchiveOperationFailed) Unwrap() error {
 	return e.Cause
+}
+
+// ErrArchiveTooLarge indicates an archive import would expand beyond its
+// decompressed-byte budget.
+type ErrArchiveTooLarge struct {
+	Limit int64
+}
+
+func (e ErrArchiveTooLarge) Error() string {
+	return fmt.Sprintf("vtpm: archive import expands beyond %d bytes", e.Limit)
+}
+
+// ErrArchiveTooManyEntries indicates an archive import holds more entries
+// than its budget allows.
+type ErrArchiveTooManyEntries struct {
+	Limit int
+}
+
+func (e ErrArchiveTooManyEntries) Error() string {
+	return fmt.Sprintf("vtpm: archive import has more than %d entries", e.Limit)
 }
 
 // =============================================================================

@@ -23,9 +23,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"testing/synctest"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -40,61 +40,13 @@ type fakeIncomingReceiver struct {
 	aborted   bool
 	commitErr error
 	abortErr  error
-	workDir   string
-	diskPath  string
-	pid       int
-	exited    chan struct{}
-
-	// waits counts Wait calls (the process reaps); waitedOnce closes waited at
-	// the first one.
-	waits      atomic.Int32
-	waitedMu   sync.Mutex
-	waited     chan struct{}
-	waitedOnce sync.Once
+	vm        *qemu.VM
 }
 
-// waitedChan is closed at the receiver's first Wait.
-func (f *fakeIncomingReceiver) waitedChan() chan struct{} {
-	f.waitedMu.Lock()
-	defer f.waitedMu.Unlock()
-	if f.waited == nil {
-		f.waited = make(chan struct{})
-	}
-	return f.waited
-}
+func (f *fakeIncomingReceiver) VM() *qemu.VM { return f.vm }
 
-// requireReaped fails unless the receiver's process was reaped within 5 s.
-func (f *fakeIncomingReceiver) requireReaped(t *testing.T) {
-	t.Helper()
-	select {
-	case <-f.waitedChan():
-	case <-time.After(5 * time.Second):
-		t.Fatal("the receiver's process was never reaped (Wait not called)")
-	}
-}
-
-func (f *fakeIncomingReceiver) PID() int { return f.pid }
-
-// newFakeIncomingReceiver returns a fake whose Wait returns when the test ends.
-func newFakeIncomingReceiver(t *testing.T, port int) *fakeIncomingReceiver {
-	f := &fakeIncomingReceiver{port: port, exited: make(chan struct{})}
-	t.Cleanup(func() { close(f.exited) })
-	return f
-}
-
-func (f *fakeIncomingReceiver) VM() *qemu.VM { return nil }
-
-func (f *fakeIncomingReceiver) WorkDir() string { return f.workDir }
-
-func (f *fakeIncomingReceiver) DiskPath() string { return f.diskPath }
-
-func (f *fakeIncomingReceiver) Wait() error {
-	f.waits.Add(1)
-	f.waitedOnce.Do(func() { close(f.waitedChan()) })
-	if f.exited != nil {
-		<-f.exited
-	}
-	return nil
+func (f *fakeIncomingReceiver) TransferState(context.Context) receiverTransferState {
+	return transferIdle
 }
 
 func (f *fakeIncomingReceiver) Port() int { return f.port }
@@ -182,8 +134,127 @@ func TestReceiveIncoming_HappyPath(t *testing.T) {
 	assert.Equal(t, netip.MustParseAddrPort(DefaultMigrationListenAddress), gotParams.listen)
 }
 
+// The receiver serves a separate transfer after the prepare request has
+// returned, so its QEMU process must not be bound to that request's context:
+// it lives until FinalizeIncoming commits or aborts it.
+func TestReceiveIncoming_ReceiverOutlivesTheRequest(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := &fakeServerTLS{dir: t.TempDir()}
+	orch.config.MigrationTLS = tlsProv
+
+	recv := &fakeIncomingReceiver{port: 49201}
+	var launchCtx context.Context
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		launchCtx = ctx
+		return recv, nil
+	})
+
+	reqCtx, cancel := context.WithCancel(context.Background())
+	handle, err := orch.ReceiveIncoming(reqCtx, MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024},
+	})
+	require.NoError(t, err)
+	cancel()
+
+	require.NotNil(t, launchCtx)
+	assert.NoError(t, launchCtx.Err(), "the receiver must outlive the prepare request")
+	assert.False(t, recv.aborted)
+	assert.False(t, tlsProv.cleanedUp)
+
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, false))
+	assert.True(t, recv.aborted)
+	assert.True(t, tlsProv.cleanedUp, "finalize must clean the receiver's creds up")
+}
+
+// signalReceiver counts aborts and commits and signals the first abort, so a
+// receiver reaped on another goroutine can be awaited without a data race.
+type signalReceiver struct {
+	aborts   atomic.Int32
+	commits  atomic.Int32
+	abortedC chan struct{}
+	once     sync.Once
+	// transferring is what Transferring reports: an active migration
+	// stream renews the receiver lifetime.
+	transferring atomic.Bool
+	// completed marks a stream that finished and awaits finalize.
+	completed atomic.Bool
+	// vm is the receiving QEMU a commit hands over (never started).
+	vm *qemu.VM
+}
+
+func (s *signalReceiver) VM() *qemu.VM { return s.vm }
+
+func (s *signalReceiver) TransferState(context.Context) receiverTransferState {
+	switch {
+	case s.transferring.Load():
+		return transferActive
+	case s.completed.Load():
+		return transferCompleted
+	}
+	return transferIdle
+}
+
+func newSignalReceiver() *signalReceiver {
+	return &signalReceiver{abortedC: make(chan struct{})}
+}
+
+func (s *signalReceiver) Port() int { return 49301 }
+
+func (s *signalReceiver) Commit(context.Context) error {
+	s.commits.Add(1)
+	return nil
+}
+
+func (s *signalReceiver) Abort(context.Context) error {
+	s.aborts.Add(1)
+	s.once.Do(func() { close(s.abortedC) })
+	return nil
+}
+
+// signalServerTLS counts and signals the release of the receiver's creds.
+type signalServerTLS struct {
+	dir       string
+	cleanups  atomic.Int32
+	cleanedUp chan struct{}
+	once      sync.Once
+}
+
+func newSignalServerTLS(dir string) *signalServerTLS {
+	return &signalServerTLS{dir: dir, cleanedUp: make(chan struct{})}
+}
+
+func (s *signalServerTLS) EnsureTLSCreds(context.Context, MigrationSession, *IncomingEndpoint) (string, error) {
+	return "migtls-client", nil
+}
+
+func (s *signalServerTLS) MaterializeServerCreds(context.Context, string) (string, func(), error) {
+	return s.dir, func() {
+		s.cleanups.Add(1)
+		s.once.Do(func() { close(s.cleanedUp) })
+	}, nil
+}
+
+// swapReceiverLifetime shortens the prepared receiver's lifetime for a test.
+func swapReceiverLifetime(t *testing.T, d time.Duration) {
+	t.Helper()
+	orig := receiverLifetime
+	receiverLifetime = d
+	t.Cleanup(func() { receiverLifetime = orig })
+}
+
+func awaitSignal(t *testing.T, c <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-c:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
 // TestReceiveIncoming_ReceiverOutlivesTheRequestContext pins that the
-// receiving QEMU is launched on a context the PrepareMigration request does
+// receiving QEMU is launched on a lifetime the PrepareMigration request does
 // not cancel: the receiver must stay up until FinalizeMigration.
 func TestReceiveIncoming_ReceiverOutlivesTheRequestContext(t *testing.T) {
 	orch := newOpsOrchestrator(t)
@@ -204,14 +275,15 @@ func TestReceiveIncoming_ReceiverOutlivesTheRequestContext(t *testing.T) {
 		Mode:       MigrateModeCold,
 		Config:     &InstanceConfig{Memory: 2048, CPUs: 2, DiskSize: "20G"},
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	_, err := orch.ReceiveIncoming(ctx, spec)
-	cancel()
+	handle, err := orch.ReceiveIncoming(context.Background(), spec)
 	require.NoError(t, err)
 
 	require.NotNil(t, gotParams)
 	require.NotNil(t, gotParams.lifetime)
 	assert.NoError(t, gotParams.lifetime.Err(), "the receiver QEMU must not die with the PrepareMigration request")
+
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, false))
+	assert.Error(t, gotParams.lifetime.Err(), "an aborted receiver's lifetime is cancelled")
 }
 
 func TestQEMUOrchestrator_CloseAbortsPreparedReceivers(t *testing.T) {
@@ -238,103 +310,407 @@ func TestQEMUOrchestrator_CloseAbortsPreparedReceivers(t *testing.T) {
 	orch.Close()
 
 	assert.True(t, recv.aborted, "Close aborts a prepared receiver")
-	recv.requireReaped(t)
-	assert.Equal(t, int32(1), recv.waits.Load(), "Close reaps the aborted receiver's process once")
 	assert.True(t, tlsProv.cleanedUp, "Close releases the receiver's creds")
 	require.NotNil(t, gotParams)
 	assert.Error(t, gotParams.lifetime.Err(), "Close cancels the receiver's lifetime")
 	require.ErrorIs(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true), ErrReceiverNotFound)
 }
 
-func TestQEMUOrchestrator_CloseStopsAdoptedGuestsBeforeCancellingTheirLifetime(t *testing.T) {
+func TestReceiveIncoming_UnfinalizedReceiverExpires(t *testing.T) {
+	swapReceiverLifetime(t, 20*time.Millisecond)
 	orch := newOpsOrchestrator(t)
-	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
-	recv := newFakeIncomingReceiver(t, 5002)
-	recv.workDir = t.TempDir()
-	recv.diskPath = recv.workDir + "/disk.qcow2"
-	var gotParams *incomingReceiverParams
+	tlsProv := newSignalServerTLS(t.TempDir())
+	orch.config.MigrationTLS = tlsProv
+
+	recv := newSignalReceiver()
 	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
-		gotParams = p
 		return recv, nil
 	})
+
 	handle, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024},
+	})
+	require.NoError(t, err)
+
+	// The prepare reply is "lost": nobody finalizes. The lifetime reaps it.
+	awaitSignal(t, recv.abortedC, "the expired receiver to be aborted")
+	awaitSignal(t, tlsProv.cleanedUp, "the expired receiver's creds to be released")
+	assert.Equal(t, int32(0), recv.commits.Load())
+
+	err = orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true)
+	assert.ErrorIs(t, err, ErrReceiverNotFound, "an expired receiver can no longer be finalized")
+}
+
+// An active transfer renews the receiver lifetime: a long migration is not
+// stopped mid-stream, and the receiver is reaped once the stream is no longer
+// active (#2021 Codex P1).
+func TestReceiveIncoming_ActiveTransferRenewsTheLifetime(t *testing.T) {
+	swapReceiverLifetime(t, 20*time.Millisecond)
+	orch := newOpsOrchestrator(t)
+	tlsProv := newSignalServerTLS(t.TempDir())
+	orch.config.MigrationTLS = tlsProv
+
+	recv := newSignalReceiver()
+	recv.transferring.Store(true)
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+
+	_, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024},
+	})
+	require.NoError(t, err)
+
+	select {
+	case <-recv.abortedC:
+		t.Fatal("a receiver with an active transfer must not be reaped")
+	case <-time.After(150 * time.Millisecond):
+	}
+	assert.Equal(t, int32(0), recv.aborts.Load())
+
+	recv.transferring.Store(false)
+	awaitSignal(t, recv.abortedC, "the idle receiver to be aborted")
+	awaitSignal(t, tlsProv.cleanedUp, "the idle receiver's creds to be released")
+}
+
+// A completed transfer that is never finalized (the source crashed after the
+// stream) gets a bounded finalization grace, not endless renewal: the receiver
+// is reaped and its creds released (#2021 Codex P1).
+func TestReceiveIncoming_CompletedTransferIsReapedAfterGrace(t *testing.T) {
+	swapReceiverLifetime(t, 20*time.Millisecond)
+	orch := newOpsOrchestrator(t)
+	tlsProv := newSignalServerTLS(t.TempDir())
+	orch.config.MigrationTLS = tlsProv
+
+	recv := newSignalReceiver()
+	recv.completed.Store(true)
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+
+	_, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024},
+	})
+	require.NoError(t, err)
+
+	awaitSignal(t, recv.abortedC, "the completed, unfinalized receiver to be aborted")
+	awaitSignal(t, tlsProv.cleanedUp, "the completed receiver's creds to be released")
+	assert.Equal(t, int32(0), recv.commits.Load())
+}
+
+// newReceivedVM builds a qemu.VM that is never started, standing in for the
+// receiving QEMU a committed migration hands over.
+func newReceivedVM(t *testing.T, orch *QEMUOrchestrator) *qemu.VM {
+	t.Helper()
+	fw := t.TempDir()
+	cfg := orch.config.qemuBase()
+	cfg.Arch = qemu.ArchX86_64
+	cfg.OVMFCode = filepath.Join(fw, "OVMF_CODE.fd")
+	cfg.OVMFVars = filepath.Join(fw, "OVMF_VARS.fd")
+	require.NoError(t, os.WriteFile(cfg.OVMFCode, nil, 0o600))
+	require.NoError(t, os.WriteFile(cfg.OVMFVars, nil, 0o600))
+	cfg.WorkDir = filepath.Join(orch.config.WorkDir, "incoming-test")
+	cfg.DiskPath = filepath.Join(cfg.WorkDir, "disk.qcow2")
+	cfg.DiskSize = "1G"
+	cfg.Memory = 512
+	cfg.CPUs = 1
+	vm, err := qemu.NewVM(cfg, logging.DefaultLogger())
+	require.NoError(t, err)
+	return vm
+}
+
+// A committed receiver becomes a normal instance: listed, readable and
+// owned by Close (#2021 Codex P1).
+func TestFinalizeIncoming_CommitAdoptsTheGuest(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
+
+	// A committed receiver's QEMU is running: adoption refuses one that
+	// already exited.
+	recv := &fakeIncomingReceiver{port: 5000, vm: startReceivedVM(t, orch)}
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+
+	spec := MigrationSpec{
+		InstanceID: "vm-migrated",
 		Arch:       orch.config.Arch,
-		InstanceID: "vm1",
 		VMName:     "guest",
-		Mode:       MigrateModeCold,
-		Config:     &InstanceConfig{Memory: 1024, CPUs: 1},
+		Config:     &InstanceConfig{Memory: 1024},
+	}
+	handle, err := orch.ReceiveIncoming(context.Background(), spec)
+	require.NoError(t, err)
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true))
+
+	got, err := orch.Get(context.Background(), spec.InstanceID)
+	require.NoError(t, err)
+	assert.Equal(t, spec.VMName, got.Name)
+	assert.Equal(t, StateRunning, got.State)
+
+	list, err := orch.List(context.Background(), nil)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, spec.InstanceID, list[0].ID)
+	assert.Equal(t, StateRunning, list[0].State)
+
+	state, err := orch.GetState(context.Background(), spec.InstanceID)
+	require.NoError(t, err)
+	assert.Equal(t, StateRunning, state)
+
+	_, err = orch.Get(context.Background(), spec.InstanceID)
+	require.NoError(t, err, "the instance stays known until Close")
+	require.NoError(t, orch.Close())
+}
+
+// startReceivedVM returns a received VM whose QEMU is a running fake process.
+func startReceivedVM(t *testing.T, orch *QEMUOrchestrator) *qemu.VM {
+	t.Helper()
+	orch.config.QEMUBinary = filepath.Join(t.TempDir(), "qemu-system-x86_64")
+	require.NoError(t, os.WriteFile(orch.config.QEMUBinary, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755))
+	vm := newReceivedVM(t, orch)
+	cfg := vm.GetConfig()
+	require.NoError(t, os.MkdirAll(cfg.WorkDir, 0o755))
+	require.NoError(t, os.WriteFile(cfg.DiskPath, []byte("disk"), 0o600))
+	nvram := cfg.GetNVRAMPath()
+	require.NoError(t, os.MkdirAll(filepath.Dir(nvram), 0o755))
+	require.NoError(t, os.WriteFile(nvram, []byte("vars"), 0o600))
+	_, err := vm.StartIncoming(context.Background(), "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = vm.Stop() })
+	return vm
+}
+
+// A forced stop that lands as soon as the received instance is published
+// must find the run and its exit watcher: the exit is recorded and the
+// process reaped (Codex P1, PR #2021).
+func TestFinalizeIncoming_StopRightAfterAdoptionRecordsTheExit(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
+
+	recv := &fakeIncomingReceiver{port: 5000, vm: startReceivedVM(t, orch)}
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+	var stopErr error
+	receiverAdoptedHook = func(id string) {
+		stopErr = orch.StopWithOptions(context.Background(), id, StopOptions{Force: true})
+	}
+	t.Cleanup(func() { receiverAdoptedHook = nil })
+
+	spec := MigrationSpec{
+		InstanceID: "vm-migrated",
+		Arch:       orch.config.Arch,
+		VMName:     "guest",
+		Config:     &InstanceConfig{Memory: 1024},
+	}
+	handle, err := orch.ReceiveIncoming(context.Background(), spec)
+	require.NoError(t, err)
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true))
+	require.NoError(t, stopErr)
+
+	require.Eventually(t, func() bool {
+		state, err := orch.GetState(context.Background(), spec.InstanceID)
+		return err == nil && state == StateStopped
+	}, 10*time.Second, 20*time.Millisecond, "the forced stop's exit must be recorded")
+	require.NoError(t, orch.Close())
+}
+
+func TestFinalizeIncoming_UnsolicitedExitAfterAdoption(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
+
+	vm := startReceivedVM(t, orch)
+	recv := &fakeIncomingReceiver{port: 5000, vm: vm}
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+	var killErr error
+	receiverAdoptedHook = func(id string) {
+		killErr = vm.Kill()
+	}
+	t.Cleanup(func() { receiverAdoptedHook = nil })
+
+	spec := MigrationSpec{
+		InstanceID: "vm-migrated",
+		Arch:       orch.config.Arch,
+		VMName:     "guest",
+		Config:     &InstanceConfig{Memory: 1024},
+	}
+	handle, err := orch.ReceiveIncoming(context.Background(), spec)
+	require.NoError(t, err)
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true))
+	require.NoError(t, killErr)
+
+	require.Eventually(t, func() bool {
+		state, err := orch.GetState(context.Background(), spec.InstanceID)
+		return err == nil && state != StateRunning
+	}, 10*time.Second, 20*time.Millisecond, "an unsolicited exit must leave the running state")
+
+	state, err := orch.GetState(context.Background(), spec.InstanceID)
+	require.NoError(t, err)
+	require.Equal(t, StateStopped, state)
+	inst, err := orch.Get(context.Background(), spec.InstanceID)
+	require.NoError(t, err)
+	require.Equal(t, 0, inst.PID)
+	require.Equal(t, StateStopped, inst.State)
+
+	if err := orch.Start(context.Background(), spec.InstanceID); err != nil {
+		require.NotErrorIs(t, err, ErrInstanceAlreadyRunning)
+	}
+	require.NoError(t, orch.Close())
+}
+
+// The adopted instance carries the destination's work directory and disk, so
+// disk operations find the migrated image and Delete removes the receiver's
+// directory (Codex P1, PR #2021).
+func TestFinalizeIncoming_AdoptedConfigCarriesTheDestinationPaths(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
+
+	vm := startReceivedVM(t, orch)
+	qcfg := vm.GetConfig()
+	recv := &fakeIncomingReceiver{port: 5000, vm: vm}
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+
+	spec := MigrationSpec{
+		InstanceID: "vm-migrated",
+		Arch:       orch.config.Arch,
+		VMName:     "guest",
+		Config:     &InstanceConfig{Memory: 1024},
+	}
+	handle, err := orch.ReceiveIncoming(context.Background(), spec)
+	require.NoError(t, err)
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true))
+
+	got, err := orch.Get(context.Background(), spec.InstanceID)
+	require.NoError(t, err)
+	assert.Equal(t, qcfg.WorkDir, got.Config.WorkDir)
+	assert.Equal(t, qcfg.DiskPath, got.Config.DiskPath)
+	assert.Empty(t, spec.Config.WorkDir, "the caller's spec is not modified")
+
+	require.NoError(t, orch.StopWithOptions(context.Background(), spec.InstanceID, StopOptions{Force: true}))
+	require.NoError(t, orch.Delete(context.Background(), spec.InstanceID))
+	_, statErr := os.Stat(qcfg.WorkDir)
+	assert.True(t, os.IsNotExist(statErr), "Delete must remove the receiver's work directory")
+}
+
+// A failed commit registers nothing.
+func TestFinalizeIncoming_FailedCommitAdoptsNothing(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
+
+	recv := &fakeIncomingReceiver{port: 5000, commitErr: errors.New("resume failed"), vm: newReceivedVM(t, orch)}
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+
+	handle, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		InstanceID: "vm-migrated",
+		Arch:       orch.config.Arch,
+		VMName:     "guest",
+		Config:     &InstanceConfig{Memory: 1024},
+	})
+	require.NoError(t, err)
+	require.ErrorIs(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true), ErrMigrationReceiveFailed)
+
+	// The failed finalize reaps the receiver's process: nothing is left
+	// running without an owner, and a retry finds no receiver.
+	assert.True(t, recv.aborted, "a failed commit must abort the receiver so its process is killed and waited")
+	require.ErrorIs(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true), ErrReceiverNotFound)
+
+	_, err = orch.Get(context.Background(), "vm-migrated")
+	require.ErrorIs(t, err, ErrInstanceNotFound)
+	list, err := orch.List(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Empty(t, list)
+}
+
+func TestFinalizeIncoming_EndsTheReceiverLifetime(t *testing.T) {
+	swapReceiverLifetime(t, 30*time.Millisecond)
+	orch := newOpsOrchestrator(t)
+	tlsProv := newSignalServerTLS(t.TempDir())
+	orch.config.MigrationTLS = tlsProv
+
+	recv := newSignalReceiver()
+	recv.vm = startReceivedVM(t, orch)
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+
+	handle, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024},
 	})
 	require.NoError(t, err)
 	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true))
-	require.NotNil(t, gotParams)
 
-	var order []string
-	saved := closeStopGuest
-	t.Cleanup(func() { closeStopGuest = saved })
-	closeStopGuest = func(vm *qemu.VM) (bool, error) {
-		if gotParams.lifetime.Err() != nil {
-			order = append(order, "lifetime-cancelled")
-		}
-		order = append(order, "stop")
-		return true, nil
-	}
-
-	orch.Close()
-
-	assert.Equal(t, []string{"stop"}, order,
-		"Close stops the adopted guest gracefully while its process lifetime is still live")
-	assert.Error(t, gotParams.lifetime.Err(), "Close cancels the lifetime after the guest stopped")
+	// Past the deadline the committed receiver is left alone.
+	time.Sleep(150 * time.Millisecond)
+	assert.Equal(t, int32(1), recv.commits.Load())
+	assert.Equal(t, int32(0), recv.aborts.Load(), "a finalized receiver must not be reaped")
+	assert.Equal(t, int32(1), tlsProv.cleanups.Load(), "creds are released exactly once")
 }
 
-func TestReceiveIncoming_AbandonedReceiverExpires(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		orch := newOpsOrchestrator(t)
-		tlsProv := &fakeServerTLS{dir: t.TempDir()}
-		orch.config.MigrationTLS = tlsProv
+func TestReceiveIncoming_CancelledBeforeReplyAbortsTheReceiver(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := newSignalServerTLS(t.TempDir())
+	orch.config.MigrationTLS = tlsProv
 
-		recv := &fakeIncomingReceiver{port: 49202}
-		var gotParams *incomingReceiverParams
-		swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
-			gotParams = p
-			return recv, nil
-		})
-		spec := MigrationSpec{
-			Arch:   orch.config.Arch,
-			VMName: "guest",
-			Mode:   MigrateModeCold,
-			Config: &InstanceConfig{Memory: 1024, CPUs: 1},
-		}
+	reqCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-		handle, err := orch.ReceiveIncoming(context.Background(), spec)
-		require.NoError(t, err)
-
-		time.Sleep(receiverMaxLifetime + time.Minute)
-		synctest.Wait()
-
-		assert.True(t, recv.aborted, "an abandoned receiver is aborted at its deadline")
-		recv.requireReaped(t)
-		assert.Equal(t, int32(1), recv.waits.Load(), "an expired receiver's process is reaped once")
-		assert.True(t, tlsProv.cleanedUp, "an abandoned receiver's creds are released")
-		require.NotNil(t, gotParams)
-		assert.Error(t, gotParams.lifetime.Err(), "an abandoned receiver's lifetime is cancelled")
-		require.ErrorIs(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true), ErrReceiverNotFound)
-
-		finalized := &fakeIncomingReceiver{port: 49203}
-		swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
-			return finalized, nil
-		})
-		handle, err = orch.ReceiveIncoming(context.Background(), spec)
-		require.NoError(t, err)
-		require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, false))
-		finalized.requireReaped(t)
-		finalized.aborted = false
-
-		time.Sleep(receiverMaxLifetime + time.Minute)
-		synctest.Wait()
-		assert.False(t, finalized.aborted, "a finalized receiver is not aborted at the deadline")
-
-		orch.Close()
+	recv := newSignalReceiver()
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		// The caller goes away while the receiver is being launched.
+		cancel()
+		return recv, nil
 	})
+
+	handle, err := orch.ReceiveIncoming(reqCtx, MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024},
+	})
+	require.Error(t, err)
+	assert.Nil(t, handle)
+	assert.ErrorIs(t, err, ErrMigrationReceiveFailed)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, int32(1), recv.aborts.Load(), "a receiver whose token never reached the caller is aborted")
+	assert.Equal(t, int32(1), tlsProv.cleanups.Load())
+}
+
+func TestClose_ReapsPendingReceivers(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := newSignalServerTLS(t.TempDir())
+	orch.config.MigrationTLS = tlsProv
+
+	recv := newSignalReceiver()
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+
+	handle, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, orch.Close())
+	assert.Equal(t, int32(1), recv.aborts.Load(), "shutdown must abort a pending receiver")
+	assert.Equal(t, int32(1), tlsProv.cleanups.Load(), "shutdown must release a pending receiver's creds")
+
+	err = orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true)
+	assert.ErrorIs(t, err, ErrReceiverNotFound)
 }
 
 func TestReceiveIncoming_ListensOnTheConfiguredAddress(t *testing.T) {
@@ -526,6 +902,52 @@ func TestReceiveIncoming_RefusesAMismatchedGuestArch(t *testing.T) {
 	}
 }
 
+// TestReceiveIncoming_RefusesALiveReceiver checks that a live (shared-storage)
+// receive is refused before any credential is issued or QEMU started: the
+// receiver creates a fresh disk and never opens the source's shared disk, so
+// the guest would run on a blank disk (#2021 Codex round 2).
+func TestReceiveIncoming_RefusesALiveReceiver(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := &fakeServerTLS{dir: t.TempDir()}
+	orch.config.MigrationTLS = tlsProv
+	swapReceiverLauncher(t, func(context.Context, *incomingReceiverParams) (incomingReceiver, error) {
+		t.Fatal("a receiver was launched for a live migration")
+		return nil, nil
+	})
+
+	_, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Mode:   MigrateModeLive,
+		Config: &InstanceConfig{Memory: 1024},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "live migration receive is not supported")
+	assert.False(t, tlsProv.materialized, "no credentials are issued for a live receive")
+}
+
+// TestReceiveIncoming_RefusesATPMReceiver checks that a guest with a vTPM is
+// refused before any credential is issued or QEMU started: the receiver
+// provisions no vTPM and carries no TPM state (#2021 Codex round 2).
+func TestReceiveIncoming_RefusesATPMReceiver(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := &fakeServerTLS{dir: t.TempDir()}
+	orch.config.MigrationTLS = tlsProv
+	swapReceiverLauncher(t, func(context.Context, *incomingReceiverParams) (incomingReceiver, error) {
+		t.Fatal("a receiver was launched for a vTPM guest")
+		return nil, nil
+	})
+
+	_, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024, TPMEnabled: true},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "vTPM migration receive is not supported")
+	assert.False(t, tlsProv.materialized, "no credentials are issued for a vTPM receive")
+}
+
 func TestReceiveIncoming_EmptySourceArchMatchesAnX86_64Host(t *testing.T) {
 	orch := newOpsOrchestrator(t)
 	orch.config.Arch = qemu.ArchX86_64
@@ -591,7 +1013,7 @@ func TestFinalizeIncoming_Commit(t *testing.T) {
 	tlsProv := &fakeServerTLS{dir: t.TempDir()}
 	orch.config.MigrationTLS = tlsProv
 
-	recv := &fakeIncomingReceiver{port: 5000}
+	recv := &fakeIncomingReceiver{port: 5000, vm: startReceivedVM(t, orch)}
 	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
 		return recv, nil
 	})
@@ -617,10 +1039,7 @@ func TestFinalizeIncoming_Commit(t *testing.T) {
 func commitReceivedGuest(t *testing.T, orch *QEMUOrchestrator, spec MigrationSpec) *fakeIncomingReceiver {
 	t.Helper()
 	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
-	recv := newFakeIncomingReceiver(t, 5001)
-	recv.workDir = t.TempDir()
-	recv.diskPath = recv.workDir + "/disk.qcow2"
-	recv.pid = os.Getpid()
+	recv := &fakeIncomingReceiver{port: 5001, vm: startReceivedVM(t, orch)}
 	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
 		return recv, nil
 	})
@@ -641,8 +1060,7 @@ func TestFinalizeIncoming_CommitRegistersTheReceivedGuest(t *testing.T) {
 		Config:     &InstanceConfig{Memory: 1024, CPUs: 1},
 	})
 	assert.False(t, recv.aborted)
-	recv.requireReaped(t)
-	assert.Equal(t, int32(1), recv.waits.Load(), "a committed receiver gets only adoptReceived's waiter")
+	qcfg := recv.vm.GetConfig()
 
 	inst, err := orch.Get(ctx, "vm1")
 	require.NoError(t, err)
@@ -650,9 +1068,9 @@ func TestFinalizeIncoming_CommitRegistersTheReceivedGuest(t *testing.T) {
 	assert.Equal(t, ComputeTypeVM, inst.Type)
 	assert.Equal(t, StateRunning, inst.State)
 	require.NotNil(t, inst.Config)
-	assert.Equal(t, recv.workDir, inst.Config.WorkDir)
-	assert.Equal(t, recv.diskPath, inst.Config.DiskPath)
-	assert.Equal(t, recv.pid, inst.PID, "the adopted guest carries the receiving QEMU's PID")
+	assert.Equal(t, qcfg.WorkDir, inst.Config.WorkDir)
+	assert.Equal(t, qcfg.DiskPath, inst.Config.DiskPath)
+	assert.Equal(t, recv.vm.GetPID(), inst.PID, "the adopted guest carries the receiving QEMU's PID")
 
 	_, err = orch.GetVMMetrics(ctx, "vm1")
 	if err != nil {
@@ -836,8 +1254,6 @@ func TestFinalizeIncoming_Abort(t *testing.T) {
 	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, false))
 	assert.True(t, recv.aborted)
 	assert.False(t, recv.committed)
-	recv.requireReaped(t)
-	assert.Equal(t, int32(1), recv.waits.Load(), "an explicitly aborted receiver's process is reaped once")
 }
 
 func TestFinalizeIncoming_UnknownReceiver(t *testing.T) {

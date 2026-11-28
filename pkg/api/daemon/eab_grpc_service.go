@@ -43,6 +43,10 @@ type EABGRPCService struct {
 	service  EABServicer
 	delivery EABDeliveryServicer
 	logger   *logging.Logger
+
+	// systemTenantID is the platform tenant whose callers see every
+	// tenant's credentials; empty means no caller is the system tenant.
+	systemTenantID string
 }
 
 // NewEABGRPCService creates a new EAB gRPC service instance. The backing
@@ -58,6 +62,13 @@ func NewEABGRPCService(logger *logging.Logger, service EABServicer, delivery EAB
 		service:  service,
 		delivery: delivery,
 	}
+}
+
+// SetSystemTenant sets the platform tenant ID whose callers may act on
+// every tenant's EAB credentials. Any other tenant-bound caller, including
+// a REST IAM session, is scoped to its own tenant.
+func (s *EABGRPCService) SetSystemTenant(tenantID string) {
+	s.systemTenantID = tenantID
 }
 
 // requireService returns a typed Unavailable error when the backing EAB
@@ -176,9 +187,14 @@ func (s *EABGRPCService) CreateCredential(
 		return nil, err
 	}
 
+	tenantID, err := s.scopeTenant(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+
 	params := eab.GenerateParams{
 		ProfileID:  req.GetProfileId(),
-		TenantID:   req.GetTenantId(),
+		TenantID:   tenantID,
 		HMACKeyLen: int(req.GetHmacKeyLength()),
 	}
 	if secs := req.GetExpiresInSeconds(); secs > 0 {
@@ -213,6 +229,9 @@ func (s *EABGRPCService) GetCredential(
 	if err != nil {
 		return nil, eabErrorToStatus(err)
 	}
+	if err := s.authorizeCredential(ctx, cred); err != nil {
+		return nil, err
+	}
 
 	return &platformv1.GetEABCredentialResponse{
 		Credential: eabCredentialToPb(cred, false),
@@ -234,6 +253,9 @@ func (s *EABGRPCService) GetCredentialByKeyID(
 	if err != nil {
 		return nil, eabErrorToStatus(err)
 	}
+	if err := s.authorizeCredential(ctx, cred); err != nil {
+		return nil, err
+	}
 
 	return &platformv1.GetEABCredentialResponse{
 		Credential: eabCredentialToPb(cred, false),
@@ -245,7 +267,9 @@ func (s *EABGRPCService) GetCredentialByKeyID(
 // filter cascade is: profile_id (then tenant_id refines), tenant_id, or
 // the full store when both are empty. status_filter and active_only
 // refine the result; pagination is applied last so pagination totals
-// reflect the filtered set. HMAC keys are never included.
+// reflect the filtered set. HMAC keys are never included. A tenant-bound
+// caller other than the system tenant is scoped to its own tenant: an empty
+// tenant_id lists only its tenant, and another tenant is PermissionDenied.
 func (s *EABGRPCService) ListCredentials(
 	ctx context.Context,
 	req *platformv1.ListEABCredentialsRequest,
@@ -254,7 +278,11 @@ func (s *EABGRPCService) ListCredentials(
 		return nil, err
 	}
 
-	creds, err := collectEABCredentials(ctx, s.service, req.GetProfileId(), req.GetTenantId())
+	tenantID, err := s.scopeTenant(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+	creds, err := collectEABCredentials(ctx, s.service, req.GetProfileId(), tenantID)
 	if err != nil {
 		return nil, eabErrorToStatus(err)
 	}
@@ -387,6 +415,9 @@ func (s *EABGRPCService) RevokeCredential(
 		return nil, err
 	}
 
+	if err := s.ownedCredential(ctx, req.GetCredentialId()); err != nil {
+		return nil, err
+	}
 	if err := s.service.Revoke(ctx, req.GetCredentialId()); err != nil {
 		return nil, eabErrorToStatus(err)
 	}
@@ -426,6 +457,9 @@ func (s *EABGRPCService) ValidateCredential(
 			Timestamp:    timestamppb.Now(),
 		}, nil
 	}
+	if err := s.authorizeCredential(ctx, cred); err != nil {
+		return nil, err
+	}
 
 	return &platformv1.ValidateEABCredentialResponse{
 		Valid:      true,
@@ -443,6 +477,9 @@ func (s *EABGRPCService) DeleteCredential(
 		return nil, err
 	}
 
+	if err := s.ownedCredential(ctx, req.GetCredentialId()); err != nil {
+		return nil, err
+	}
 	if err := s.service.Delete(ctx, req.GetCredentialId()); err != nil {
 		return nil, eabErrorToStatus(err)
 	}
@@ -473,6 +510,9 @@ func (s *EABGRPCService) GetCredentialQRCode(
 	cred, err := s.service.Get(ctx, req.GetCredentialId())
 	if err != nil {
 		return nil, eabErrorToStatus(err)
+	}
+	if err := s.authorizeCredential(ctx, cred); err != nil {
+		return nil, err
 	}
 
 	png, err := s.delivery.ToQRCodeSized(cred, int(req.GetSize()))
@@ -506,6 +546,9 @@ func (s *EABGRPCService) GetEnrollmentURL(
 	if err != nil {
 		return nil, eabErrorToStatus(err)
 	}
+	if err := s.authorizeCredential(ctx, cred); err != nil {
+		return nil, err
+	}
 
 	var url string
 	if path := req.GetPath(); path != "" {
@@ -535,6 +578,9 @@ func (s *EABGRPCService) MarkCredentialUsed(
 		return nil, err
 	}
 
+	if err := s.ownedCredential(ctx, req.GetCredentialId()); err != nil {
+		return nil, err
+	}
 	if err := s.service.MarkUsed(ctx, req.GetCredentialId()); err != nil {
 		return nil, eabErrorToStatus(err)
 	}
@@ -547,7 +593,9 @@ func (s *EABGRPCService) MarkCredentialUsed(
 
 // CleanupExpiredCredentials removes expired credentials. When tenant_id
 // is set only that tenant's expired credentials are deleted; otherwise
-// the store-wide cleanup runs.
+// the store-wide cleanup runs. A tenant-bound caller other than the system
+// tenant is scoped to its own tenant and never runs the store-wide cleanup;
+// another tenant is PermissionDenied.
 func (s *EABGRPCService) CleanupExpiredCredentials(
 	ctx context.Context,
 	req *platformv1.CleanupExpiredEABCredentialsRequest,
@@ -556,7 +604,11 @@ func (s *EABGRPCService) CleanupExpiredCredentials(
 		return nil, err
 	}
 
-	deleted, err := cleanupExpiredEABCredentials(ctx, s.service, req.GetTenantId())
+	tenantID, err := s.scopeTenant(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+	deleted, err := cleanupExpiredEABCredentials(ctx, s.service, tenantID)
 	if err != nil {
 		return nil, eabErrorToStatus(err)
 	}

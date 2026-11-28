@@ -99,6 +99,7 @@ func (vm *VM) StartIncoming(ctx context.Context, tlsCredsDir string) (credsID st
 		return "", &SentinelCauseError{Sentinel: ErrQEMUFailed, Cause: &MessageError{Msg: fmt.Sprintf("%v", startErr)}}
 	}
 
+	vm.reaped.Store(false)
 	vm.running.Store(true)
 	vm.logger.Infof("Migration receiver started (PID: %d)", vm.cmd.Process.Pid)
 	return credsID, nil

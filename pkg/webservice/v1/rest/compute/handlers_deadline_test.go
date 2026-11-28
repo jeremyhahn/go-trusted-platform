@@ -72,12 +72,15 @@ func postLifecycle(server *httptest.Server, action, body string) (*http.Response
 		"application/json", strings.NewReader(body))
 }
 
-func TestComputeHandlers_StopAndRebootOutliveTheWriteTimeout(t *testing.T) {
+// Stop and reboot wait on the guest; migrate waits on the transfer and the
+// receiver's finalize, which the UI allows an hour for.
+func TestComputeHandlers_LongRoutesOutliveTheWriteTimeout(t *testing.T) {
 	server := serveWithExpiredWriteDeadline(t)
 
 	for action, body := range map[string]string{
-		"stop":   `{"timeoutSeconds":30}`,
-		"reboot": `{}`,
+		"stop":    `{"timeoutSeconds":30}`,
+		"reboot":  `{}`,
+		"migrate": `{"destinationHost":"dest-1"}`,
 	} {
 		t.Run(action, func(t *testing.T) {
 			resp, err := postLifecycle(server, action, body)

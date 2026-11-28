@@ -269,6 +269,16 @@ func TestHandlers_ForwardRequestAndWriteResponse(t *testing.T) {
 			wantResp:   &platformv1.CreateEABCredentialResponse{Credential: testCredential},
 		},
 		{
+			name:       "create without an expiry answers 201 (docs/eab/api.md section 3)",
+			method:     http.MethodPost,
+			path:       "/api/v1/eab/credentials",
+			body:       `{"profileId":"3","tenantId":"t1"}`,
+			wantStatus: http.StatusCreated,
+			wantCall:   "CreateCredential",
+			wantReq:    &platformv1.CreateEABCredentialRequest{ProfileId: 3, TenantId: "t1"},
+			wantResp:   &platformv1.CreateEABCredentialResponse{Credential: testCredential},
+		},
+		{
 			name:       "get by id",
 			method:     http.MethodGet,
 			path:       "/api/v1/eab/credentials/42",

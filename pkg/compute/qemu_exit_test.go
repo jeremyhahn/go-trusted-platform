@@ -42,10 +42,11 @@ func TestRecordExit_OtherStatesAreKept(t *testing.T) {
 	tests := []struct {
 		name  string
 		state InstanceState
+		want  InstanceState
 	}{
-		{"running", StateRunning},
-		{"suspended", StateSuspended},
-		{"error", StateError},
+		{"running", StateRunning, StateStopped},
+		{"suspended", StateSuspended, StateStopped},
+		{"error", StateError, StateError},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -58,7 +59,7 @@ func TestRecordExit_OtherStatesAreKept(t *testing.T) {
 
 			orch.recordExit("vm1", qi)
 
-			assertVMState(t, orch, qi, tt.state)
+			assertVMState(t, orch, qi, tt.want)
 			assert.Zero(t, qi.instance.PID)
 		})
 	}
