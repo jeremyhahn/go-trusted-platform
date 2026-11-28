@@ -230,6 +230,7 @@ func TestInvoke_CategoryPrefix_AllTenantBarrierMethods(t *testing.T) {
 		{"/platform.v1.TenantService/UnsealTenantBarrier", quicwire.TenantBarrierSubUnseal},
 		{"/platform.v1.TenantService/SealTenantBarrier", quicwire.TenantBarrierSubSeal},
 		{"/platform.v1.TenantService/GetTenantBarrierStatus", quicwire.TenantBarrierSubStatus},
+		{"/platform.v1.TenantService/CreateInitialAdminInvitation", quicwire.TenantBarrierSubInitialAdminInvitation},
 	}
 
 	for _, tt := range tests {

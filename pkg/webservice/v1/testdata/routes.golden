@@ -571,6 +571,7 @@ POST /api/v1/tenants/{id}/barrier/init
 POST /api/v1/tenants/{id}/barrier/seal
 POST /api/v1/tenants/{id}/barrier/unseal
 POST /api/v1/tenants/{id}/dek/rotate
+POST /api/v1/tenants/{id}/initial-admin-invitation
 POST /api/v1/tenants/{id}/quota-check
 POST /api/v1/tenants/{id}/resume
 POST /api/v1/tenants/{id}/suspend

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -39,6 +40,26 @@ type fakeIAMMirror struct {
 	mu      sync.Mutex
 	calls   []mirroredUser
 	failFor map[string]error
+	undone  []string
+}
+
+// MirrorInvitedUser records the call like MirrorUser and returns an undo
+// that records the email it undid.
+func (f *fakeIAMMirror) MirrorInvitedUser(
+	_ context.Context, tenantID, email, _ string, roles []string,
+) (func(context.Context) error, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, mirroredUser{TenantID: tenantID, Email: email, Roles: roles})
+	if err := f.failFor[email]; err != nil {
+		return nil, err
+	}
+	return func(context.Context) error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.undone = append(f.undone, email)
+		return nil
+	}, nil
 }
 
 func (f *fakeIAMMirror) MirrorUser(_ context.Context, tenantID, email, _ string, roles []string) error {
@@ -126,6 +147,127 @@ func TestRegisterNewUser_MirrorFailureCleanupErrorsKeepTypedError(t *testing.T) 
 
 	var mirrorFailed ErrIAMMirrorFailed
 	assert.ErrorAs(t, err, &mirrorFailed, "a failed cleanup must not mask the mirror failure")
+}
+
+// racingIAMMirror stands in for two platformd daemons over one IAM: its
+// first call (daemon A's) runs another redemption to completion and only
+// then fails, so A's mirror error arrives after B committed (#2362).
+type racingIAMMirror struct {
+	mu      sync.Mutex
+	calls   int
+	onFirst func()
+	failErr error
+}
+
+func (r *racingIAMMirror) MirrorUser(context.Context, string, string, string, []string) error {
+	return nil
+}
+
+func (r *racingIAMMirror) MirrorInvitedUser(
+	_ context.Context, _, _, _ string, _ []string,
+) (func(context.Context) error, error) {
+	r.mu.Lock()
+	r.calls++
+	first := r.calls == 1
+	r.mu.Unlock()
+	if first {
+		r.onFirst()
+		return nil, r.failErr
+	}
+	return func(context.Context) error { return nil }, nil
+}
+
+func TestRegisterInvitedUser_MirrorFailureKeepsUserAnotherRedemptionCommitted(t *testing.T) {
+	ctx := context.Background()
+	invitation, err := entities.NewInvitation(
+		"tenant-a", "member@example.test", "viewer", 999, 7*24*time.Hour, time.Now())
+	require.NoError(t, err)
+
+	// One user store and one invitation store shared by both daemons: Save
+	// writes the stored user, Get reads it, Accept marks the invitation.
+	userService := new(MockUserServicer)
+	invitationService := new(MockInvitationServicer)
+	tenantManager := new(MockTenantManager)
+	stored := &entities.User{}
+	userService.On("GetByEmail", mock.Anything, invitation.Email).
+		Return(nil, ErrUserNotFound{Email: invitation.Email})
+	userService.On("Save", mock.Anything, mock.AnythingOfType("*entities.User")).
+		Run(func(args mock.Arguments) { *stored = *args.Get(1).(*entities.User) }).Return(nil)
+	userService.On("Get", mock.Anything, mock.AnythingOfType("uint64")).Return(stored, nil)
+	userService.On("Delete", mock.Anything, mock.Anything).Return(nil)
+	invitationService.On("GetByToken", mock.Anything, invitation.Token).Return(invitation, nil)
+	invitationService.On("Accept", mock.Anything, invitation.Token, mock.AnythingOfType("uint64")).
+		Run(func(mock.Arguments) { invitation.Status = entities.InvitationStatusAccepted }).Return(nil)
+	tenantManager.On("GetTenant", mock.Anything, invitation.TenantID).
+		Return(&tenant.TenantEntity{ID: invitation.TenantID, Name: invitation.TenantID}, nil)
+
+	mirror := &racingIAMMirror{failErr: context.DeadlineExceeded}
+	newService := func() TenantUserServicer {
+		return NewTenantUserService(&TenantUserServiceConfig{
+			Logger:            newTestLogger(),
+			UserService:       userService,
+			InvitationService: invitationService,
+			TenantManager:     tenantManager,
+			TokenIssuer:       new(MockTokenIssuer),
+			IAMMirror:         mirror,
+		})
+	}
+	svcA, svcB := newService(), newService()
+
+	var resultB *RegisterResult
+	var errB error
+	mirror.onFirst = func() {
+		resultB, errB = svcB.RegisterInvitedUser(ctx, newTestUser(invitation.Email), invitation.Token)
+	}
+
+	_, err = svcA.RegisterInvitedUser(ctx, newTestUser(invitation.Email), invitation.Token)
+
+	require.NoError(t, errB, "B commits while A's mirror call is outstanding")
+	require.NotNil(t, resultB)
+	var mirrorFailed ErrIAMMirrorFailed
+	require.ErrorAs(t, err, &mirrorFailed)
+	userService.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+	assert.Equal(t, resultB.User.ID, stored.ID, "the store still holds B's user")
+	assert.True(t, resultB.User.CreatedAt.Equal(stored.CreatedAt), "the store still holds B's user")
+	assert.Equal(t, entities.InvitationStatusAccepted, invitation.Status)
+}
+
+func TestRegisterInvitedUser_MirrorFailureKeepsUserWhenTheReReadFails(t *testing.T) {
+	invitation, err := entities.NewInvitation(
+		"tenant-a", "member@example.test", "viewer", 999, 7*24*time.Hour, time.Now())
+	require.NoError(t, err)
+	mirror := &fakeIAMMirror{failFor: map[string]error{invitation.Email: context.Canceled}}
+	svc, userService, invitationService := newMirroredInvitedRegistration(t, mirror, invitation)
+	user := newTestUser(invitation.Email)
+	invitationService.On("GetByToken", mock.Anything, invitation.Token).Return(invitation, nil)
+	userService.On("Get", mock.Anything, user.ID).Return(nil, errors.New("store unavailable"))
+	userService.On("Delete", mock.Anything, mock.Anything).Return(nil)
+
+	_, err = svc.RegisterInvitedUser(context.Background(), user, invitation.Token)
+
+	var mirrorFailed ErrIAMMirrorFailed
+	require.ErrorAs(t, err, &mirrorFailed)
+	userService.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+}
+
+func TestRegisterInvitedUser_MirrorFailureDeletesItsOwnUser(t *testing.T) {
+	invitation, err := entities.NewInvitation(
+		"tenant-a", "member@example.test", "viewer", 999, 7*24*time.Hour, time.Now())
+	require.NoError(t, err)
+	mirror := &fakeIAMMirror{failFor: map[string]error{invitation.Email: assert.AnError}}
+	svc, userService, invitationService := newMirroredInvitedRegistration(t, mirror, invitation)
+	user := newTestUser(invitation.Email)
+	invitationService.On("GetByToken", mock.Anything, invitation.Token).Return(invitation, nil)
+	// The saved record itself: same invitation, same CreatedAt stamp.
+	userService.On("Get", mock.Anything, user.ID).Return(user, nil)
+	userService.On("Delete", mock.Anything, user.ID).Return(nil)
+
+	_, err = svc.RegisterInvitedUser(context.Background(), user, invitation.Token)
+
+	var mirrorFailed ErrIAMMirrorFailed
+	require.ErrorAs(t, err, &mirrorFailed)
+	userService.AssertNumberOfCalls(t, "Delete", 1)
+	userService.AssertCalled(t, "Delete", mock.Anything, user.ID)
 }
 
 func TestIAMMirrorRoles(t *testing.T) {

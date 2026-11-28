@@ -48,6 +48,9 @@ const (
 	TenantBarrierSubUnseal byte = 0x02
 	TenantBarrierSubSeal   byte = 0x03
 	TenantBarrierSubStatus byte = 0x04
+	// TenantBarrierSubInitialAdminInvitation invites a tenant's first owner
+	// (TenantService.CreateInitialAdminInvitation; system tenant only).
+	TenantBarrierSubInitialAdminInvitation byte = 0x05
 )
 
 // Ceremony sub-opcodes.

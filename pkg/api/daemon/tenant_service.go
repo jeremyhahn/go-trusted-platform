@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 
 	"google.golang.org/grpc"
@@ -47,7 +48,9 @@ type TenantService struct {
 	tenantManager quicbaassdk.IAMDomainTenantManager
 	sdkClient     quicbaassdk.Client
 	grpcServer    *TenantGRPCServer
-	running       atomic.Bool
+	// serverMu guards the first build of grpcServer (tenantServer).
+	serverMu sync.Mutex
+	running  atomic.Bool
 }
 
 // NewTenantService creates a new tenant service that wraps QuicBaaS's TenantManager.
@@ -140,7 +143,7 @@ func (s *TenantService) RegisterGRPCServices(server *grpc.Server) error {
 }
 
 // registerTenantGRPCServer registers the service's single TenantGRPCServer on
-// server, creating it on first use.
+// server, built on first use by tenantServer.
 //
 // The daemon calls RegisterGRPCServices once for the TCP gRPC server and once
 // for the Unix-socket one, then hands the platform tenant manager to
@@ -156,10 +159,20 @@ func (s *TenantService) RegisterGRPCServices(server *grpc.Server) error {
 // return FailedPrecondition until SetManager is called, so the service can be
 // registered before the platform orchestration is configured.
 func (s *TenantService) registerTenantGRPCServer(server *grpc.Server) {
+	platformv1.RegisterTenantServiceServer(server, s.tenantServer())
+}
+
+// tenantServer returns the service's one TenantGRPCServer, building it on
+// first use. It no longer waits for a gRPC listener registration, so a
+// REST-only daemon still wires the owner-invitation route (Codex #2362
+// round 14). A preset server is kept, never rebuilt.
+func (s *TenantService) tenantServer() *TenantGRPCServer {
+	s.serverMu.Lock()
+	defer s.serverMu.Unlock()
 	if s.grpcServer == nil {
 		s.grpcServer = NewTenantGRPCServer(WithTenantLogger(s.logger))
 	}
-	platformv1.RegisterTenantServiceServer(server, s.grpcServer)
+	return s.grpcServer
 }
 
 // Start starts the tenant service.

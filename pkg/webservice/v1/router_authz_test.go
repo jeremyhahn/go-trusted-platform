@@ -927,6 +927,7 @@ var gatedProbes = []struct {
 	{"vtpm pcr extend", http.MethodPost, "/api/v1/vtpm/bundles/b1/pcrs/extend"},
 	{"dns record get", http.MethodGet, "/api/v1/dns/zones/example.com./records/A/www"},
 	{"dns resolve", http.MethodGet, "/api/v1/dns/resolve?fqdn=www.example.com.&type=A"},
+	{"tenant initial-admin invitation", http.MethodPost, "/api/v1/tenants/t1/initial-admin-invitation"},
 }
 
 // TestGatedRoutes_RejectAnonymousCallers is the authentication half of the

@@ -5,6 +5,8 @@
  * Based on pkg/api/grpc/proto/tenant.proto
  */
 
+import type { Invitation } from './invitation.js';
+
 // =============================================================================
 // Enums
 // =============================================================================
@@ -243,6 +245,17 @@ export interface CreateTenantRequest {
 }
 
 /**
+ * Create initial admin invitation request: the system tenant mints the
+ * invitation for a new tenant's first owner.
+ */
+export interface CreateInitialAdminInvitationRequest {
+  /** Email of the tenant's first owner */
+  email: string;
+  /** Invitation lifetime in seconds; omitted keeps the service default */
+  expiresInSeconds?: number;
+}
+
+/**
  * Update tenant request
  */
 export interface UpdateTenantRequest {
@@ -415,6 +428,14 @@ export interface CreateTenantResponse {
   status: TenantStatus;
   /** Created tenant */
   tenant?: Tenant;
+}
+
+/**
+ * Create initial admin invitation response
+ */
+export interface CreateInitialAdminInvitationResponse {
+  /** The owner invitation */
+  invitation: Invitation;
 }
 
 /**

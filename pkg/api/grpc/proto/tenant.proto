@@ -6,6 +6,7 @@ option go_package = "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platfo
 
 import "google/protobuf/timestamp.proto";
 import "common.proto";
+import "invitation.proto";
 
 // TenantService provides multi-tenant platform operations: tenant lifecycle,
 // quota enforcement, per-tenant DEKs and barriers, and state synchronization.
@@ -18,6 +19,10 @@ service TenantService {
   rpc CreateTenant(CreateTenantRequest) returns (CreateTenantResponse);
   rpc UpdateTenant(UpdateTenantRequest) returns (UpdateTenantResponse);
   rpc DeleteTenant(DeleteTenantRequest) returns (DeleteTenantResponse);
+  // CreateInitialAdminInvitation mints the invitation that makes its
+  // accepter the tenant's owner. System tenant only: a tenant admin naming
+  // their own tenant is refused.
+  rpc CreateInitialAdminInvitation(CreateInitialAdminInvitationRequest) returns (CreateInitialAdminInvitationResponse);
 
   // Tenant lifecycle operations
   rpc SuspendTenant(SuspendTenantRequest) returns (SuspendTenantResponse);
@@ -195,6 +200,18 @@ message CreateTenantRequest {
 message CreateTenantResponse {
   Status status = 1;
   Tenant tenant = 2;
+}
+
+// CreateInitialAdminInvitation request/response
+message CreateInitialAdminInvitationRequest {
+  string tenant_id = 1;
+  string email = 2;
+  // 0 keeps the service default.
+  int64 expires_in_seconds = 3;
+}
+
+message CreateInitialAdminInvitationResponse {
+  Invitation invitation = 1;
 }
 
 // UpdateTenant request/response

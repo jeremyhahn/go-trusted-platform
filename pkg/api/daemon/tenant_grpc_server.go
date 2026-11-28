@@ -17,6 +17,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
+
+	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -38,6 +42,36 @@ type TenantGRPCServer struct {
 	// systemTenantID is the platform's operating tenant, the one tenant
 	// that may act on every other (tenant_grpc_authz.go).
 	systemTenantID string
+
+	// initialAdmin mints a tenant's owner invitation; nil until the
+	// daemon wires the invitation service (SetInitialAdminInviter).
+	initialAdmin initialAdminInviter
+	inviters     inviterResolver
+}
+
+// inviterResolver maps a verified caller's login name or certificate email
+// to the stored IAM user, so the owner invitation records the canonical
+// inviter id. The platform user service satisfies it.
+type inviterResolver interface {
+	GetByEmail(ctx context.Context, email string) (*entities.User, error)
+}
+
+// SetInviterResolver wires the user lookup that turns a non-numeric caller
+// subject into the IAM user id recorded as the inviter.
+func (s *TenantGRPCServer) SetInviterResolver(r inviterResolver) {
+	s.inviters = r
+}
+
+// initialAdminInviter is the one owner-minting capability the tenant
+// server needs. It is declared here, at its point of use, so the general
+// InvitationServicer never gains a method that confers tenant ownership.
+type initialAdminInviter interface {
+	CreateInitialAdmin(context.Context, *platformservice.CreateInvitationRequest) (*entities.Invitation, error)
+}
+
+// SetInitialAdminInviter wires the owner-invitation path.
+func (s *TenantGRPCServer) SetInitialAdminInviter(inv initialAdminInviter) {
+	s.initialAdmin = inv
 }
 
 // TenantGRPCServerOption is a functional option for configuring TenantGRPCServer.
@@ -243,6 +277,95 @@ func (s *TenantGRPCServer) CreateTenant(
 		},
 		Tenant: s.entityToTenantPb(entity),
 	}, nil
+}
+
+// CreateInitialAdminInvitation mints the invitation whose accepter becomes
+// the named tenant's owner. Only the system tenant may call it: a tenant
+// admin naming their own tenant would otherwise mint themselves an owner.
+// The caller check runs before any argument check.
+func (s *TenantGRPCServer) CreateInitialAdminInvitation(
+	ctx context.Context,
+	req *platformv1.CreateInitialAdminInvitationRequest,
+) (*platformv1.CreateInitialAdminInvitationResponse, error) {
+	if err := s.authorizeSystemTenant(ctx, "CreateInitialAdminInvitation"); err != nil {
+		return nil, err
+	}
+	if s.initialAdmin == nil {
+		return nil, status.Error(codes.FailedPrecondition, "initial-admin invitations not available")
+	}
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if req.GetEmail() == "" {
+		return nil, status.Error(codes.InvalidArgument, "email is required")
+	}
+	// An owner invitation names an existing tenant: a link for a tenant
+	// that does not exist could never be redeemed (#2362).
+	if s.manager == nil {
+		return nil, status.Error(codes.FailedPrecondition, "tenant manager not available")
+	}
+	if _, err := s.manager.GetTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, s.toGRPCError(err)
+	}
+	inviterID, err := s.resolveInviterID(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	createReq := &platformservice.CreateInvitationRequest{
+		TenantID:    req.GetTenantId(),
+		Email:       req.GetEmail(),
+		Role:        platformservice.DefaultTenantOwnerRole,
+		InvitedByID: inviterID,
+	}
+	if secs := req.GetExpiresInSeconds(); secs > 0 {
+		createReq.ExpiresIn = time.Duration(secs) * time.Second
+	}
+	inv, err := s.initialAdmin.CreateInitialAdmin(ctx, createReq)
+	if err != nil {
+		code := invitationErrorCode(err)
+		if code == codes.Internal {
+			s.logger.Error("failed to create initial-admin invitation", "tenant", req.GetTenantId(), "error", err)
+		}
+		return nil, status.Error(code, err.Error())
+	}
+	s.logger.Info("initial-admin invitation created", "tenant", inv.TenantID, "id", inv.ID)
+	return &platformv1.CreateInitialAdminInvitationResponse{
+		Invitation: invitationToProto(inv),
+	}, nil
+}
+
+// resolveInviterID returns the canonical IAM user id of the verified
+// caller. A decimal subject is already that id; a login name or
+// certificate email is looked up through the wired IAM-backed resolver.
+// The caller is refused FailedPrecondition when no resolver is wired, no
+// IAM user matches, or the IAM user's id is not a positive decimal.
+func (s *TenantGRPCServer) resolveInviterID(ctx context.Context) (uint64, error) {
+	if id, ok := callerUserID(ctx); ok {
+		return id, nil
+	}
+	if s.inviters == nil {
+		return 0, status.Error(codes.FailedPrecondition, "the caller has no user id to record as the inviter")
+	}
+	for _, email := range callerEmails(ctx) {
+		user, err := s.inviters.GetByEmail(ctx, email)
+		if err != nil {
+			var notFound platformservice.ErrUserNotFound
+			if errors.As(err, &notFound) {
+				continue
+			}
+			var unusable ErrInviterIDNotUsable
+			if errors.As(err, &unusable) {
+				return 0, status.Error(codes.FailedPrecondition, unusable.Error())
+			}
+			s.logger.Error("failed to resolve the inviter", "error", err)
+			return 0, status.Error(codes.Internal, "failed to resolve the inviter")
+		}
+		if user != nil && user.ID != 0 {
+			return user.ID, nil
+		}
+	}
+	return 0, status.Error(codes.FailedPrecondition, "the caller is not a stored IAM user to record as the inviter")
 }
 
 // UpdateTenant updates tenant metadata.

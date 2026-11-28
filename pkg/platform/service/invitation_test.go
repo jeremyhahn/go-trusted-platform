@@ -1321,6 +1321,57 @@ func TestInvitationService_Delete_ZeroID(t *testing.T) {
 	assert.True(t, errors.As(err, &invalid))
 }
 
+// TestInvitationService_Delete_RefusesAnAcceptedInvitation pins that an
+// accepted invitation, the record of a finished redemption, is kept, while
+// revoked and expired invitations still delete.
+func TestInvitationService_Delete_RefusesAnAcceptedInvitation(t *testing.T) {
+	ctx := context.Background()
+	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
+	mockInvDAO := new(MockInvitationDAO)
+	mockUserDAO := new(MockUserDAO)
+
+	invitationID := uint64(7)
+	invitation := &entities.Invitation{
+		ID:       invitationID,
+		Token:    "some-token",
+		TenantID: "tenant-123",
+		Email:    "user@example.com",
+		Role:     "member",
+		Status:   entities.InvitationStatusAccepted,
+	}
+	mockInvDAO.On("Get", ctx, invitationID).Return(invitation, nil)
+	mockInvDAO.On("Delete", ctx, invitation).Return(nil).Maybe()
+
+	service := NewInvitationService(logger, mockInvDAO, mockUserDAO)
+	err := service.Delete(ctx, invitationID)
+
+	require.ErrorAs(t, err, new(ErrInvalidInvitation))
+	mockInvDAO.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+
+	for _, status := range []entities.InvitationStatus{
+		entities.InvitationStatusRevoked,
+		entities.InvitationStatusExpired,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			invDAO := new(MockInvitationDAO)
+			inv := &entities.Invitation{
+				ID:       invitationID,
+				Token:    "some-token",
+				TenantID: "tenant-123",
+				Email:    "user@example.com",
+				Role:     "member",
+				Status:   status,
+			}
+			invDAO.On("Get", ctx, invitationID).Return(inv, nil)
+			invDAO.On("Delete", ctx, inv).Return(nil)
+
+			svc := NewInvitationService(logger, invDAO, new(MockUserDAO))
+			require.NoError(t, svc.Delete(ctx, invitationID))
+			invDAO.AssertExpectations(t)
+		})
+	}
+}
+
 // TestInvitationService_ErrInvitationSaveFailed_Error verifies error message formatting.
 func TestInvitationService_ErrInvitationSaveFailed_Error(t *testing.T) {
 	t.Run("WithCause", func(t *testing.T) {

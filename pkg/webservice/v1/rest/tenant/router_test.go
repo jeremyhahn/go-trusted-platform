@@ -146,6 +146,7 @@ func TestTenantRouter_RoutesRegistered(t *testing.T) {
 		{http.MethodPost, "/api/v1/tenants/t1/barrier/unseal"},
 		{http.MethodPost, "/api/v1/tenants/t1/barrier/seal"},
 		{http.MethodGet, "/api/v1/tenants/t1/barrier"},
+		{http.MethodPost, "/api/v1/tenants/t1/initial-admin-invitation"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {

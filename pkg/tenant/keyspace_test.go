@@ -75,3 +75,26 @@ func TestKeyspacePaths_InvalidSegments(t *testing.T) {
 		t.Errorf("NodeParam with empty node: error = %v, want WrappedError id", err)
 	}
 }
+
+// TestKeyspacePaths_RefusesVRFAndServiceKinds pins SPEC.md:77: a tenant's
+// VRFs and services never live in a keyspace of the platform's own, so the
+// path helpers refuse those kinds.
+func TestKeyspacePaths_RefusesVRFAndServiceKinds(t *testing.T) {
+	cases := []struct {
+		name string
+		fn   func() (string, error)
+	}{
+		{"vrf resource", func() (string, error) { return ResourcePath("acme", "vrfs", "v1") }},
+		{"service resource", func() (string, error) { return ResourcePath("acme", "services", "s1") }},
+		{"vrf param", func() (string, error) { return ParamPath("acme", "vrfs", "v1", "l3vni") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.fn()
+			var msg *MessageError
+			if !errors.As(err, &msg) {
+				t.Fatalf("got %q, error = %v, want MessageError", got, err)
+			}
+		})
+	}
+}

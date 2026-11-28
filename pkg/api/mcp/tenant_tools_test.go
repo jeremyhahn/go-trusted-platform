@@ -108,6 +108,15 @@ func (s *recordingTenantServer) SuspendTenant(_ context.Context, req *platformv1
 	return &platformv1.SuspendTenantResponse{Status: okStatus()}, nil
 }
 
+func (s *recordingTenantServer) CreateInitialAdminInvitation(_ context.Context, req *platformv1.CreateInitialAdminInvitationRequest) (*platformv1.CreateInitialAdminInvitationResponse, error) {
+	if err := s.record("CreateInitialAdminInvitation", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.CreateInitialAdminInvitationResponse{
+		Invitation: &platformv1.Invitation{TenantId: req.GetTenantId(), Email: req.GetEmail()},
+	}, nil
+}
+
 func (s *recordingTenantServer) ResumeTenant(_ context.Context, req *platformv1.ResumeTenantRequest) (*platformv1.ResumeTenantResponse, error) {
 	if err := s.record("ResumeTenant", req); err != nil {
 		return nil, err
@@ -263,6 +272,7 @@ var tenantToolCases = []tenantToolCase{
 	{"platform_tenant_barrier_init", map[string]interface{}{"tenant_id": "t1"}, "tenant:write", "InitTenantBarrier"},
 	{"platform_tenant_barrier_seal", map[string]interface{}{"tenant_id": "t1"}, "tenant:write", "SealTenantBarrier"},
 	{"platform_tenant_barrier_unseal", map[string]interface{}{"tenant_id": "t1", "key": base64.StdEncoding.EncodeToString([]byte("k"))}, "tenant:write", "UnsealTenantBarrier"},
+	{"tenant_create_initial_admin_invitation", map[string]interface{}{"tenant_id": "t1", "email": "owner@example.com"}, "tenant:write", "CreateInitialAdminInvitation"},
 	{"tenant_delete", map[string]interface{}{"tenant_id": "t1"}, "tenant:delete", "DeleteTenant"},
 }
 
@@ -274,7 +284,7 @@ var lackingScopes = map[string][]string{
 	"tenant:delete": {"iam:delete", "tenant:read", "tenant:write"},
 }
 
-// TestTenantToolsAreRegistered: all 19 tenant tools are served.
+// TestTenantToolsAreRegistered: all 20 tenant tools are served.
 func TestTenantToolsAreRegistered(t *testing.T) {
 	registered := make(map[string]bool)
 	for _, tool := range newTenantToolRegistry(nil).ListTools() {
@@ -283,7 +293,7 @@ func TestTenantToolsAreRegistered(t *testing.T) {
 	for _, tc := range tenantToolCases {
 		assert.True(t, registered[tc.tool], "%s must be registered", tc.tool)
 	}
-	assert.Len(t, tenantToolCases, 19)
+	assert.Len(t, tenantToolCases, 20)
 }
 
 // TestTenantToolsAreClassified pins each tenant tool to the scope of its

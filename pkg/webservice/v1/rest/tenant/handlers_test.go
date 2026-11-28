@@ -104,6 +104,11 @@ func (f *fakeTenantServer) SealTenantBarrier(_ context.Context, r *platformv1.Se
 func (f *fakeTenantServer) GetTenantBarrierStatus(_ context.Context, r *platformv1.GetTenantBarrierStatusRequest) (*platformv1.GetTenantBarrierStatusResponse, error) {
 	return &platformv1.GetTenantBarrierStatusResponse{}, f.reply(r)
 }
+func (f *fakeTenantServer) CreateInitialAdminInvitation(_ context.Context, r *platformv1.CreateInitialAdminInvitationRequest) (*platformv1.CreateInitialAdminInvitationResponse, error) {
+	return &platformv1.CreateInitialAdminInvitationResponse{
+		Invitation: &platformv1.Invitation{TenantId: r.GetTenantId(), Email: r.GetEmail()},
+	}, f.reply(r)
+}
 
 func newRouterWithServer(t *testing.T, srv platformv1.TenantServiceServer) *mux.Router {
 	t.Helper()
@@ -143,6 +148,7 @@ var tenantRoutes = []tenantRoute{
 	{http.MethodPost, "/api/v1/tenants/t1/barrier/unseal", `{}`, false, "t1"},
 	{http.MethodPost, "/api/v1/tenants/t1/barrier/seal", "", false, "t1"},
 	{http.MethodGet, "/api/v1/tenants/t1/barrier", "", false, "t1"},
+	{http.MethodPost, "/api/v1/tenants/t1/initial-admin-invitation", `{"email":"owner@example.com"}`, true, "t1"},
 }
 
 func serve(router *mux.Router, method, path, body string) *httptest.ResponseRecorder {

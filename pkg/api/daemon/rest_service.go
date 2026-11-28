@@ -442,16 +442,19 @@ func (s *RESTServer) SetDeviceHandlers(deviceSvc restapi.DeviceServiceInterface,
 // Every route runs behind guard and authorizes the caller it verified as the
 // tenant gRPC server does, with systemTenantID as the one tenant allowed to
 // act on every other (restapi.TenantHandlers). A nil guard answers 403.
-func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface, guard *restapi.ScopeGuard, systemTenantID string) {
+//
+// opts are applied after the defaults above, e.g. restapi.WithTenantInitialAdmin
+// to serve the owner-invitation route.
+func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface, guard *restapi.ScopeGuard, systemTenantID string, opts ...restapi.TenantHandlersOption) {
 	if manager == nil {
 		return
 	}
-	handlers := restapi.NewTenantHandlers(
+	handlers := restapi.NewTenantHandlers(append([]restapi.TenantHandlersOption{
 		restapi.WithTenantManager(manager),
 		restapi.WithTenantLogger(s.logger),
 		restapi.WithTenantGuard(guard),
 		restapi.WithTenantSystemTenant(systemTenantID),
-	)
+	}, opts...)...)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("Tenant REST routes registered")
 }

@@ -223,3 +223,4 @@ OIDC flows"; platform tokens come from the broker ([api.md](api.md) §6).
 - [architecture.md](architecture.md) — what this repository owns (very little)
 - [`docs/tenant/`](../tenant/) — platform tenancy, the other meaning of "tenant"
 - [`docs/auth/`](../auth/) — invitation flow and OAuth2 architecture
+- [`docs/tenant/api.md`](../tenant/api.md) — how the system tenant mints a new tenant's first owner invitation (`CreateInitialAdminInvitation`)

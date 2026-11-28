@@ -595,10 +595,11 @@ var categorySubOpcodeMap = map[string]byte{
 
 	// Tenant Service — OpTenantBarrierCategory (0x9E)
 	// Server dispatcher: pkg/api/daemon/quic_tenant.go::handleTenantBarrierCategory
-	"/platform.v1.TenantService/InitTenantBarrier":      quicwire.TenantBarrierSubInit,
-	"/platform.v1.TenantService/UnsealTenantBarrier":    quicwire.TenantBarrierSubUnseal,
-	"/platform.v1.TenantService/SealTenantBarrier":      quicwire.TenantBarrierSubSeal,
-	"/platform.v1.TenantService/GetTenantBarrierStatus": quicwire.TenantBarrierSubStatus,
+	"/platform.v1.TenantService/InitTenantBarrier":            quicwire.TenantBarrierSubInit,
+	"/platform.v1.TenantService/UnsealTenantBarrier":          quicwire.TenantBarrierSubUnseal,
+	"/platform.v1.TenantService/SealTenantBarrier":            quicwire.TenantBarrierSubSeal,
+	"/platform.v1.TenantService/GetTenantBarrierStatus":       quicwire.TenantBarrierSubStatus,
+	"/platform.v1.TenantService/CreateInitialAdminInvitation": quicwire.TenantBarrierSubInitialAdminInvitation,
 
 	// Config Delivery Service — OpProvisioningCategory (0xCF)
 	// Server dispatcher: pkg/api/daemon/quic_configdelivery.go::handleProvisioningCategory
@@ -939,10 +940,11 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	// payload[0] on the server (pkg/api/daemon/quic_tenant.go::handleTenantBarrierCategory).
 	// The SDK adapter prepends the sub-opcode automatically; see
 	// categorySubOpcodeMap above.
-	"/platform.v1.TenantService/InitTenantBarrier":      quicwire.OpTenantBarrierCategory,
-	"/platform.v1.TenantService/UnsealTenantBarrier":    quicwire.OpTenantBarrierCategory,
-	"/platform.v1.TenantService/SealTenantBarrier":      quicwire.OpTenantBarrierCategory,
-	"/platform.v1.TenantService/GetTenantBarrierStatus": quicwire.OpTenantBarrierCategory,
+	"/platform.v1.TenantService/InitTenantBarrier":            quicwire.OpTenantBarrierCategory,
+	"/platform.v1.TenantService/UnsealTenantBarrier":          quicwire.OpTenantBarrierCategory,
+	"/platform.v1.TenantService/SealTenantBarrier":            quicwire.OpTenantBarrierCategory,
+	"/platform.v1.TenantService/GetTenantBarrierStatus":       quicwire.OpTenantBarrierCategory,
+	"/platform.v1.TenantService/CreateInitialAdminInvitation": quicwire.OpTenantBarrierCategory,
 
 	// Config Delivery Service — proto: pkg/api/grpc/proto/configdelivery.proto
 	// All ConfigDeliveryService methods route to OpProvisioningCategory

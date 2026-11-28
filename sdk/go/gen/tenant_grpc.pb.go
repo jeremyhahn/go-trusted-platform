@@ -19,25 +19,26 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TenantService_ListTenants_FullMethodName            = "/platform.v1.TenantService/ListTenants"
-	TenantService_GetTenant_FullMethodName              = "/platform.v1.TenantService/GetTenant"
-	TenantService_GetTenantByName_FullMethodName        = "/platform.v1.TenantService/GetTenantByName"
-	TenantService_CreateTenant_FullMethodName           = "/platform.v1.TenantService/CreateTenant"
-	TenantService_UpdateTenant_FullMethodName           = "/platform.v1.TenantService/UpdateTenant"
-	TenantService_DeleteTenant_FullMethodName           = "/platform.v1.TenantService/DeleteTenant"
-	TenantService_SuspendTenant_FullMethodName          = "/platform.v1.TenantService/SuspendTenant"
-	TenantService_ResumeTenant_FullMethodName           = "/platform.v1.TenantService/ResumeTenant"
-	TenantService_GetQuotas_FullMethodName              = "/platform.v1.TenantService/GetQuotas"
-	TenantService_UpdateQuotas_FullMethodName           = "/platform.v1.TenantService/UpdateQuotas"
-	TenantService_GetUsage_FullMethodName               = "/platform.v1.TenantService/GetUsage"
-	TenantService_CheckQuota_FullMethodName             = "/platform.v1.TenantService/CheckQuota"
-	TenantService_Sync_FullMethodName                   = "/platform.v1.TenantService/Sync"
-	TenantService_RotateTenantDEK_FullMethodName        = "/platform.v1.TenantService/RotateTenantDEK"
-	TenantService_GetTenantDEKStatus_FullMethodName     = "/platform.v1.TenantService/GetTenantDEKStatus"
-	TenantService_InitTenantBarrier_FullMethodName      = "/platform.v1.TenantService/InitTenantBarrier"
-	TenantService_UnsealTenantBarrier_FullMethodName    = "/platform.v1.TenantService/UnsealTenantBarrier"
-	TenantService_SealTenantBarrier_FullMethodName      = "/platform.v1.TenantService/SealTenantBarrier"
-	TenantService_GetTenantBarrierStatus_FullMethodName = "/platform.v1.TenantService/GetTenantBarrierStatus"
+	TenantService_ListTenants_FullMethodName                  = "/platform.v1.TenantService/ListTenants"
+	TenantService_GetTenant_FullMethodName                    = "/platform.v1.TenantService/GetTenant"
+	TenantService_GetTenantByName_FullMethodName              = "/platform.v1.TenantService/GetTenantByName"
+	TenantService_CreateTenant_FullMethodName                 = "/platform.v1.TenantService/CreateTenant"
+	TenantService_UpdateTenant_FullMethodName                 = "/platform.v1.TenantService/UpdateTenant"
+	TenantService_DeleteTenant_FullMethodName                 = "/platform.v1.TenantService/DeleteTenant"
+	TenantService_CreateInitialAdminInvitation_FullMethodName = "/platform.v1.TenantService/CreateInitialAdminInvitation"
+	TenantService_SuspendTenant_FullMethodName                = "/platform.v1.TenantService/SuspendTenant"
+	TenantService_ResumeTenant_FullMethodName                 = "/platform.v1.TenantService/ResumeTenant"
+	TenantService_GetQuotas_FullMethodName                    = "/platform.v1.TenantService/GetQuotas"
+	TenantService_UpdateQuotas_FullMethodName                 = "/platform.v1.TenantService/UpdateQuotas"
+	TenantService_GetUsage_FullMethodName                     = "/platform.v1.TenantService/GetUsage"
+	TenantService_CheckQuota_FullMethodName                   = "/platform.v1.TenantService/CheckQuota"
+	TenantService_Sync_FullMethodName                         = "/platform.v1.TenantService/Sync"
+	TenantService_RotateTenantDEK_FullMethodName              = "/platform.v1.TenantService/RotateTenantDEK"
+	TenantService_GetTenantDEKStatus_FullMethodName           = "/platform.v1.TenantService/GetTenantDEKStatus"
+	TenantService_InitTenantBarrier_FullMethodName            = "/platform.v1.TenantService/InitTenantBarrier"
+	TenantService_UnsealTenantBarrier_FullMethodName          = "/platform.v1.TenantService/UnsealTenantBarrier"
+	TenantService_SealTenantBarrier_FullMethodName            = "/platform.v1.TenantService/SealTenantBarrier"
+	TenantService_GetTenantBarrierStatus_FullMethodName       = "/platform.v1.TenantService/GetTenantBarrierStatus"
 )
 
 // TenantServiceClient is the client API for TenantService service.
@@ -55,6 +56,10 @@ type TenantServiceClient interface {
 	CreateTenant(ctx context.Context, in *CreateTenantRequest, opts ...grpc.CallOption) (*CreateTenantResponse, error)
 	UpdateTenant(ctx context.Context, in *UpdateTenantRequest, opts ...grpc.CallOption) (*UpdateTenantResponse, error)
 	DeleteTenant(ctx context.Context, in *DeleteTenantRequest, opts ...grpc.CallOption) (*DeleteTenantResponse, error)
+	// CreateInitialAdminInvitation mints the invitation that makes its
+	// accepter the tenant's owner. System tenant only: a tenant admin naming
+	// their own tenant is refused.
+	CreateInitialAdminInvitation(ctx context.Context, in *CreateInitialAdminInvitationRequest, opts ...grpc.CallOption) (*CreateInitialAdminInvitationResponse, error)
 	// Tenant lifecycle operations
 	SuspendTenant(ctx context.Context, in *SuspendTenantRequest, opts ...grpc.CallOption) (*SuspendTenantResponse, error)
 	ResumeTenant(ctx context.Context, in *ResumeTenantRequest, opts ...grpc.CallOption) (*ResumeTenantResponse, error)
@@ -140,6 +145,16 @@ func (c *tenantServiceClient) DeleteTenant(ctx context.Context, in *DeleteTenant
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteTenantResponse)
 	err := c.cc.Invoke(ctx, TenantService_DeleteTenant_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tenantServiceClient) CreateInitialAdminInvitation(ctx context.Context, in *CreateInitialAdminInvitationRequest, opts ...grpc.CallOption) (*CreateInitialAdminInvitationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateInitialAdminInvitationResponse)
+	err := c.cc.Invoke(ctx, TenantService_CreateInitialAdminInvitation_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -291,6 +306,10 @@ type TenantServiceServer interface {
 	CreateTenant(context.Context, *CreateTenantRequest) (*CreateTenantResponse, error)
 	UpdateTenant(context.Context, *UpdateTenantRequest) (*UpdateTenantResponse, error)
 	DeleteTenant(context.Context, *DeleteTenantRequest) (*DeleteTenantResponse, error)
+	// CreateInitialAdminInvitation mints the invitation that makes its
+	// accepter the tenant's owner. System tenant only: a tenant admin naming
+	// their own tenant is refused.
+	CreateInitialAdminInvitation(context.Context, *CreateInitialAdminInvitationRequest) (*CreateInitialAdminInvitationResponse, error)
 	// Tenant lifecycle operations
 	SuspendTenant(context.Context, *SuspendTenantRequest) (*SuspendTenantResponse, error)
 	ResumeTenant(context.Context, *ResumeTenantRequest) (*ResumeTenantResponse, error)
@@ -339,6 +358,9 @@ func (UnimplementedTenantServiceServer) UpdateTenant(context.Context, *UpdateTen
 }
 func (UnimplementedTenantServiceServer) DeleteTenant(context.Context, *DeleteTenantRequest) (*DeleteTenantResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteTenant not implemented")
+}
+func (UnimplementedTenantServiceServer) CreateInitialAdminInvitation(context.Context, *CreateInitialAdminInvitationRequest) (*CreateInitialAdminInvitationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateInitialAdminInvitation not implemented")
 }
 func (UnimplementedTenantServiceServer) SuspendTenant(context.Context, *SuspendTenantRequest) (*SuspendTenantResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SuspendTenant not implemented")
@@ -504,6 +526,24 @@ func _TenantService_DeleteTenant_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TenantServiceServer).DeleteTenant(ctx, req.(*DeleteTenantRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TenantService_CreateInitialAdminInvitation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateInitialAdminInvitationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantServiceServer).CreateInitialAdminInvitation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantService_CreateInitialAdminInvitation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantServiceServer).CreateInitialAdminInvitation(ctx, req.(*CreateInitialAdminInvitationRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -772,6 +812,10 @@ var TenantService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteTenant",
 			Handler:    _TenantService_DeleteTenant_Handler,
+		},
+		{
+			MethodName: "CreateInitialAdminInvitation",
+			Handler:    _TenantService_CreateInitialAdminInvitation_Handler,
 		},
 		{
 			MethodName: "SuspendTenant",

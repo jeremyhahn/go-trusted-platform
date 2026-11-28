@@ -146,6 +146,7 @@ func (r *TenantRouter) ownNameOrSystem(h http.HandlerFunc) http.Handler {
 //	POST   /api/v1/tenants/{id}/barrier/unseal      - UnsealTenantBarrier
 //	POST   /api/v1/tenants/{id}/barrier/seal        - SealTenantBarrier
 //	GET    /api/v1/tenants/{id}/barrier             - GetTenantBarrierStatus
+//	POST   /api/v1/tenants/{id}/initial-admin-invitation - CreateInitialAdminInvitation (system tenant only)
 func (r *TenantRouter) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix(basePath).Subrouter()
 	// Cross-tenant control-plane operations.
@@ -174,4 +175,6 @@ func (r *TenantRouter) RegisterRoutes(parent *mux.Router) {
 	sr.Handle("/{id}/barrier/unseal", r.tenantScoped(r.handlers.UnsealBarrier)).Methods("POST")
 	sr.Handle("/{id}/barrier/seal", r.tenantScoped(r.handlers.SealBarrier)).Methods("POST")
 	sr.Handle("/{id}/barrier", r.tenantScoped(r.handlers.GetBarrierStatus)).Methods("GET")
+	// The owner invitation is minted by the system tenant for another tenant.
+	sr.Handle("/{id}/initial-admin-invitation", r.systemOnly(r.handlers.CreateInitialAdminInvitation)).Methods("POST")
 }

@@ -531,6 +531,29 @@ func (r *ToolRegistry) registerTenantTools() {
 			"required": []string{"tenant_id"},
 		},
 	})
+
+	// tenant_create_initial_admin_invitation - System tenant mints a tenant's owner invitation
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "tenant_create_initial_admin_invitation",
+		Description: "Create the owner (initial administrator) invitation for a tenant. System tenant only.",
+		InputSchema: tenantInitialAdminInvitationBinding.schema(),
+	})
+}
+
+// tenantInitialAdminInvitationBinding binds the tool's arguments to
+// TenantService.CreateInitialAdminInvitation.
+var tenantInitialAdminInvitationBinding = grpcToolMethod(
+	platformv1.TenantServiceServer.CreateInitialAdminInvitation, "tenant_id", "email")
+
+// executeTenantCreateInitialAdminInvitation creates a tenant's owner
+// invitation through the TenantService, which refuses any caller outside the
+// system tenant.
+func (r *ToolRegistry) executeTenantCreateInitialAdminInvitation(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	server, err := r.tenantServer(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return tenantInitialAdminInvitationBinding.call(server, ctx, args)
 }
 
 // executeTenantList handles the tenant_list tool (ListTenants).

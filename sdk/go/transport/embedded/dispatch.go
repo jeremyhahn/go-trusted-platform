@@ -1030,6 +1030,21 @@ func registerTenantHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.TenantService_GetTenantDEKStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetTenantDEKStatus(ctx, req.(*platformv1.GetTenantDEKStatusRequest))
 	}
+	m[platformv1.TenantService_InitTenantBarrier_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.InitTenantBarrier(ctx, req.(*platformv1.InitTenantBarrierRequest))
+	}
+	m[platformv1.TenantService_UnsealTenantBarrier_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UnsealTenantBarrier(ctx, req.(*platformv1.UnsealTenantBarrierRequest))
+	}
+	m[platformv1.TenantService_SealTenantBarrier_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SealTenantBarrier(ctx, req.(*platformv1.SealTenantBarrierRequest))
+	}
+	m[platformv1.TenantService_GetTenantBarrierStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetTenantBarrierStatus(ctx, req.(*platformv1.GetTenantBarrierStatusRequest))
+	}
+	m[platformv1.TenantService_CreateInitialAdminInvitation_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateInitialAdminInvitation(ctx, req.(*platformv1.CreateInitialAdminInvitationRequest))
+	}
 }
 
 // registerPXEHandlers registers PXEService handlers.

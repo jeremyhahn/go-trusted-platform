@@ -16,6 +16,9 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -97,12 +100,19 @@ type TokenIssuer interface {
 // membership, and the WebUI's permission gates.
 //
 // Implementations are expected to be idempotent — registering the
-// same email twice should not produce duplicate IAM rows. Failures
-// here are non-fatal for registration: the platform user is already
-// saved, the JWT is already minted; the worst case is that the user
-// must be re-mirrored later by an explicit /iam/users PUT.
+// same email twice should not produce duplicate IAM rows. A mirror
+// failure is fatal to registration and is rolled back: the saved
+// platform user is deleted (and a self-registered tenant removed), so a
+// user the IAM surface cannot see is never registered. An invited user
+// is deleted only while the redemption still owns the record; one another
+// redemption may have committed is kept.
 type IAMUserMirror interface {
 	MirrorUser(ctx context.Context, tenantID, email, displayName string, roles []string) error
+	// MirrorInvitedUser mirrors like MirrorUser and returns an undo that
+	// removes only what this call wrote: the IAM user when this call
+	// created it, otherwise only the roles this call newly assigned. A
+	// pre-existing identity is never deleted.
+	MirrorInvitedUser(ctx context.Context, tenantID, email, displayName string, roles []string) (undo func(context.Context) error, err error)
 }
 
 // TenantUserService implements TenantUserServicer.
@@ -113,6 +123,10 @@ type TenantUserService struct {
 	tenantManager     TenantManager
 	tokenIssuer       TokenIssuer
 	iamMirror         IAMUserMirror
+
+	// In-flight invitation redemptions by normalized email.
+	redeemMu  sync.Mutex
+	redeeming map[string]struct{}
 }
 
 // TenantUserServiceConfig holds configuration for TenantUserService.
@@ -148,8 +162,85 @@ func (s *TenantUserService) SetIAMMirror(m IAMUserMirror) {
 	s.iamMirror = m
 }
 
+// claimRedemption claims the invitation redemption of email. The user ID
+// derives from the email, so a claim held from the first lookup to the
+// return keeps two redemptions of one email from interleaving saves,
+// mirrors, Accepts and rollbacks; the second is refused (#2362). Both
+// RegisterNewUser and RegisterInvitedUser take it, so a self-registration
+// and a redemption of one email exclude each other too. The claim is
+// in-process and does not span platformd instances: across instances, a
+// redemption whose Accept fails keeps the records, which may be another
+// instance's committed registration (see RegisterInvitedUser).
+func (s *TenantUserService) claimRedemption(email string) (release func(), ok bool) {
+	key := strings.ToLower(strings.TrimSpace(email))
+	s.redeemMu.Lock()
+	defer s.redeemMu.Unlock()
+	if s.redeeming == nil {
+		s.redeeming = make(map[string]struct{})
+	}
+	if _, busy := s.redeeming[key]; busy {
+		return nil, false
+	}
+	s.redeeming[key] = struct{}{}
+	return func() {
+		s.redeemMu.Lock()
+		defer s.redeemMu.Unlock()
+		delete(s.redeeming, key)
+	}, true
+}
+
+// unacceptedRedemption reports whether existing is the user an earlier
+// redemption of this invitation saved before its Accept failed.
+// Provenance is the invitation ID the redemption persisted on the user
+// (User.InvitationID), not the email, tenant and creation time: several
+// pending invitations can name one email, and each of them matches those.
+// The redemption is unfinished while that invitation is still pending;
+// once it is accepted no retry passes. A user with no originating
+// invitation (self-registered, or saved before the ID was recorded) and
+// a different pending invitation for the same account never pass (#2362).
+func (s *TenantUserService) unacceptedRedemption(ctx context.Context, existing *entities.User, token string) bool {
+	if existing.TenantID == "" || existing.InvitationID == 0 {
+		return false
+	}
+	inv, err := s.invitationService.GetByToken(ctx, token)
+	if err != nil || inv == nil {
+		return false
+	}
+	return inv.Status == entities.InvitationStatusPending &&
+		existing.InvitationID == inv.ID &&
+		inv.Email == existing.Email &&
+		inv.TenantID == existing.TenantID &&
+		!existing.CreatedAt.Before(inv.CreatedAt)
+}
+
+// ownsSavedUser reports whether the user this redemption saved is still
+// its own record, so the IAM mirror-failure compensation may delete it
+// (#2362). Another platformd sharing the stores can save the same
+// email-derived ID and accept the invitation while this call's mirror is
+// outstanding; deleting then would remove that daemon's committed user.
+// The record is this call's only while the invitation is still pending
+// and the stored user carries this invitation's ID and the instant this
+// call stamped. Every failed read or differing value answers false, so an
+// ambiguous answer keeps the record. A redemption that commits between
+// this check and the Delete is not excluded: closing that window needs a
+// conditional delete the store does not offer.
+func (s *TenantUserService) ownsSavedUser(
+	ctx context.Context, userID uint64, token string, invitationID uint64, savedAt time.Time,
+) bool {
+	inv, err := s.invitationService.GetByToken(ctx, token)
+	if err != nil || inv == nil || inv.Status != entities.InvitationStatusPending {
+		return false
+	}
+	stored, err := s.userService.Get(ctx, userID)
+	if err != nil || stored == nil {
+		return false
+	}
+	return stored.InvitationID == invitationID && stored.CreatedAt.Equal(savedAt)
+}
+
 // RegisterNewUser creates a new tenant and registers the user as the owner.
 // Steps:
+// 0. Claim the email; a concurrent registration or redemption of it is refused
 // 1. Generate a tenant UUID
 // 2. Create the tenant via TenantManager
 // 3. Set user.TenantID and user.IsTenantOwner = true
@@ -163,6 +254,14 @@ func (s *TenantUserService) RegisterNewUser(
 	if user == nil {
 		return nil, ErrInvalidUserInput{Reason: "user is required"}
 	}
+	// A self-registration takes the same per-email claim as a redemption, so
+	// the two flows never interleave on one email-derived user ID and
+	// neither's rollback removes the other's user (#2362).
+	release, ok := s.claimRedemption(user.Email)
+	if !ok {
+		return nil, ErrInvitationRedemptionInProgress{Email: user.Email}
+	}
+	defer release()
 
 	s.logger.Info("registering new user with tenant creation",
 		"email", user.Email,
@@ -265,6 +364,18 @@ func (s *TenantUserService) rollbackTenant(ctx context.Context, tenantID string)
 	}
 }
 
+// rollbackTimeout bounds the compensation of a failed registration.
+const rollbackTimeout = 30 * time.Second
+
+// rollbackContext returns the context the compensation of a failed
+// registration runs on: it keeps the request's values but not its
+// cancellation, and is bounded by rollbackTimeout, so a request canceled after
+// the IAM write still removes what it wrote, and a hung store or IAM call
+// cannot hold the request forever (#2362).
+func rollbackContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+}
+
 // iamMirrorRoles is the IAM role set a platform user is mirrored with: the
 // tenant owner gets DefaultTenantOwnerRole, every other user none.
 func iamMirrorRoles(user *entities.User) []string {
@@ -272,6 +383,18 @@ func iamMirrorRoles(user *entities.User) []string {
 		return []string{DefaultTenantOwnerRole}
 	}
 	return nil
+}
+
+// invitedMirrorRoles is the IAM role set of an invited user: the ownership
+// role iamMirrorRoles derives, plus the role the validated invitation grants,
+// so an ordinary invitation for a listed IAM role does not create a roleless
+// IAM user (#2362).
+func invitedMirrorRoles(user *entities.User, invitationRole string) []string {
+	roles := iamMirrorRoles(user)
+	if invitationRole != "" && !slices.Contains(roles, invitationRole) {
+		roles = append(roles, invitationRole)
+	}
+	return roles
 }
 
 // DefaultTenantOwnerRole is the role granted automatically to the
@@ -282,15 +405,17 @@ const DefaultTenantOwnerRole = "admin"
 
 // RegisterInvitedUser registers a user from an invitation, joining an existing tenant.
 // Steps:
-// 1. Get invitation by token
-// 2. Verify invitation is pending and not expired
-// 3. Get tenant via tenantManager
-// 4. Set user.TenantID = invitation.TenantID
-// 5. Set user.IsTenantOwner = false
-// 6. Add role from invitation to user
-// 7. Save the user
-// 8. Accept the invitation
-// 9. Return the RegisterResult with IsNewTenant = false
+//  0. Claim the redemption for the email; a concurrent one is refused
+//  1. Get invitation by token
+//  2. Verify invitation is pending and not expired
+//  3. Get tenant via tenantManager
+//  4. Set user.TenantID = invitation.TenantID
+//  5. Set user.IsTenantOwner = false
+//  6. Add role from invitation to user
+//  7. Save the user, then mirror it into IAM; a mirror failure deletes the
+//     saved user only while this call still owns it (ownsSavedUser), else keeps it
+//  8. Accept the invitation; a refusal keeps the saved user and the IAM mirror for a retry
+//  9. Return the RegisterResult with IsNewTenant = false
 func (s *TenantUserService) RegisterInvitedUser(
 	ctx context.Context,
 	user *entities.User,
@@ -304,13 +429,24 @@ func (s *TenantUserService) RegisterInvitedUser(
 		return nil, ErrInvitationRequired{}
 	}
 
+	// Claim the redemption for the email before the first lookup: a
+	// concurrent redemption of the same email is refused and writes
+	// nothing, so it can never roll back this one's records (#2362).
+	release, ok := s.claimRedemption(user.Email)
+	if !ok {
+		return nil, ErrInvitationRedemptionInProgress{Email: user.Email}
+	}
+	defer release()
+
 	s.logger.Info("registering invited user",
 		"email", user.Email,
 	)
 
-	// Check if user already exists
+	// Check if user already exists. A user an earlier redemption of this
+	// invitation saved before its Accept failed is the retry's own record;
+	// any other existing user is refused.
 	existingUser, err := s.userService.GetByEmail(ctx, user.Email)
-	if err == nil && existingUser != nil {
+	if err == nil && existingUser != nil && !s.unacceptedRedemption(ctx, existingUser, invitationToken) {
 		return nil, ErrUserAlreadyExists{Email: user.Email}
 	}
 
@@ -373,6 +509,7 @@ func (s *TenantUserService) RegisterInvitedUser(
 	// that made #171 read the tenant from the verified session rather than
 	// from a caller-supplied field.
 	user.TenantID = invitation.TenantID
+	user.InvitationID = invitation.ID
 	user.IsTenantOwner = invitation.InitialAdmin
 	user.CreatedAt = now
 	user.UpdatedAt = now
@@ -394,14 +531,58 @@ func (s *TenantUserService) RegisterInvitedUser(
 		return nil, ErrUserSaveFailed{Cause: err}
 	}
 
+	// Mirror the invited user into the QuicBaaS IAM tenant, as
+	// RegisterNewUser does for a self-registered owner: an invited user
+	// the IAM surface cannot see is not registered (#2362). The IAM roles
+	// are the invitation's role, plus the owner role for an owner
+	// invitation, so an ordinary invitee keeps the access it was invited
+	// with. A mirror failure leaves the invitation pending and deletes the
+	// saved user only while this redemption can still prove it owns the
+	// record (ownsSavedUser); any other answer keeps it, since another
+	// daemon may have committed the same user meanwhile. An Accept
+	// refusal undoes nothing: another redemption may have committed the
+	// same records.
+	if s.iamMirror != nil {
+		var err error
+		_, err = s.iamMirror.MirrorInvitedUser(ctx, invitation.TenantID, user.Email, user.DisplayName, invitedMirrorRoles(user, invitation.Role))
+		if err != nil {
+			s.logger.Error(err, "failed to mirror invited user into IAM tenant, rolling back registration",
+				"user_id", user.ID,
+				"email", user.Email,
+				"tenant_id", invitation.TenantID,
+			)
+			rbCtx, cancel := rollbackContext(ctx)
+			if s.ownsSavedUser(rbCtx, user.ID, invitationToken, invitation.ID, now) {
+				if delErr := s.userService.Delete(rbCtx, user.ID); delErr != nil {
+					s.logger.Error(delErr, "failed to delete invited user after IAM mirror failure",
+						"user_id", user.ID,
+					)
+				}
+			} else {
+				s.logger.Warn("kept the saved invited user after IAM mirror failure: this redemption cannot prove it still owns the record",
+					"user_id", user.ID,
+					"email", user.Email,
+					"tenant_id", invitation.TenantID,
+				)
+			}
+			cancel()
+			return nil, ErrIAMMirrorFailed{Email: user.Email, TenantID: invitation.TenantID, Cause: err}
+		}
+	}
+
 	// Accept the invitation (pass user ID for audit tracking)
 	if err := s.invitationService.Accept(ctx, invitationToken, user.ID); err != nil {
 		s.logger.Error(err, "failed to accept invitation after user save",
 			"email", user.Email,
 			"tenant_id", invitation.TenantID,
 		)
-		// User was saved but invitation acceptance failed.
-		// This is a non-critical error - continue with result.
+		// Accept is the step a concurrent redemption, possibly on another
+		// platformd sharing the stores, can win, and no answer tells
+		// whether it did. The saved user and the IAM identity may be its
+		// committed registration, so nothing is rolled back: the error is
+		// returned and a retry of the invitation completes the redemption
+		// over the kept user (unacceptedRedemption, #2362).
+		return nil, err
 	}
 
 	s.logger.Info("invited user registered",
@@ -459,6 +640,11 @@ func (s *TenantUserService) GetUserTenant(ctx context.Context, userID uint64) (*
 // authenticated principal by. The workspace must still exist in the
 // tenant manager (the go-quicbaas IAM tenant service on the daemon), so a
 // deleted workspace is refused rather than handed to a session.
+//
+// A user whose originating invitation was never accepted (an Accept that
+// failed after the user was saved, #2362) has no workspace until the
+// redemption completes: it is refused with ErrRedemptionUnfinished. Users
+// with no originating invitation are unaffected.
 func (s *TenantUserService) Workspace(ctx context.Context, email string) (string, error) {
 	if email == "" {
 		return "", ErrInvalidEmail{Email: email}
@@ -469,6 +655,15 @@ func (s *TenantUserService) Workspace(ctx context.Context, email string) (string
 	}
 	if user.TenantID == "" {
 		return "", ErrUserNotInTenant{UserID: user.ID}
+	}
+	if user.InvitationID != 0 {
+		inv, err := s.invitationService.GetByID(ctx, user.InvitationID)
+		if err != nil || inv == nil {
+			return "", ErrRedemptionUnfinished{Email: email, InvitationID: user.InvitationID}
+		}
+		if inv.Status != entities.InvitationStatusAccepted {
+			return "", ErrRedemptionUnfinished{Email: email, InvitationID: user.InvitationID, Status: inv.Status}
+		}
 	}
 	workspace, err := s.tenantManager.GetTenant(ctx, user.TenantID)
 	if err != nil || workspace == nil {
@@ -644,6 +839,31 @@ type ErrInvitationRequired struct{}
 
 func (e ErrInvitationRequired) Error() string {
 	return "invitation token is required"
+}
+
+// ErrInvitationRedemptionInProgress is returned when another registration or
+// invitation redemption of the same email is still running; the caller may
+// retry once it finishes.
+type ErrInvitationRedemptionInProgress struct {
+	Email string
+}
+
+func (e ErrInvitationRedemptionInProgress) Error() string {
+	return fmt.Sprintf("a registration for %s is already in progress; retry", e.Email)
+}
+
+// ErrRedemptionUnfinished is returned by Workspace for a user whose
+// originating invitation was never accepted: the user was saved but the
+// redemption did not complete, so it has no workspace to land in. Status is
+// empty when the invitation could not be read.
+type ErrRedemptionUnfinished struct {
+	Email        string
+	InvitationID uint64
+	Status       entities.InvitationStatus
+}
+
+func (e ErrRedemptionUnfinished) Error() string {
+	return fmt.Sprintf("invitation redemption for %s is unfinished: invitation %d is %s", e.Email, e.InvitationID, e.Status)
 }
 
 // ErrInvalidUserInput is returned when user input is invalid.

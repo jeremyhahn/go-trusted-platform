@@ -15,7 +15,10 @@ package iam
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -41,37 +44,118 @@ func NewQuicBaaSUserMirror(client IAMClient) *QuicBaaSUserMirror {
 	return &QuicBaaSUserMirror{client: client}
 }
 
-// MirrorUser creates the user in the QuicBaaS IAM tenant. The
-// operation is idempotent — if the email already exists the IAM
-// client returns AlreadyExists and we treat that as success so a
-// failed first attempt followed by a retry doesn't tombstone the
-// registration flow.
+// MirrorUser creates the user in the QuicBaaS IAM tenant. It delegates
+// to MirrorInvitedUser and drops the undo, so a create conflict gets the
+// same identity and role checks.
 func (m *QuicBaaSUserMirror) MirrorUser(ctx context.Context, tenantID, email, displayName string, roles []string) error {
+	_, err := m.MirrorInvitedUser(ctx, tenantID, email, displayName, roles)
+	return err
+}
+
+// MirrorInvitedUser creates the user in the QuicBaaS IAM tenant and returns
+// an undo that removes only what this call wrote, so a pre-existing identity
+// is never deleted: a created user is deleted, otherwise the undo is a noop.
+// A create conflict is resolved by tenant and email: a username held by
+// another email is ErrMirrorUsernameTaken, and the same identity is accepted
+// only when it already holds every requested role. A role it lacks is
+// ErrMirrorRoleNotHeld before any IAM write, because the pinned embedded IAM
+// backend dispatches no User/AssignRole. The
+// IAM username is MirrorUsername(email), never the display name, which is
+// sent as DisplayName only.
+func (m *QuicBaaSUserMirror) MirrorInvitedUser(
+	ctx context.Context, tenantID, email, displayName string, roles []string,
+) (func(context.Context) error, error) {
+	noop := func(context.Context) error { return nil }
 	if m == nil || m.client == nil {
-		return nil
+		return noop, nil
 	}
-	username := displayName
-	if username == "" {
-		username = UsernameFromEmail(email)
-	}
+	username := MirrorUsername(email)
 	req := &iamsdk.CreateUserRequest{
 		Username:    username,
 		Email:       email,
 		DisplayName: displayName,
 		Roles:       roles,
 	}
-	_, err := m.client.CreateUser(ctx, tenantID, req)
+	created, err := m.client.CreateUser(ctx, tenantID, req)
 	if err == nil {
-		return nil
+		return func(ctx context.Context) error {
+			id := ""
+			if created != nil {
+				id = created.ID
+			}
+			if id == "" {
+				u, getErr := m.client.GetUserByEmail(ctx, tenantID, email)
+				if getErr != nil {
+					return getErr
+				}
+				if u == nil {
+					return nil
+				}
+				id = u.ID
+			}
+			return m.client.DeleteUser(ctx, tenantID, id)
+		}, nil
 	}
-	// Treat "already exists" as success. The IAM SDK doesn't expose a
-	// typed sentinel today, so we fall back to substring matching on
-	// the error message — the canonical text the QuicBaaS client
-	// returns is "already exists".
-	if isAlreadyExists(err) {
-		return nil
+	if !isAlreadyExists(err) {
+		return nil, err
 	}
-	return err
+	existing, getErr := m.client.GetUserByEmail(ctx, tenantID, email)
+	if getErr != nil {
+		msg := strings.ToLower(getErr.Error())
+		if strings.Contains(msg, "not_found") || strings.Contains(msg, "not found") {
+			return nil, ErrMirrorUsernameTaken{TenantID: tenantID, Username: username, Email: email}
+		}
+		return nil, fmt.Errorf("resolve existing IAM user %s: %w", email, getErr)
+	}
+	if existing == nil || !strings.EqualFold(strings.TrimSpace(existing.Email), strings.TrimSpace(email)) {
+		return nil, ErrMirrorUsernameTaken{TenantID: tenantID, Username: username, Email: email}
+	}
+	if len(roles) == 0 {
+		return noop, nil
+	}
+	held, err := m.heldRoleRefs(ctx, tenantID, existing.Roles)
+	if err != nil {
+		return nil, err
+	}
+	// The pinned embedded IAM backend dispatches no User/AssignRole, so an
+	// existing identity is accepted only when it already holds every
+	// requested role; otherwise refuse before any IAM write.
+	for _, role := range roles {
+		if _, ok := held[role]; !ok {
+			return nil, ErrMirrorRoleNotHeld{TenantID: tenantID, Email: email, Role: role}
+		}
+	}
+	return noop, nil
+}
+
+// heldRoleRefs returns the IDs and names of the roles whose ID is in
+// roleIDs, plus the raw roleIDs entries, paging ListRoles like
+// MirroredEmails pages users.
+func (m *QuicBaaSUserMirror) heldRoleRefs(ctx context.Context, tenantID string, roleIDs []string) (map[string]struct{}, error) {
+	held := make(map[string]struct{}, 2*len(roleIDs))
+	ids := make(map[string]struct{}, len(roleIDs))
+	for _, id := range roleIDs {
+		held[id] = struct{}{}
+		ids[id] = struct{}{}
+	}
+	req := &iamsdk.ListRolesRequest{PageSize: mirroredEmailsPageSize}
+	for {
+		resp, err := m.client.ListRoles(ctx, tenantID, req)
+		if err != nil {
+			return nil, err
+		}
+		for _, role := range resp.Roles {
+			if _, ok := ids[role.ID]; ok {
+				held[role.ID] = struct{}{}
+				held[role.Name] = struct{}{}
+			}
+		}
+		next := resp.Pagination.NextPageToken
+		if !resp.Pagination.HasMore || next == "" || next == req.PageToken {
+			return held, nil
+		}
+		req.PageToken = next
+	}
 }
 
 // mirroredEmailsPageSize is the IAM ListUsers page size MirroredEmails reads
@@ -112,6 +196,42 @@ func UsernameFromEmail(email string) string {
 		return email[:i]
 	}
 	return email
+}
+
+const (
+	// mirrorUsernamePrefixMax bounds the sanitized local part so the
+	// prefix, the dash and the hash fit the 64-byte IAM username limit.
+	mirrorUsernamePrefixMax = 47
+	// mirrorUsernameHashHex is the number of hex characters of the email
+	// hash appended to the prefix.
+	mirrorUsernameHashHex = 16
+)
+
+// MirrorUsername derives the IAM username a mirrored user is created with.
+// The IAM store refuses usernames outside ^[a-zA-Z0-9_-]{3,64}$, and a
+// display name or raw local part (jane.doe, jane+tag, al) breaks it, so the
+// username is the lower-cased local part with every byte outside [a-z0-9_-]
+// replaced by '_', cut to 47 bytes, plus '-' and 16 hex characters of the
+// SHA-256 of the lower-cased, trimmed email. The result is 17-64 bytes, always
+// valid, and the hash suffix keeps two emails with one local part apart
+// (#2362).
+func MirrorUsername(email string) string {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	local := normalized
+	if i := strings.IndexByte(local, '@'); i >= 0 {
+		local = local[:i]
+	}
+	if len(local) > mirrorUsernamePrefixMax {
+		local = local[:mirrorUsernamePrefixMax]
+	}
+	prefix := []byte(local)
+	for i, c := range prefix {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' && c != '-' {
+			prefix[i] = '_'
+		}
+	}
+	sum := sha256.Sum256([]byte(normalized))
+	return string(prefix) + "-" + hex.EncodeToString(sum[:])[:mirrorUsernameHashHex]
 }
 
 // isAlreadyExists matches the QuicBaaS IAM "already exists" envelope

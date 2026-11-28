@@ -15,6 +15,8 @@ import type {
   GetTenantByNameResponse,
   CreateTenantRequest,
   CreateTenantResponse,
+  CreateInitialAdminInvitationRequest,
+  CreateInitialAdminInvitationResponse,
   UpdateTenantRequest,
   UpdateTenantResponse,
   DeleteTenantResponse,
@@ -176,6 +178,32 @@ export class TenantService extends BaseService {
     return this.client.post<ResumeTenantResponse>(
       this.buildUrl(`/${this.encodePathSegment(tenantId)}/resume`),
       {}
+    );
+  }
+
+  /**
+   * Create the invitation for a new tenant's first owner.
+   *
+   * The route is system-tenant only: an admin of any other tenant, its own
+   * tenant included, is refused with 403.
+   *
+   * @param tenantId - Tenant ID the owner is invited to
+   * @param email - Email of the tenant's first owner
+   * @param expiresInSeconds - Invitation lifetime; omitted keeps the service default
+   * @returns The owner invitation
+   */
+  async createInitialAdminInvitation(
+    tenantId: string,
+    email: string,
+    expiresInSeconds?: number
+  ): Promise<ApiResponse<CreateInitialAdminInvitationResponse>> {
+    const body: CreateInitialAdminInvitationRequest = { email };
+    if (expiresInSeconds !== undefined) {
+      body.expiresInSeconds = expiresInSeconds;
+    }
+    return this.client.post<CreateInitialAdminInvitationResponse>(
+      this.buildUrl(`/${this.encodePathSegment(tenantId)}/initial-admin-invitation`),
+      body
     );
   }
 

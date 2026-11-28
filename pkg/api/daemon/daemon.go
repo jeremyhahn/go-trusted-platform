@@ -1481,6 +1481,20 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			if daemon.invitationGRPCService != nil {
 				daemon.invitationGRPCService.SetService(svc)
 			}
+			// The owner-invitation path reaches the tenant server through
+			// its own narrow capability; InvitationServicer stays unwidened.
+			if inv, ok := svc.(initialAdminInviter); ok && daemon.TenantGRPCServer() != nil {
+				tenantServer := daemon.TenantGRPCServer()
+				tenantServer.SetInitialAdminInviter(inv)
+				// A session or certificate subject is a login email that
+				// IAM resolves to the inviter's user id: the platform-local
+				// user store has no record of the unclaimed /init admin or
+				// of an IAM-only system administrator (#2362).
+				if iamService != nil {
+					tenantServer.SetInviterResolver(
+						newIAMInviterResolver(restiam.NewQuicBaaSIAMAdapter(iamService.Client()), config.PlatformTenantID))
+				}
+			}
 		}
 	}
 
@@ -1643,19 +1657,28 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 
 	if config.PlatformTenantManager != nil {
+		tenantServer := daemon.TenantGRPCServer()
 		if daemon.concreteRestServer != nil {
-			daemon.concreteRestServer.SetTenantHandlers(config.PlatformTenantManager, restGuard, config.PlatformTenantID)
+			var tenantOpts []restapi.TenantHandlersOption
+			// The owner-invitation route runs the tenant gRPC server's RPC, so
+			// REST shares its system-tenant check and inviter identity. The
+			// tenant server exists without a gRPC listener, so REST-only
+			// daemons serve owner invitations too.
+			if tenantServer != nil {
+				tenantOpts = append(tenantOpts, restapi.WithTenantInitialAdmin(newTenantRESTInitialAdmin(tenantServer)))
+			}
+			daemon.concreteRestServer.SetTenantHandlers(config.PlatformTenantManager, restGuard, config.PlatformTenantID, tenantOpts...)
 		}
-		if daemon.tenantService != nil && daemon.tenantService.grpcServer != nil {
-			daemon.tenantService.grpcServer.SetManager(config.PlatformTenantManager)
-			daemon.tenantService.grpcServer.SetSystemTenant(config.PlatformTenantID)
+		if tenantServer != nil {
+			tenantServer.SetManager(config.PlatformTenantManager)
+			tenantServer.SetSystemTenant(config.PlatformTenantID)
 			logger.Info("Platform tenant manager wired into gRPC TenantService")
 
 			// Share the same *TenantGRPCServer delegate with the QUIC handler so
 			// tenant QUIC operations dispatch through the pb service instead of
 			// returning Unavailable.
 			if daemon.quicHandler != nil {
-				daemon.quicHandler.SetTenantGRPCServer(daemon.tenantService.grpcServer)
+				daemon.quicHandler.SetTenantGRPCServer(tenantServer)
 				logger.Info("Platform tenant manager wired into QUIC handler")
 			}
 		}
@@ -3364,13 +3387,13 @@ func (d *Daemon) VPNControlPlane() *vpn.Service {
 }
 
 // TenantGRPCServer returns the Tenant gRPC server backing /api/v1/tenants.
-// Returns nil if the tenant service is not configured or has not registered
-// its gRPC server yet.
+// Returns nil only if the tenant service is not configured; the server exists
+// whether or not a gRPC listener registered it.
 func (d *Daemon) TenantGRPCServer() *TenantGRPCServer {
 	if d.tenantService == nil {
 		return nil
 	}
-	return d.tenantService.grpcServer
+	return d.tenantService.tenantServer()
 }
 
 // RESTServer returns the REST server for direct access.
