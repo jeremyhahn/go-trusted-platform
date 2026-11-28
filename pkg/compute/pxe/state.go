@@ -15,6 +15,7 @@ package pxe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -137,8 +138,17 @@ func (sm *StateManager) commit(deviceID string, old, next *deviceEntry) (bool, e
 	if cur, ok := sm.devices.Load(deviceID); !ok || cur.(*deviceEntry) != old {
 		return false, nil
 	}
-	if err := sm.store.Put(context.Background(), next.device); err != nil {
-		return false, fmt.Errorf("pxe: store device %s: %w", deviceID, err)
+	ctx := context.Background()
+	// A failed write may still have committed (the datastore reports an
+	// unknown outcome as an error), so the old record is written back
+	// before the error is returned: a restart then never restores a
+	// transition reported as failed (#2081 Codex round 4).
+	if err := sm.store.Put(ctx, next.device); err != nil {
+		err = fmt.Errorf("pxe: store device %s: %w", deviceID, err)
+		if cerr := sm.store.Put(ctx, old.device); cerr != nil {
+			return false, errors.Join(err, fmt.Errorf("pxe: restore stored device %s: %w", deviceID, cerr))
+		}
+		return false, err
 	}
 	if sm.devices.CompareAndSwap(deviceID, old, next) {
 		return true, nil
@@ -242,7 +252,14 @@ func (sm *StateManager) Register(device *DeviceInfo) error {
 
 	if sm.store != nil {
 		if err := sm.store.Put(context.Background(), device); err != nil {
-			return fmt.Errorf("pxe: store device %s: %w", device.ID, err)
+			err = fmt.Errorf("pxe: store device %s: %w", device.ID, err)
+			// A failed write may still have committed, so the record is
+			// deleted again: a restart never restores a registration
+			// reported as failed (#2081 Codex round 4).
+			if cerr := sm.store.Delete(context.Background(), device.ID); cerr != nil {
+				return errors.Join(err, fmt.Errorf("pxe: remove stored device %s: %w", device.ID, cerr))
+			}
+			return err
 		}
 	}
 
@@ -290,11 +307,23 @@ func (sm *StateManager) Unregister(deviceID string) error {
 	// leaving a stale record that would restore the device on restart.
 	// storeMu stays held until the device is out of both maps, so a
 	// concurrent persist cannot Put the device back after the delete.
+	// A failed delete may still have committed (the datastore reports an
+	// unknown outcome as an error), so the record is written back before
+	// the error is returned and the store matches memory again (#2081
+	// Codex round 4).
 	if sm.store != nil {
 		sm.storeMu.Lock()
 		defer sm.storeMu.Unlock()
 		if err := sm.store.Delete(context.Background(), deviceID); err != nil {
-			return fmt.Errorf("pxe: delete stored device %s: %w", deviceID, err)
+			err = fmt.Errorf("pxe: delete stored device %s: %w", deviceID, err)
+			restore := entry.device
+			if cur, ok := sm.devices.Load(deviceID); ok {
+				restore = cur.(*deviceEntry).device
+			}
+			if cerr := sm.store.Put(context.Background(), restore); cerr != nil {
+				return errors.Join(err, fmt.Errorf("pxe: restore stored device %s: %w", deviceID, cerr))
+			}
+			return err
 		}
 	}
 

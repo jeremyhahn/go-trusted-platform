@@ -770,9 +770,14 @@ func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, 
 	}); err != nil {
 		// The record still says the device is where it was; put the port
 		// back there unless the move only narrowed access (quarantined or
-		// failed), whose restrictive flows stay in place.
+		// failed), whose restrictive flows stay in place. A narrowing move
+		// whose write fails is remembered as a pending quarantine, so a
+		// later widening report is refused until the restrictive state is
+		// stored, as QuarantineDevice does (#2081 Codex round 4).
 		if state != StateQuarantined && state != StateFailed {
 			s.restoreEnforcedFlows(ctx, device)
+		} else if s.vlanManager != nil {
+			s.setPendingQuarantine(deviceID, true)
 		}
 		return ErrProvisioningFailed{
 			DeviceID: deviceID,
