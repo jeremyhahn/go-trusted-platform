@@ -491,7 +491,7 @@ jobs:
           # same, with a ::warning naming it. No other event reads them.
           if [ "$EVENT:$REF" = push:refs/heads/main ]; then
             mainok=1
-            for v in "CI_MAIN_RUNNER_LABEL=$ML" "CI_MAIN_RUNNER_LABEL_DOCKER=$MLD"; do
+            for v in "CI_MAIN_RUNNER_LABEL=${ML:-}" "CI_MAIN_RUNNER_LABEL_DOCKER=${MLD:-}"; do
               val=${v#*=}
               if [ -z "$val" ]; then
                 mainok=0
