@@ -105,23 +105,22 @@ var daemonPreAuthRoutes = []string{
 // debt that #997 retires slice by slice (s3 removes the device entries); a
 // route leaves this list when its mount gets a guard.
 var daemonMTLSOnlyRoutes = []string{
-	"/api/v1/status",                             // daemon status (registerRoutes)
-	"/api/v1/version",                            // daemon version (registerRoutes)
-	"/api/v1/protocols",                          // transport status (registerRoutes)
-	"/api/v1/tpm/idevid",                         // IDevID lifecycle (registerIDevIDRoutes)
-	"/api/v1/tpm/iak",                            // IAK lifecycle (registerIDevIDRoutes)
-	"/api/v1/tpm/device/attributes",              // TPM device attributes (registerIDevIDRoutes)
-	"/api/v1/idevid/ldevid",                      // LDevID issuance (registerIDevIDRoutes)
-	"/api/v1/provisioning/",                      // boot-time config delivery (SetConfigDeliveryHandler)
-	"/api/v1/bmc/",                               // BMC management (SetBMCHandler)
-	"/api/v1/ca/info",                            // CA routes SetCAHandlers mounts without its guard
-	"/api/v1/ca/certificates",                    // as above
-	"/api/v1/ca/crl",                             // as above
-	"/api/v1/ca/bundle",                          // as above
-	"/api/v1/auth/factors/aaguid-lookup",         // auth factor route SetCAHandlers mounts without its guard
-	"/api/v1/users/{id}/factors/mtls/issue-cert", // as above
-	"/api/v1/tenants/{id}/security/mfa-policy",   // tenant MFA policy, outside the tenant guard
-	"/api/v1/kms/",                               // KMS facade (SetKMSHandlers); its guard ships with the KMS PR
+	"/api/v1/status",                           // daemon status (registerRoutes)
+	"/api/v1/version",                          // daemon version (registerRoutes)
+	"/api/v1/protocols",                        // transport status (registerRoutes)
+	"/api/v1/tpm/idevid",                       // IDevID lifecycle (registerIDevIDRoutes)
+	"/api/v1/tpm/iak",                          // IAK lifecycle (registerIDevIDRoutes)
+	"/api/v1/tpm/device/attributes",            // TPM device attributes (registerIDevIDRoutes)
+	"/api/v1/idevid/ldevid",                    // LDevID issuance (registerIDevIDRoutes)
+	"/api/v1/provisioning/",                    // boot-time config delivery (SetConfigDeliveryHandler)
+	"/api/v1/bmc/",                             // BMC management (SetBMCHandler)
+	"/api/v1/ca/info",                          // CA routes SetCAHandlers mounts without its guard
+	"/api/v1/ca/certificates",                  // as above
+	"/api/v1/ca/crl",                           // as above
+	"/api/v1/ca/bundle",                        // as above
+	"/api/v1/auth/factors/aaguid-lookup",       // auth factor route SetCAHandlers mounts without its guard
+	"/api/v1/tenants/{id}/security/mfa-policy", // tenant MFA policy, outside the tenant guard
+	"/api/v1/kms/",                             // KMS facade (SetKMSHandlers); its guard ships with the KMS PR
 }
 
 // templateVariable matches a mux path variable, {name} or {name:pattern}.

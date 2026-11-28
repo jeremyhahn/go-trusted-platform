@@ -1632,6 +1632,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			var iamRESTPEP restiam.PEPClient
 			if sdkPEP := iamService.PEP(); sdkPEP != nil {
 				iamRESTPEP = restiam.NewQuicBaaSPEPAdapter(sdkPEP)
+				daemon.concreteRestServer.SetAuthFactorPEP(sdkPEP)
 			}
 			iamErr := daemon.concreteRestServer.SetIAMHandlers(logger, restiam.NewQuicBaaSIAMAdapter(iamService.Client()), iamRESTPEP, restGuard, config.PlatformTenantID)
 			if iamErr != nil {

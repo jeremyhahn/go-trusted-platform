@@ -26,8 +26,38 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 )
+
+// go-qrdb has no auth-factor permission constant, so the action and resource
+// follow the "<resource-type>:<action>" convention under auth_factors.
+const (
+	// AuthFactorResource and AuthFactorEnrollAction are the go-qrdb RBAC
+	// resource and action of auth-factor enrolment: go-quicbaas forwards
+	// them unchanged and go-qrdb checks the permission authfactor:enroll
+	// (docs/SPEC.md: the platform uses go-qrdb's permission vocabulary).
+	AuthFactorResource     = "authfactor"
+	AuthFactorEnrollAction = "enroll"
+	authFactorPEPTimeout   = 5 * time.Second
+)
+
+// AuthFactorPEP is the IAM decision point the auth-factor handlers ask;
+// quicbaassdk.IAMPEPClient satisfies it.
+type AuthFactorPEP interface {
+	Check(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error)
+}
+
+// AuthFactorPrincipal is the authenticated session principal of a request.
+type AuthFactorPrincipal struct {
+	Subject  string
+	TenantID string
+	Roles    []string
+}
+
+// AuthFactorPrincipalResolver returns the request's authenticated principal,
+// false when the request carries none.
+type AuthFactorPrincipalResolver func(r *http.Request) (AuthFactorPrincipal, bool)
 
 // authCA is the minimal interface required from the CA by AuthFactorHandlers.
 // Using a narrow internal interface allows tests to inject lightweight stubs
@@ -227,6 +257,11 @@ type AuthFactorHandlers struct {
 	ca     authCA
 	logger *slog.Logger
 
+	// PEP decision point and session-principal resolver for cert issuance.
+	authMu    sync.RWMutex
+	pep       AuthFactorPEP
+	principal AuthFactorPrincipalResolver
+
 	// aaguid cache — keyed by lowercase UUID string
 	cacheMu sync.RWMutex
 	cache   map[string]aaguidEntry
@@ -256,9 +291,17 @@ func NewAuthFactorHandlers(ca quicbaasca.CACertificateAuthority, logger *slog.Lo
 
 // RegisterRoutes attaches all auth factor routes to the provided mux router.
 func (h *AuthFactorHandlers) RegisterRoutes(router *mux.Router) {
+	h.RegisterRoutesWithIssuer(router, router)
+}
+
+// RegisterRoutesWithIssuer attaches the auth factor routes to router and
+// the certificate issuance route to issuer, so a caller can mount issuance
+// behind the middleware that authenticates the principal callerAuthorized
+// resolves.
+func (h *AuthFactorHandlers) RegisterRoutesWithIssuer(router, issuer *mux.Router) {
 	router.HandleFunc("/api/v1/auth/factors/aaguid-lookup", h.handleAAGUIDLookup).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/auth/mtls/probe", h.handleMTLSProbe).Methods(http.MethodHead)
-	router.HandleFunc("/api/v1/users/{id}/factors/mtls/issue-cert", h.handleIssueCert).Methods(http.MethodPost)
+	issuer.HandleFunc("/api/v1/users/{id}/factors/mtls/issue-cert", h.handleIssueCert).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/tenants/{id}/security/mfa-policy", h.handleGetMFAPolicy).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/tenants/{id}/security/mfa-policy", h.handlePutMFAPolicy).Methods(http.MethodPut)
 
@@ -433,31 +476,50 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// callerAuthorized returns true when the caller is allowed to act on the
-// given userID. The caller is allowed when:
-//   - mTLS is not in use (IAM layer is authoritative), OR
-//   - the client cert CN matches userID, OR
-//   - the client cert has the "admin" OID in its SubjectAltName or CN prefix.
+// callerAuthorized returns true when the IAM PEP grants the request's
+// authenticated session principal authfactor:enroll for the enrolment of
+// userID's certificate (the handler keeps userID from the route).
+// A request with no principal, no PEP wired, or a PEP error is refused;
+// client-certificate names grant nothing.
 func (h *AuthFactorHandlers) callerAuthorized(r *http.Request, userID string) bool {
-	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-		// No mTLS — IAM/JWT layer is authoritative; permit.
-		return true
+	h.authMu.RLock()
+	pep, resolve := h.pep, h.principal
+	h.authMu.RUnlock()
+	if pep == nil || resolve == nil {
+		return false
 	}
-	leaf := r.TLS.PeerCertificates[0]
-	cn := leaf.Subject.CommonName
-
-	// Admin prefix or org unit.
-	if strings.HasPrefix(cn, "admin") || strings.EqualFold(cn, "admin") {
-		return true
-	}
-	for _, ou := range leaf.Subject.OrganizationalUnit {
-		if strings.EqualFold(ou, "admin") {
-			return true
-		}
+	principal, ok := resolve(r)
+	if !ok || principal.Subject == "" || principal.TenantID == "" {
+		return false
 	}
 
-	// Caller is the user themselves.
-	return cn == userID
+	ctx, cancel := context.WithTimeout(r.Context(), authFactorPEPTimeout)
+	defer cancel()
+	resp, err := pep.Check(ctx, &sdkiam.CheckRequest{
+		Subject: sdkiam.CheckSubject{
+			ID:       principal.Subject,
+			TenantID: principal.TenantID,
+			Roles:    principal.Roles,
+		},
+		Action:   AuthFactorEnrollAction,
+		Resource: AuthFactorResource,
+		TenantID: principal.TenantID,
+	})
+	if err != nil {
+		h.logger.Warn("auth-factor PEP check failed", "subject", principal.Subject, "error", err)
+		return false
+	}
+	return resp != nil && resp.Allowed
+}
+
+// SetAuthorization wires the PEP decision point and the principal resolver
+// callerAuthorized consults. Either one nil refuses every request (fail
+// closed). Safe to call while the handlers serve.
+func (h *AuthFactorHandlers) SetAuthorization(pep AuthFactorPEP, principal AuthFactorPrincipalResolver) {
+	h.authMu.Lock()
+	defer h.authMu.Unlock()
+	h.pep = pep
+	h.principal = principal
 }
 
 // =============================================================================
