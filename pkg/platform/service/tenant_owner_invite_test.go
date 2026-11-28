@@ -559,6 +559,162 @@ func TestRegisterInvitedUser_AnExistingUserIsStillRefused(t *testing.T) {
 	}
 }
 
+// redemptionBindingFixture is one TenantUserService over mocks whose user
+// store holds the single user Save writes, as the retry test's store does.
+type redemptionBindingFixture struct {
+	svc               TenantUserServicer
+	userService       *MockUserServicer
+	invitationService *MockInvitationServicer
+	mirror            *fakeIAMMirror
+	saved             *entities.User
+}
+
+// newRedemptionBindingFixture serves the given invitations by token. The
+// first GetByEmail finds no user; every later one returns the user Save
+// last wrote.
+func newRedemptionBindingFixture(t *testing.T, ctx context.Context, invitations ...*entities.Invitation) *redemptionBindingFixture {
+	t.Helper()
+	f := &redemptionBindingFixture{
+		userService:       new(MockUserServicer),
+		invitationService: new(MockInvitationServicer),
+		mirror:            &fakeIAMMirror{},
+		saved:             new(entities.User),
+	}
+	tenantManager := new(MockTenantManager)
+	f.svc = NewTenantUserService(&TenantUserServiceConfig{
+		Logger:            logging.DefaultLogger(),
+		UserService:       f.userService,
+		InvitationService: f.invitationService,
+		TenantManager:     tenantManager,
+		TokenIssuer:       new(MockTokenIssuer),
+		IAMMirror:         f.mirror,
+	})
+	email := invitations[0].Email
+	f.userService.On("GetByEmail", ctx, email).
+		Return(nil, ErrUserNotFound{Email: email}).Once()
+	f.userService.On("GetByEmail", ctx, email).Return(f.saved, nil)
+	for _, inv := range invitations {
+		f.invitationService.On("GetByToken", ctx, inv.Token).Return(inv, nil).Maybe()
+	}
+	tenantManager.On("GetTenant", ctx, "tenant-a").Return(&tenant.TenantEntity{
+		ID:   "tenant-a",
+		Name: "tenant-a",
+	}, nil).Maybe()
+	f.userService.On("Save", ctx, mock.AnythingOfType("*entities.User")).
+		Run(func(args mock.Arguments) { *f.saved = *args.Get(1).(*entities.User) }).
+		Return(nil).Maybe()
+	f.userService.On("Delete", mock.Anything, mock.Anything).Return(nil).Maybe()
+	return f
+}
+
+// acceptedOn marks inv accepted when its Accept succeeds, as the
+// invitation store does.
+func acceptedOn(inv *entities.Invitation) func(mock.Arguments) {
+	return func(mock.Arguments) { inv.Status = entities.InvitationStatusAccepted }
+}
+
+// acceptCalls counts the Accept calls made with token.
+func acceptCalls(m *MockInvitationServicer, token string) int {
+	n := 0
+	for _, c := range m.Calls {
+		if c.Method == "Accept" && c.Arguments.String(1) == token {
+			n++
+		}
+	}
+	return n
+}
+
+// TestRegisterInvitedUser_AnotherPendingInvitationCannotOverwriteARedeemedUser
+// pins Codex round 17 P1 on #2362: two pending invitations for one email
+// both predate the registration; once B is redeemed, redeeming A must not
+// pass as a retry and overwrite the user B saved.
+func TestRegisterInvitedUser_AnotherPendingInvitationCannotOverwriteARedeemedUser(t *testing.T) {
+	ctx := context.Background()
+	created := time.Now().Add(-time.Hour)
+	invA, err := entities.NewInvitation("tenant-a", "member@example.test", "admin", 999, 7*24*time.Hour, created)
+	require.NoError(t, err)
+	invA.InitialAdmin = true
+	invB, err := entities.NewInvitation("tenant-a", "member@example.test", "viewer", 999, 7*24*time.Hour, created)
+	require.NoError(t, err)
+	require.NotEqual(t, invA.ID, invB.ID)
+
+	f := newRedemptionBindingFixture(t, ctx, invA, invB)
+	f.invitationService.On("Accept", ctx, invB.Token, mock.AnythingOfType("uint64")).
+		Run(acceptedOn(invB)).Return(nil)
+	f.invitationService.On("Accept", ctx, invA.Token, mock.AnythingOfType("uint64")).
+		Run(acceptedOn(invA)).Return(nil).Maybe()
+
+	_, err = f.svc.RegisterInvitedUser(ctx, newTestUser(invB.Email), invB.Token)
+	require.NoError(t, err)
+
+	result, err := f.svc.RegisterInvitedUser(ctx, newTestUser(invA.Email), invA.Token)
+	require.ErrorAs(t, err, new(ErrUserAlreadyExists), "invitation A did not save this user")
+	assert.Nil(t, result)
+	f.userService.AssertNumberOfCalls(t, "Save", 1)
+	assert.Zero(t, acceptCalls(f.invitationService, invA.Token), "A is never accepted")
+	assert.Equal(t, "tenant-a", f.saved.TenantID)
+	assert.False(t, f.saved.IsTenantOwner, "A's owner grant never reaches B's user")
+	assert.True(t, f.saved.HasRole("viewer"))
+	assert.False(t, f.saved.HasRole("admin"))
+}
+
+// TestRegisterInvitedUser_AFailedRedemptionIsRetryableOnlyByItsOwnInvitation
+// pins that the user a failed Accept of A kept is A's retry only: another
+// pending invitation B for the same email is refused, and A's own retry
+// still completes.
+func TestRegisterInvitedUser_AFailedRedemptionIsRetryableOnlyByItsOwnInvitation(t *testing.T) {
+	ctx := context.Background()
+	created := time.Now().Add(-time.Hour)
+	invA, err := entities.NewInvitation("tenant-a", "member@example.test", "viewer", 999, 7*24*time.Hour, created)
+	require.NoError(t, err)
+	invB, err := entities.NewInvitation("tenant-a", "member@example.test", "admin", 999, 7*24*time.Hour, created)
+	require.NoError(t, err)
+
+	f := newRedemptionBindingFixture(t, ctx, invA, invB)
+	f.invitationService.On("Accept", ctx, invA.Token, mock.AnythingOfType("uint64")).
+		Return(context.DeadlineExceeded).Once()
+	f.invitationService.On("Accept", ctx, invA.Token, mock.AnythingOfType("uint64")).
+		Run(acceptedOn(invA)).Return(nil)
+	f.invitationService.On("Accept", ctx, invB.Token, mock.AnythingOfType("uint64")).
+		Run(acceptedOn(invB)).Return(nil).Maybe()
+
+	_, err = f.svc.RegisterInvitedUser(ctx, newTestUser(invA.Email), invA.Token)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	result, err := f.svc.RegisterInvitedUser(ctx, newTestUser(invB.Email), invB.Token)
+	require.ErrorAs(t, err, new(ErrUserAlreadyExists), "B is not A's unfinished redemption")
+	assert.Nil(t, result)
+	f.userService.AssertNumberOfCalls(t, "Save", 1)
+	assert.Zero(t, acceptCalls(f.invitationService, invB.Token))
+
+	result, err = f.svc.RegisterInvitedUser(ctx, newTestUser(invA.Email), invA.Token)
+	require.NoError(t, err, "A's own retry completes")
+	assert.NotNil(t, result)
+	f.userService.AssertNumberOfCalls(t, "Save", 2)
+	assert.Equal(t, 2, acceptCalls(f.invitationService, invA.Token))
+	f.userService.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+}
+
+// TestRegisterInvitedUser_AUserWithNoOriginatingInvitationIsRefused pins
+// that a user no invitation redemption saved (self-registered, or saved
+// before #2362 recorded the invitation) is never taken for a retry.
+func TestRegisterInvitedUser_AUserWithNoOriginatingInvitationIsRefused(t *testing.T) {
+	ctx := context.Background()
+	inv, err := entities.NewInvitation("tenant-a", "member@example.test", "viewer", 999, 7*24*time.Hour, time.Now().Add(-time.Hour))
+	require.NoError(t, err)
+
+	f := newRedemptionBindingFixture(t, ctx, inv)
+	*f.saved = entities.User{ID: 7, Email: inv.Email, TenantID: "tenant-a", CreatedAt: time.Now()}
+	// The fixture's first lookup finds no user; this one exists already.
+	_, _ = f.userService.GetByEmail(ctx, inv.Email)
+	f.invitationService.On("Accept", ctx, inv.Token, mock.AnythingOfType("uint64")).Return(nil).Maybe()
+
+	result, err := f.svc.RegisterInvitedUser(ctx, newTestUser(inv.Email), inv.Token)
+	require.ErrorAs(t, err, new(ErrUserAlreadyExists))
+	assert.Nil(t, result)
+	f.userService.AssertNotCalled(t, "Save", mock.Anything, mock.Anything)
+}
+
 // cancelingIAMMirror cancels the request right after its IAM write, and
 // records the context the returned undo runs on: whether it was already
 // canceled and whether it carries a deadline.
