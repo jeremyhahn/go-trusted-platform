@@ -639,6 +639,98 @@ func TestRenew_AnUnknownMarkerClearIsResolvedByReadingTheStore(t *testing.T) {
 	assert.True(t, stored.ExpiresAt.Equal(renewed.ExpiresAt))
 }
 
+// projectionOverRecordStore is a projection over a record, as the gateway's
+// projectedLeaseStore is. Get reads the projection, GetRecorded reads the
+// record and brings the projection in line with it, and a write lands in the
+// record before the projection. With lose set, a marker-clearing Put (a zero
+// ClientExpiresAt) commits to the record and fails before the projection is
+// written, as a control-plane PUT whose answer is lost. After that, a
+// marker-storing Put fails without committing.
+type projectionOverRecordStore struct {
+	LeaseStore
+	record LeaseStore
+	lose   atomic.Bool
+	lost   atomic.Bool
+}
+
+func (s *projectionOverRecordStore) Put(ctx context.Context, lease *Lease) error {
+	if lease.ClientExpiresAt.IsZero() && s.lose.Load() {
+		if err := s.record.Put(ctx, lease); err != nil {
+			return err
+		}
+		s.lost.Store(true)
+		return errors.New("answer lost")
+	}
+	if !lease.ClientExpiresAt.IsZero() && s.lost.Load() {
+		return errors.New("control plane unreachable")
+	}
+	if err := s.record.Put(ctx, lease); err != nil {
+		return err
+	}
+	return s.LeaseStore.Put(ctx, lease)
+}
+
+func (s *projectionOverRecordStore) Delete(ctx context.Context, id LeaseID) error {
+	if err := s.record.Delete(ctx, id); err != nil {
+		return err
+	}
+	return s.LeaseStore.Delete(ctx, id)
+}
+
+func (s *projectionOverRecordStore) GetRecorded(ctx context.Context, id LeaseID) (*Lease, error) {
+	l, err := s.record.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.LeaseStore.Put(ctx, l); err != nil {
+		return nil, err
+	}
+	return l, nil
+}
+
+func recordClearHarness(t *testing.T) (*harness, *projectionOverRecordStore) {
+	t.Helper()
+	managed := newManagedFakePlane(DataPlaneMASQUE, new([]string))
+	host := hostOf(t, managed)
+	peers := &renewFailingPeers{hostPeers: &hostPeers{host: host}}
+	dp, err := NewDatapathPlane(DataPlaneMASQUE, peers)
+	require.NoError(t, err)
+	var store *projectionOverRecordStore
+	h := newHarnessWith(t, testConfig(), func(d *Deps) {
+		d.DataPlanes[DataPlaneMASQUE] = dp
+		store = &projectionOverRecordStore{LeaseStore: d.Leases, record: NewMemoryLeaseStore()}
+		d.Leases = store
+	})
+	host.now = h.clock.Now
+	return h, store
+}
+
+// TestRenew_AnUnknownMarkerClearIsResolvedAgainstTheRecordNotTheProjection:
+// when the clear commits to the record but its answer is lost and the marker
+// cannot be stored again, the projection still shows the marker. The
+// read-back must ask the record, which holds the clear, so the renewal is
+// reported done (Codex #2336 round 20).
+func TestRenew_AnUnknownMarkerClearIsResolvedAgainstTheRecordNotTheProjection(t *testing.T) {
+	ctx := context.Background()
+	h, store := recordClearHarness(t)
+	lease, err := h.svc.Admit(ctx, h.request(t))
+	require.NoError(t, err)
+	h.intoRenewWindow()
+	store.lose.Store(true)
+
+	renewed, err := h.svc.Renew(ctx, lease.ID, renewalEvidence(t, h))
+
+	require.NoError(t, err, "the record holds the clear: the renewal is done")
+	require.True(t, renewed.ExpiresAt.After(lease.ExpiresAt))
+	recorded, err := store.record.Get(ctx, lease.ID)
+	require.NoError(t, err)
+	assert.True(t, recorded.ClientExpiresAt.IsZero())
+	assert.True(t, recorded.ExpiresAt.Equal(renewed.ExpiresAt))
+	projected, err := store.Get(ctx, lease.ID)
+	require.NoError(t, err)
+	assert.True(t, projected.ClientExpiresAt.IsZero(), "the projection follows the record")
+}
+
 // TestPlaneHost_ADelayedRenewalOfARemovedLeaseDoesNotExtendItsReplacement:
 // lease A's renewal, delayed past A's removal, must not extend replacement
 // lease B, which reuses A's key; B keeps its own deadline (Codex #2336 round 17).
