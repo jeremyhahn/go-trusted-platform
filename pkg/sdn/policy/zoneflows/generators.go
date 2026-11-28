@@ -462,14 +462,26 @@ func serviceFlowRules(f family, ingress string, toSubnet, service string, priori
 
 	switch service {
 	case "dhcp":
-		flows = append(flows,
-			FlowRule{
-				Table:    0,
-				Priority: priority,
-				Match:    fmt.Sprintf("%s,%s", ingress, f.dhcpMatch()),
-				Actions:  "normal",
-			},
-		)
+		// Unicast DHCP only toward the destination zone: the permit sits
+		// above the matrix denies, so an unscoped match would open the
+		// server port toward every denied zone too (#1896). A client
+		// without a lease sends to the all-servers broadcast (DHCPv4) or
+		// multicast group (DHCPv6), which no zone subnet contains.
+		client, server, bcast := portDHCPClient, portDHCPServer, "255.255.255.255"
+		if f.name == ipv6.name {
+			client, server, bcast = portDHCP6Client, portDHCP6Server, "ff02::1:2"
+		}
+		ports := fmt.Sprintf("nw_proto=17,tp_src=%d,tp_dst=%d", client, server)
+		for _, dst := range []string{toSubnet, bcast} {
+			flows = append(flows,
+				FlowRule{
+					Table:    0,
+					Priority: priority,
+					Match:    fmt.Sprintf("%s,%s", ingress, f.ipMatch(ports, f.toDst(dst))),
+					Actions:  "normal",
+				},
+			)
+		}
 	case "dns":
 		for _, p := range []uint16{portDNS, portDNSAlt1, portDNSAlt2} {
 			flows = append(flows,
@@ -503,7 +515,7 @@ func serviceFlowRules(f family, ingress string, toSubnet, service string, priori
 			FlowRule{
 				Table:    0,
 				Priority: priority,
-				Match:    fmt.Sprintf("%s,%s", ingress, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portTFTP))),
+				Match:    fmt.Sprintf("%s,%s", ingress, f.ipMatch("nw_proto=17", f.toDst(toSubnet), fmt.Sprintf("tp_dst=%d", portTFTP))),
 				Actions:  "normal",
 			},
 		)
