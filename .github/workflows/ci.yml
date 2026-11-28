@@ -1,4 +1,15 @@
-# ci-template: v1.62 pool overflow + v1.61 main push group per commit + v1.60 runner selection + v1.35.1 + v1.42 hermetic gate + v1.51 reviewed + v1.52 fork check + preflight self-hosted runs-on (#2387) + v1.53 main group, gate and vars mask + v1.53 LAN mask script + v1.60 runner-selection events (customized)
+# ci-template: v1.63 main-only runner label + v1.62 pool overflow + v1.61 main push group per commit + v1.60 runner selection + v1.35.1 + v1.42 hermetic gate + v1.51 reviewed + v1.52 fork check + preflight self-hosted runs-on (#2387) + v1.53 main group, gate and vars mask + v1.53 LAN mask script + v1.60 runner-selection events (customized)
+# v1.63 (2026-11-28, the Tenant Agent's order at 02:48Z): a push to main no
+# longer queues behind pull request runs on the self-hosted pools. Two
+# repository variables name main-only runner labels:
+# CI_MAIN_RUNNER_LABEL (the non-docker class) and
+# CI_MAIN_RUNNER_LABEL_DOCKER (the docker class). The Infra Department sets
+# both and registers the runner units that carry them. When both are set
+# and match ^[a-z0-9][a-z0-9-]{0,38}$, a push to refs/heads/main on
+# github.com runs preflight on [self-hosted, linux, x64,
+# CI_MAIN_RUNNER_LABEL], and `Balanced runner pool (ruling 1137)` makes no
+# API call and outputs that list as `runner` and the CI_MAIN_RUNNER_LABEL_DOCKER
+# list as `runner_docker`, with a ::notice. Either unset or empty gives the
 #
 # v1.60 runner-selection events: preflight and the runner selection go
 # self-hosted only on a push to refs/heads/main or a pull request from this
@@ -375,7 +386,7 @@ jobs:
   # OBJSTORE_SEAMS is empty and any import fails.
   preflight:
     name: Preflight [changed files, schedule guard, architecture gates]
-    runs-on: ${{ github.server_url == 'https://github.com' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON(vars.CI_PREFLIGHT_RUNS_ON || '["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}   # v1.60
+    runs-on: ${{ github.server_url == 'https://github.com' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.CI_MAIN_RUNNER_LABEL && vars.CI_MAIN_RUNNER_LABEL_DOCKER && fromJSON(format('["self-hosted","linux","x64","{0}"]', vars.CI_MAIN_RUNNER_LABEL)) || github.server_url == 'https://github.com' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON(vars.CI_PREFLIGHT_RUNS_ON || '["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}   # v1.60   # v1.63
     # v1.26: a draft PR runs no CI; every job that needs this one skips with it.
     if: ${{ !github.event.pull_request.draft }}
     timeout-minutes: 10       # v1.34: the three jobs had 5 each
@@ -399,6 +410,12 @@ jobs:
       # v1.60: the less-used pool, hosted (CI_HOSTED_SHARE) or self-hosted
       # (CI_SELF_HOSTED_BIGDISK, CI_SELF_HOSTED_BIGDISK_DOCKER); forks and
       # events the self-hosted runners refuse stay hosted.
+      # v1.63 (Tenant Agent order, 2026-11-28 02:48Z): on a push to
+      # refs/heads/main with CI_MAIN_RUNNER_LABEL and
+      # CI_MAIN_RUNNER_LABEL_DOCKER both set and valid, it makes no call and
+      # outputs [self-hosted, linux, x64, <each label>] with a ::notice.
+      # Unset or empty is v1.62; an invalid value is v1.62 with a ::warning.
+      # Every other event is unchanged. Tests: runner-select-tests.py part F.
       - name: Balanced runner pool (ruling 1137)
       # CUSTOMIZE (#2128, DS-10475, not in the template): a fork's pull
       # request, and every event but a push to refs/heads/main or a pull
@@ -419,6 +436,8 @@ jobs:
           C2: ${{ vars.CI_SELF_HOSTED_BIGDISK_DOCKER }}
           PRIVATE: ${{ github.event.repository.private }}
           WAIT_LIMIT: 600
+          ML: ${{ vars.CI_MAIN_RUNNER_LABEL }}                # v1.63
+          MLD: ${{ vars.CI_MAIN_RUNNER_LABEL_DOCKER }}        # v1.63
         run: |
           set -uo pipefail
           HOSTED='"ubuntu-latest"'
@@ -465,6 +484,29 @@ jobs:
             *)
               hosted_only "the '$EVENT' event is neither a push to refs/heads/main nor a pull request from this repository" ;;
           esac
+          # v1.63: a push to main takes the main-only runner units when both
+          # CI_MAIN_RUNNER_LABEL (ML) and CI_MAIN_RUNNER_LABEL_DOCKER (MLD)
+          # are set and valid: no count and no API call. Either unset or
+          # empty: the v1.62 balance below, silently; an invalid value: the
+          # same, with a ::warning naming it. No other event reads them.
+          if [ "$EVENT:$REF" = push:refs/heads/main ]; then
+            mainok=1
+            for v in "CI_MAIN_RUNNER_LABEL=$ML" "CI_MAIN_RUNNER_LABEL_DOCKER=$MLD"; do
+              val=${v#*=}
+              if [ -z "$val" ]; then
+                mainok=0
+              elif ! [[ "$val" =~ ^[a-z0-9][a-z0-9-]{0,38}$ ]]; then
+                mainok=0
+                shown=$(printf '%s' "$val" | tr -c 'A-Za-z0-9._-' '?' | cut -c1-60)
+                echo "::warning::runner selection: ${v%%=*}='$shown' is not a runner label (^[a-z0-9][a-z0-9-]{0,38}\$); this push to main does not use the main-only runners and balances as in v1.62 (ci-template v1.63)"
+              fi
+            done
+            if [ "$mainok" = 1 ]; then
+              echo "::notice::runner selection: a push to main with CI_MAIN_RUNNER_LABEL=$ML and CI_MAIN_RUNNER_LABEL_DOCKER=$MLD set; this run's jobs run on the main-only runners, which no pull request job can take, and no count is made (ci-template v1.63)"
+              emit "$(selfhosted "$ML")" "$(selfhosted "$MLD")"
+              exit 0
+            fi
+          fi
           # whole <value>: a whole number above 0, at most 6 digits.
           whole() { [[ "$1" =~ ^[0-9]{1,6}$ ]] && [ "$((10#$1))" -gt 0 ]; }
           whole "$C1" || hosted "CI_SELF_HOSTED_BIGDISK='$C1' is unset, 0 or not a whole number, so no bigdisk job can be placed (the Infra Department sets it)"
