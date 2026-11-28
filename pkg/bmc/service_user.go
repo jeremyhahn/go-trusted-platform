@@ -44,6 +44,24 @@ func (s *Service) profileConfig(ctx context.Context, profileID uint64) (*Config,
 	return cfg, nil
 }
 
+// refuseLoginAccount refuses a write to the account the profile logs in as,
+// because the stored profile credential would no longer open a management
+// session. It returns ErrInvalidConfig on the slot, with reason, when the
+// user in slot has the profile's username. A failed user list is returned,
+// so the check fails closed.
+func refuseLoginAccount(ctx context.Context, mgr ManagedUserManager, cfg *Config, slot uint8, reason string) error {
+	users, err := mgr.ListUsers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, u := range users {
+		if u.Slot == slot && u.Username == cfg.Username {
+			return ErrInvalidConfig{Field: "slot", Reason: reason}
+		}
+	}
+	return nil
+}
+
 // ListUsers returns the populated BMC user slots for the given profile.
 func (s *Service) ListUsers(ctx context.Context, profileID uint64) ([]User, error) {
 	mgr, err := s.userManagerFor(ctx, profileID)
@@ -93,13 +111,21 @@ func (s *Service) CreateUser(ctx context.Context, profileID uint64, user User, p
 	return mgr.CreateUser(ctx, user, pwSecret)
 }
 
-// DeleteUser removes the BMC user at the given slot.
+// DeleteUser removes the BMC user at the given slot. It refuses the account
+// the profile logs in as and writes nothing then.
 func (s *Service) DeleteUser(ctx context.Context, profileID uint64, slot uint8) error {
-	mgr, err := s.userManagerFor(ctx, profileID)
+	cfg, err := s.profileConfig(ctx, profileID)
+	if err != nil {
+		return err
+	}
+	mgr, err := NewUserManager(ctx, cfg, s.logger)
 	if err != nil {
 		return err
 	}
 	defer mgr.Close()
+	if err := refuseLoginAccount(ctx, mgr, cfg, slot, "the slot holds the account this profile logs in as; deleting it would leave the stored credential unable to open a session"); err != nil {
+		return err
+	}
 	return mgr.DeleteUser(ctx, slot)
 }
 
@@ -118,14 +144,8 @@ func (s *Service) SetUserPassword(ctx context.Context, profileID uint64, slot ui
 	}
 	defer mgr.Close()
 
-	users, err := mgr.ListUsers(ctx)
-	if err != nil {
+	if err := refuseLoginAccount(ctx, mgr, cfg, slot, "the slot holds the account this profile logs in as; its password cannot be changed until the stored credential is rotated with it"); err != nil {
 		return err
-	}
-	for _, u := range users {
-		if u.Slot == slot && u.Username == cfg.Username {
-			return ErrInvalidConfig{Field: "slot", Reason: "the slot holds the account this profile logs in as; its password cannot be changed until the stored credential is rotated with it"}
-		}
 	}
 
 	pwSecret := memguard.NewMemoryEnclaveFromString(password)
@@ -136,12 +156,21 @@ func (s *Service) SetUserPassword(ctx context.Context, profileID uint64, slot ui
 
 // SetUserPrivilege updates the channel privilege for the BMC user at the
 // given slot. The channel argument selects the IPMI logical channel;
-// pass 0 to use the package default LAN channel.
+// pass 0 to use the package default LAN channel. Any privilege change on the
+// account the profile logs in as is refused (fail closed), even to its
+// current level, and nothing is written then.
 func (s *Service) SetUserPrivilege(ctx context.Context, profileID uint64, slot, channel uint8, privilege Privilege) error {
-	mgr, err := s.userManagerFor(ctx, profileID)
+	cfg, err := s.profileConfig(ctx, profileID)
+	if err != nil {
+		return err
+	}
+	mgr, err := NewUserManager(ctx, cfg, s.logger)
 	if err != nil {
 		return err
 	}
 	defer mgr.Close()
+	if err := refuseLoginAccount(ctx, mgr, cfg, slot, "the slot holds the account this profile logs in as; its privilege cannot be changed while the profile manages the BMC through it"); err != nil {
+		return err
+	}
 	return mgr.SetUserPrivilege(ctx, slot, channel, privilege)
 }
