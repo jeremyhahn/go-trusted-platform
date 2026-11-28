@@ -174,6 +174,32 @@ func TestPrepareMigration_ArchMismatch(t *testing.T) {
 	assert.Equal(t, qemu.ArchX86_64, recv.recordedSpec().Arch)
 }
 
+// TestPrepareMigration_UnsupportedReceiverIsAPrecondition checks that a live or
+// vTPM receive the receiver cannot complete maps to FailedPrecondition, like
+// the arch mismatch (#2021 Codex round 2).
+func TestPrepareMigration_UnsupportedReceiverIsAPrecondition(t *testing.T) {
+	for _, receiveErr := range []error{
+		compute.ErrLiveMigrationReceiveUnsupported,
+		compute.ErrTPMMigrationReceiveUnsupported,
+	} {
+		t.Run(receiveErr.Error(), func(t *testing.T) {
+			recv := &migrationReceiverOrchestrator{
+				grpcMockOrchestrator: newGRPCMockOrchestrator(),
+				receiveErr:           receiveErr,
+			}
+			svc := newMigrationReceiverService(recv)
+
+			_, err := svc.PrepareMigration(context.Background(), &platformv1.PrepareMigrationRequest{
+				VmName: "guest",
+				Spec:   &platformv1.VMMigrationSpec{MemoryMb: 1024},
+			})
+			require.Error(t, err)
+			assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+			assert.Contains(t, status.Convert(err).Message(), receiveErr.Error())
+		})
+	}
+}
+
 func TestPrepareMigration_UndeterminedListenAddress(t *testing.T) {
 	recv := &migrationReceiverOrchestrator{
 		grpcMockOrchestrator: newGRPCMockOrchestrator(),

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -94,6 +95,32 @@ func TestPlaneHost_InstallAndRemoveReachThePlane(t *testing.T) {
 	require.Nil(t, removed.GetRefusal())
 	assert.Equal(t, []LeaseID{"l1"}, plane.removed)
 	assert.Zero(t, plane.count())
+}
+
+// TestPlaneHost_AnOlderDuplicateInstallKeepsTheRenewedDeadline: a replayed
+// install of the same peer (Restore) carries an older deadline than a renewal
+// the host already applied; the deadline must not move back.
+func TestPlaneHost_AnOlderDuplicateInstallKeepsTheRenewedDeadline(t *testing.T) {
+	t0 := leaseDeadlineT0
+	ctx := context.Background()
+	plane := newManagedFakePlane(DataPlaneMASQUE, new([]string))
+	host := hostOf(t, plane)
+	host.now = func() time.Time { return t0.Add(30 * time.Minute) }
+	require.Nil(t, installHosted(t, host, deadlinePeer("l1", t0.Add(time.Hour))))
+
+	require.Nil(t, host.RenewVPNPeer(ctx, &ipcv1.RenewVPNPeerRequest{
+		DataPlane: string(DataPlaneMASQUE), LeaseId: "l1",
+		PublicKey:         bytesOf(0xab, 32),
+		ExpiresAtUnixNano: t0.Add(2 * time.Hour).UnixNano(),
+	}).GetRefusal())
+	require.Nil(t, installHosted(t, host, deadlinePeer("l1", t0.Add(time.Hour))),
+		"the same peer again is accepted")
+
+	require.NoError(t, host.ExpirePeers(ctx, t0.Add(90*time.Minute)))
+	assert.Equal(t, 1, plane.count(), "the older duplicate install did not shorten the renewed deadline")
+	assert.Empty(t, plane.removed)
+	require.NoError(t, host.ExpirePeers(ctx, t0.Add(2*time.Hour)))
+	assert.Equal(t, 0, plane.count())
 }
 
 func TestPlaneHost_RefusesBadInputAsInvalidRequest(t *testing.T) {

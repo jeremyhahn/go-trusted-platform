@@ -100,6 +100,7 @@ type RESTServer struct {
 	gatewayHandlers       *restapi.GatewayHandlers
 	gatewayService        *gatewayRESTService
 	idevidService         *IDevIDGRPCService
+	iamTokens             *IAMTokenService
 	// registryMaxPushBytes overrides the image push body cap when non-zero.
 	registryMaxPushBytes int64
 }

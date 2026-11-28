@@ -116,6 +116,12 @@ func NewIAMRouter(
 	}, nil
 }
 
+// SetTokenVerifier wires the verifier POST /iam/tokens/verify answers
+// through; call it before RegisterRoutes' handlers serve requests.
+func (r *IAMRouter) SetTokenVerifier(v TokenVerifier) {
+	r.handlers.tokenVerifier = v
+}
+
 // RegisterRoutes registers all IAM REST routes on the provided router
 func (r *IAMRouter) RegisterRoutes(router *mux.Router) {
 	// Create subrouter for IAM endpoints. Authentication and the admin
@@ -184,6 +190,9 @@ func (r *IAMRouter) registerFlatRoutes(router *mux.Router) {
 
 	// Permissions
 	router.Handle("/permissions/check", r.tenantScoped(r.handlers.CheckPermission)).Methods("POST")
+
+	// Token verification
+	router.Handle("/tokens/verify", r.tenantScoped(r.handlers.VerifyToken)).Methods("POST")
 
 	// Applications
 	router.Handle("/apps", r.tenantScoped(r.handlers.RegisterApp)).Methods("POST")

@@ -62,8 +62,18 @@ func (h *Handlers) ensureAvailable(w http.ResponseWriter, r *http.Request) bool 
 // is as long as the default write timeout, so without this the server closes
 // the connection before the VM has stopped and the client sees EOF.
 func (h *Handlers) extendWriteDeadline(w http.ResponseWriter, opts compute.StopOptions) {
-	deadline := time.Now().Add(opts.ReplyWindow())
-	if err := http.NewResponseController(w).SetWriteDeadline(deadline); err != nil {
+	h.extendWriteDeadlineBy(w, opts.ReplyWindow())
+}
+
+// migrateReplyWindow is how long a migrate reply may take: the call waits on
+// the transfer and the receiver's finalize, and the UI waits an hour for it
+// (MIGRATION_TIMEOUT_MS in web/src/hooks/use-vm-operations.ts).
+const migrateReplyWindow = time.Hour
+
+// extendWriteDeadlineBy moves the reply's write deadline to window from now,
+// logging (and serving the request anyway) when the writer refuses.
+func (h *Handlers) extendWriteDeadlineBy(w http.ResponseWriter, window time.Duration) {
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(window)); err != nil {
 		h.logger.Warnf("compute: cannot extend the reply deadline: %v", err)
 	}
 }
@@ -264,6 +274,7 @@ func (h *Handlers) MigrateVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.VmId = mux.Vars(r)["id"]
+	h.extendWriteDeadlineBy(w, migrateReplyWindow)
 	resp, err := h.server.MigrateVM(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)

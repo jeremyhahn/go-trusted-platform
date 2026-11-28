@@ -24,6 +24,7 @@ import (
 type DatapathPeers interface {
 	InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRequest) (*ipcv1.InstallVPNPeerResponse, error)
 	RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest) (*ipcv1.RemoveVPNPeerResponse, error)
+	RenewVPNPeer(ctx context.Context, req *ipcv1.RenewVPNPeerRequest) (*ipcv1.RenewVPNPeerResponse, error)
 	ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) (*ipcv1.ReconcileVPNPeersResponse, error)
 }
 
@@ -63,6 +64,30 @@ func (p *DatapathPlane) InstallPeer(ctx context.Context, lease *Lease) error {
 	return errorOfRefusal(p.kind, lease.ID, resp.GetRefusal())
 }
 
+// ExtendPeer moves an installed peer's lease deadline in the datapath. It
+// sends RenewVPNPeer, which only extends a peer the PlaneHost still holds
+// before its deadline: a renewal that arrives after expiry is
+// ErrLeaseNotFound and installs nothing.
+func (p *DatapathPlane) ExtendPeer(ctx context.Context, lease *Lease) error {
+	if lease == nil {
+		return &ErrInvalidRequest{Field: "lease", Reason: "required"}
+	}
+	key := lease.Keys.WireGuardPublicKey
+	if len(key) == 0 {
+		key = lease.Keys.ClientCertificateSHA256
+	}
+	resp, err := p.peers.RenewVPNPeer(ctx, &ipcv1.RenewVPNPeerRequest{
+		DataPlane:         string(p.kind),
+		LeaseId:           string(lease.ID),
+		PublicKey:         key,
+		ExpiresAtUnixNano: lease.ExpiresAt.UnixNano(),
+	})
+	if err != nil {
+		return &ErrDataPlaneUnavailable{Kind: p.kind, Cause: err}
+	}
+	return errorOfRefusal(p.kind, lease.ID, resp.GetRefusal())
+}
+
 // RemovePeer implements DataPlane through the datapath child.
 func (p *DatapathPlane) RemovePeer(ctx context.Context, leaseID LeaseID) error {
 	resp, err := p.peers.RemoveVPNPeer(ctx, &ipcv1.RemoveVPNPeerRequest{DataPlane: string(p.kind), LeaseId: string(leaseID)})
@@ -96,6 +121,12 @@ func peerOf(kind DataPlaneKind, lease *Lease) *ipcv1.VPNPeer {
 	}
 	if lease.Address.IsValid() {
 		peer.Address = lease.Address.String()
+	}
+	if len(lease.Zones) > 0 {
+		peer.Zones = append([]string(nil), lease.Zones...)
+	}
+	if !lease.ExpiresAt.IsZero() {
+		peer.ExpiresAtUnixNano = lease.ExpiresAt.UnixNano()
 	}
 	return peer
 }

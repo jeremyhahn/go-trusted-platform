@@ -480,6 +480,8 @@ func (h *TenantHandlers) RegisterRoutes(router *mux.Router) {
 	// DEK operations
 	router.HandleFunc("/api/v1/tenants/{id}/dek/rotate", h.ownOrSystem(scopeTenantWrite, h.handleRotateTenantDEK)).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/tenants/{id}/dek/status", h.ownOrSystem(scopeTenantRead, h.handleGetTenantDEKStatus)).Methods(http.MethodGet)
+	// The SDK's getDEKStatus calls /dek; keep /dek/status for older clients.
+	router.HandleFunc("/api/v1/tenants/{id}/dek", h.ownOrSystem(scopeTenantRead, h.handleGetTenantDEKStatus)).Methods(http.MethodGet)
 
 	// Per-tenant barrier operations
 	router.HandleFunc("/api/v1/tenants/{id}/barrier/init", h.ownOrSystem(scopeTenantWrite, h.handleInitTenantBarrier)).Methods(http.MethodPost)

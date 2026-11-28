@@ -279,8 +279,42 @@ func (p *projectedLeaseStore) settle(id vpn.LeaseID) error {
 	return p.saveLocked()
 }
 
+var _ vpn.RecordedLeaseStore = (*projectedLeaseStore)(nil)
+
 func (p *projectedLeaseStore) Get(ctx context.Context, id vpn.LeaseID) (*vpn.Lease, error) {
 	return p.local.Get(ctx, id)
+}
+
+// GetRecorded reads the lease from the control plane's record rather than the
+// projection. A Put whose answer was lost may have committed there and not
+// here. The recorded lease is written into the projection so later reads
+// match. A lease whose DELETE is pending was revoked and is not found, as in
+// rebuild.
+func (p *projectedLeaseStore) GetRecorded(ctx context.Context, id vpn.LeaseID) (*vpn.Lease, error) {
+	desired, err := p.control.FetchDesiredConfig(ctx)
+	if err != nil {
+		return nil, &vpn.ErrLeaseStoreUnavailable{Cause: err}
+	}
+	p.mu.Lock()
+	_, revoked := p.pending[id]
+	p.mu.Unlock()
+	if revoked || desired == nil || desired.VPN == nil {
+		return nil, &vpn.ErrLeaseNotFound{LeaseID: id}
+	}
+	for i := range desired.VPN.Leases {
+		if vpn.LeaseID(desired.VPN.Leases[i].ID) != id {
+			continue
+		}
+		lease, err := projectedLease(i, &desired.VPN.Leases[i])
+		if err != nil {
+			return nil, err
+		}
+		if err := p.local.Put(ctx, lease); err != nil {
+			return nil, err
+		}
+		return lease, nil
+	}
+	return nil, &vpn.ErrLeaseNotFound{LeaseID: id}
 }
 
 func (p *projectedLeaseStore) List(ctx context.Context) ([]*vpn.Lease, error) {
@@ -338,6 +372,7 @@ func desiredLease(lease *vpn.Lease) *gwstate.DesiredVPNLease {
 		ClientCertificateSHA256: slices.Clone(lease.Keys.ClientCertificateSHA256),
 		IssuedAt:                lease.IssuedAt,
 		ExpiresAt:               lease.ExpiresAt,
+		ClientExpiresAt:         lease.ClientExpiresAt,
 		Renewals:                lease.Renewals,
 		Verdict: gwstate.DesiredVPNVerdict{
 			Passed:        lease.Verdict.Passed,
@@ -368,9 +403,10 @@ func projectedLease(i int, l *gwstate.DesiredVPNLease) (*vpn.Lease, error) {
 			WireGuardPublicKey:      slices.Clone(l.WireGuardPublicKey),
 			ClientCertificateSHA256: slices.Clone(l.ClientCertificateSHA256),
 		},
-		IssuedAt:  l.IssuedAt,
-		ExpiresAt: l.ExpiresAt,
-		Renewals:  l.Renewals,
+		IssuedAt:        l.IssuedAt,
+		ExpiresAt:       l.ExpiresAt,
+		ClientExpiresAt: l.ClientExpiresAt,
+		Renewals:        l.Renewals,
 		Verdict: vpn.VerdictSummary{
 			Passed:        l.Verdict.Passed,
 			Cryptographic: l.Verdict.Cryptographic,

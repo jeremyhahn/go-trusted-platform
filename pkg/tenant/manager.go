@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -1298,23 +1299,42 @@ func (m *Manager) getFromIAM(ctx context.Context, id string) (*iam.Tenant, error
 }
 
 func (m *Manager) getFromIAMByName(ctx context.Context, name string) (*iam.Tenant, error) {
-	// Use List with a large page size to find by name
-	req := &iam.ListTenantsRequest{
-		PageSize: 100,
-	}
-
-	resp, err := m.iamTenantClient.List(ctx, req)
+	var found *iam.Tenant
+	err := m.walkIAMTenants(ctx, func(t *iam.Tenant, _ int) bool {
+		if t.Name == name {
+			found = t
+			return false
+		}
+		return true
+	})
 	if err != nil {
 		return nil, err
 	}
+	if found == nil {
+		return nil, ErrTenantNotFound{Name: name}
+	}
+	return found, nil
+}
 
-	for i := range resp.Tenants {
-		if resp.Tenants[i].Name == name {
-			return &resp.Tenants[i], nil
+// walkIAMTenants reads every IAM tenant once, sorts them by ID and calls
+// visit with each tenant and the number of tenants read. The walk stops
+// when visit returns false.
+func (m *Manager) walkIAMTenants(ctx context.Context, visit func(t *iam.Tenant, total int) bool) error {
+	// The pinned embedded SDK ignores PageToken and returns no Pagination,
+	// so the walk reads the whole list once (PageSize 0) and the total is
+	// its length, as QuicBaaSIAMAdapter.ListTenants does.
+	resp, err := m.iamTenantClient.List(ctx, &iam.ListTenantsRequest{})
+	if err != nil {
+		return err
+	}
+	all := resp.Tenants
+	sort.SliceStable(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+	for i := range all {
+		if !visit(&all[i], len(all)) {
+			return nil
 		}
 	}
-
-	return nil, ErrTenantNotFound{Name: name}
+	return nil
 }
 
 // listFromIAM reads the whole IAM tenant list and returns its limit/offset
@@ -1349,9 +1369,11 @@ func (m *Manager) listFromIAM(ctx context.Context, limit, offset int) ([]iam.Ten
 		seen[next] = struct{}{}
 		token = next
 	}
+	// Same order as walkIAMTenants: sorted by ID.
+	sort.SliceStable(all, func(i, j int) bool { return all[i].ID < all[j].ID })
 
 	total := len(all)
-	if offset >= total {
+	if limit <= 0 || offset >= total {
 		return nil, total, nil
 	}
 	return all[offset:min(offset+limit, total)], total, nil
