@@ -8,10 +8,22 @@ import VMDetailPage from './vm-detail-client';
 // ResumeVM through the SDK client, each behind the server's capability gate;
 // a refusal reaches the operator as a destructive toast.
 
+const push = vi.hoisted(() => vi.fn());
+
 vi.mock('next/navigation', () => ({
   useParams: () => ({ id: 'vm-1' }),
   usePathname: () => '/compute/vms/vm-1',
-  useRouter: () => ({ push: vi.fn(), back: vi.fn() }),
+  useRouter: () => ({ push, back: vi.fn() }),
+}));
+
+// The migrate dialog has its own tests; here it is a button that reports a
+// finished migration, so the page's handling of the moved VM is under test.
+vi.mock('@/components/features/compute/vm-migrate-dialog', () => ({
+  VMMigrateButton: ({ onMigrated }: { onMigrated: () => void }) => (
+    <button type="button" onClick={onMigrated}>
+      Migrate
+    </button>
+  ),
 }));
 
 afterEach(() => {
@@ -331,5 +343,25 @@ describe('VMDetailPage loads the SDK VM', () => {
     expect(screen.getByText('10 GB')).toBeDefined();
     expect(screen.getByRole('spinbutton', { name: 'New size (GB) for hd0' })).toBeDefined();
     expect(screen.getAllByRole('button', { name: 'Detach' })).toHaveLength(1);
+  });
+});
+
+describe('VMDetailPage after a migration', () => {
+  it('leaves for the VM list once the source VM is gone', async () => {
+    push.mockClear();
+    const routes: Record<string, Answer> = {
+      'GET /api/v1/capabilities': caps(),
+      [VM_PATH]: storedVM('VM_STATE_RUNNING'),
+    };
+    stubControlPlane(routes);
+    await renderPage();
+
+    // MigrateVM removes the source instance: every later read is refused.
+    routes[VM_PATH] = refused(404, 'vm not found');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Migrate' }));
+    });
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/compute/vms'));
   });
 });
