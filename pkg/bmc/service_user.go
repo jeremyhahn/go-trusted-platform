@@ -43,25 +43,61 @@ func (s *Service) profileConfig(ctx context.Context, profileID uint64) (*Config,
 	return cfg, nil
 }
 
+// userLock is one profile's entry in the user lock table: a 1-slot
+// channel and the number of callers (holder plus waiters) that hold a
+// reference to it. The entry is removed when refs reaches 0.
+type userLock struct {
+	ch   chan struct{}
+	refs int
+}
+
 // lockUsers takes the profile's user lock, a 1-slot channel, and returns
-// its release. It waits in a select on ctx.Done(): when ctx ends first it
-// returns ctx.Err() without the lock. A select picks at random when both
-// are ready, so ctx is checked once more after the lock is taken, and on
-// error the lock is released and the error returned.
+// its release. Every caller takes a reference on the profile's table entry
+// before it waits and drops it when it gives up or releases; the entry is
+// deleted only when no holder or waiter remains, so waiters keep sharing
+// one channel and the table never keeps caller-supplied profile IDs. It
+// waits in a select on ctx.Done(): when ctx ends first it returns ctx.Err()
+// without the lock. A select picks at random when both are ready, so ctx is
+// checked once more after the lock is taken, and on error the lock is
+// released and the error returned.
 func (s *Service) lockUsers(ctx context.Context, profileID uint64) (func(), error) {
-	v, _ := s.userLocks.LoadOrStore(profileID, make(chan struct{}, 1))
-	lock := v.(chan struct{})
+	s.userLocksMu.Lock()
+	if s.userLocks == nil {
+		s.userLocks = make(map[uint64]*userLock)
+	}
+	l, ok := s.userLocks[profileID]
+	if !ok {
+		l = &userLock{ch: make(chan struct{}, 1)}
+		s.userLocks[profileID] = l
+	}
+	l.refs++
+	s.userLocksMu.Unlock()
 	select {
-	case lock <- struct{}{}:
+	case l.ch <- struct{}{}:
 	case <-ctx.Done():
+		s.dropUserLock(profileID, l)
 		return nil, ctx.Err()
 	}
-	release := func() { <-lock }
+	release := func() {
+		<-l.ch
+		s.dropUserLock(profileID, l)
+	}
 	if err := ctx.Err(); err != nil {
 		release()
 		return nil, err
 	}
 	return release, nil
+}
+
+// dropUserLock drops one reference on the profile's lock entry and deletes
+// the entry when no holder or waiter remains.
+func (s *Service) dropUserLock(profileID uint64, l *userLock) {
+	s.userLocksMu.Lock()
+	defer s.userLocksMu.Unlock()
+	l.refs--
+	if l.refs == 0 && s.userLocks[profileID] == l {
+		delete(s.userLocks, profileID)
+	}
 }
 
 // refuseLoginAccount refuses a write to the account the profile logs in as,

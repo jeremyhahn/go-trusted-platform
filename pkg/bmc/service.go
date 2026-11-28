@@ -24,11 +24,14 @@ type Service struct {
 	clients sync.Map // map[uint64]Client
 	// userLocks serializes CreateUser per profile from the session open
 	// through the write, so two creates for one free slot cannot both pass
-	// the check; a waiter gives up when its context ends.
-	userLocks sync.Map // map[uint64]chan struct{}
-	factory   ClientFactory
-	profiles  ProfileStore
-	logger    *slog.Logger
+	// the check; a waiter gives up when its context ends. Entries are
+	// reference counted (holder plus waiters) and removed at zero, so the
+	// table only holds profiles with a create in flight.
+	userLocksMu sync.Mutex
+	userLocks   map[uint64]*userLock
+	factory     ClientFactory
+	profiles    ProfileStore
+	logger      *slog.Logger
 }
 
 // ServiceParams holds dependencies for creating a BMC Service.
