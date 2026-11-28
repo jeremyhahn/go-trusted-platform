@@ -431,6 +431,61 @@ func TestTFTPServer_Start(t *testing.T) {
 	}
 }
 
+// TestTFTPServer_TransferRepliesFromListeningPort pins single-port mode:
+// the first DATA packet comes from the listening port, not an ephemeral
+// one, so the provisioning zone needs no UDP allowance beyond port 69.
+func TestTFTPServer_TransferRepliesFromListeningPort(t *testing.T) {
+	const port = 16971
+	config := &ServerConfig{TFTPPort: port}
+	server := NewTFTPServer(config, net.ParseIP("127.0.0.1"), logging.DefaultLogger())
+	server.firmwareMu.Lock()
+	server.firmware["ipxe.efi"] = []byte("test firmware")
+	server.firmwareMu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	bound := newBoundSignal()
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- server.Start(ctx, bound)
+	}()
+	awaitBound(t, bound, "TFTP listener")
+
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("client socket: %v", err)
+	}
+	defer conn.Close()
+	rrq := append([]byte{0x00, 0x01}, []byte("ipxe.efi\x00octet\x00")...)
+	if _, err := conn.WriteTo(rrq, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: port}); err != nil {
+		t.Fatalf("send RRQ: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 1024)
+	n, from, err := conn.ReadFrom(buf)
+	if err != nil {
+		t.Fatalf("read first reply: %v", err)
+	}
+	udpFrom, ok := from.(*net.UDPAddr)
+	if !ok {
+		t.Fatalf("reply from %T, want *net.UDPAddr", from)
+	}
+	assert.Equal(t, port, udpFrom.Port, "reply source port")
+	if assert.GreaterOrEqual(t, n, 2) {
+		assert.Equal(t, []byte{0x00, 0x03}, buf[:2], "reply opcode, want DATA")
+	}
+	// Abort the transfer so shutdown does not wait out its retries.
+	_, _ = conn.WriteTo([]byte{0x00, 0x05, 0x00, 0x00, 'x', 0x00}, from)
+
+	cancel()
+	select {
+	case err := <-errChan:
+		assert.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not shut down in time")
+	}
+}
+
 func TestTFTPServer_Start_LoadFirmwareError(t *testing.T) {
 	// An empty firmware directory with downloads forbidden: Start must fail
 	// on the required firmware before it binds anything, without touching

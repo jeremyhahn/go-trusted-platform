@@ -249,7 +249,7 @@ func TestProvisioning_TFTPReachesOnlyBootServers(t *testing.T) {
 // The TFTP server answers each transfer from an ephemeral UDP port, so the
 // device's ACKs to that port need an allowance: UDP 1024-65535, to the boot
 // servers only.
-func TestProvisioning_TFTPTransferPortReachesOnlyBootServers(t *testing.T) {
+func TestProvisioning_UnrelatedUDPToBootServerDenied(t *testing.T) {
 	deny := zoneflows.FlowRule{Table: 0, Priority: 200,
 		Match: "in_port=7,dl_vlan=100,dl_type=0x0800,nw_dst=198.51.100.0/24", Actions: "drop"}
 	udp4 := func(dst, port string) map[string]string {
@@ -267,24 +267,24 @@ func TestProvisioning_TFTPTransferPortReachesOnlyBootServers(t *testing.T) {
 
 	gs.SetProvisioningBootServers(net.ParseIP("192.0.2.10"), net.ParseIP("2001:db8::10"))
 	rules = append(gs.Generate("7", zone.ZoneProvisioning, zoneflows.Untagged(100)), deny)
-	for _, r := range rules {
-		if strings.Contains(r.Match, "tp_dst=0x") {
-			t.Logf("provisioning flow: priority=%d %s actions=%s", r.Priority, r.Match, r.Actions)
-		}
+	// The TFTP server answers every transfer from port 69, so 69 is the
+	// only UDP port a provisioning device may reach on a boot server.
+	if w, ok := winner(rules, udp4("192.0.2.10", "69")); !ok || w.Actions != "normal" {
+		t.Errorf("UDP 69 to the IPv4 boot server: winner %q (%s), want a normal rule", w.Match, w.Actions)
 	}
-	for _, port := range []string{"49152", "1024", "65535"} {
-		if w, ok := winner(rules, udp4("192.0.2.10", port)); !ok || w.Actions != "normal" {
-			t.Errorf("UDP %s to the IPv4 boot server: winner %q (%s), want a normal rule", port, w.Match, w.Actions)
+	if w, ok := winner(rules, udp6("2001:db8::10", "69")); !ok || w.Actions != "normal" {
+		t.Errorf("UDP 69 to the IPv6 boot server: winner %q (%s), want a normal rule", w.Match, w.Actions)
+	}
+	for _, port := range []string{"4789", "9444", "49152", "1024", "65535"} {
+		if w, ok := winner(rules, udp4("192.0.2.10", port)); !ok || w.Actions != "drop" {
+			t.Errorf("UDP %s to the IPv4 boot server: winner %q (%s, priority %d), want a drop", port, w.Match, w.Actions, w.Priority)
 		}
-		if w, ok := winner(rules, udp6("2001:db8::10", port)); !ok || w.Actions != "normal" {
-			t.Errorf("UDP %s to the IPv6 boot server: winner %q (%s), want a normal rule", port, w.Match, w.Actions)
+		if w, ok := winner(rules, udp6("2001:db8::10", port)); !ok || w.Actions != "drop" {
+			t.Errorf("UDP %s to the IPv6 boot server: winner %q (%s, priority %d), want a drop", port, w.Match, w.Actions, w.Priority)
 		}
 	}
 	if w, ok := winner(rules, udp4("198.51.100.7", "49152")); !ok || w.Actions != "drop" {
 		t.Errorf("UDP 49152 to a denied destination: winner %q (%s), want a drop", w.Match, w.Actions)
-	}
-	if w, ok := winner(rules, udp4("192.0.2.10", "1023")); !ok || w.Actions != "drop" {
-		t.Errorf("UDP 1023 to the boot server: winner %q (%s, priority %d), want a drop", w.Match, w.Actions, w.Priority)
 	}
 	tcp := map[string]string{"dl_type": "0x0800", "nw_proto": "6", "nw_dst": "192.0.2.10", "tp_dst": "49152"}
 	if w, ok := winner(rules, tcp); !ok || w.Actions != "drop" {
