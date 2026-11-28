@@ -870,6 +870,12 @@ func (s *BMCGRPCService) toGRPCError(operation string, err error) error {
 	if errors.As(err, &slotOccupied) {
 		return status.Error(codes.AlreadyExists, err.Error())
 	}
+	// Checked before ErrInvalidConfig, which a connection-account refusal
+	// also matches.
+	var connAccount bmc.ErrConnectionAccount
+	if errors.As(err, &connAccount) {
+		return status.Error(codes.FailedPrecondition, connAccount.Error())
+	}
 	var nilConfig bmc.ErrNilConfig
 	if errors.As(err, &nilConfig) {
 		return status.Error(codes.InvalidArgument, nilConfig.Error())

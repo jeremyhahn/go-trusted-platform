@@ -801,6 +801,9 @@ type RestHandlerRegistry interface {
 	EmbeddedAdapter() sdktransport.Adapter
 	GatewayServiceServer() platformv1.GatewayServiceServer
 	IAMClients() (restiam.IAMClient, restiam.PEPClient)
+	// IAMTokenVerifier is the daemon's token verifier for the console's
+	// POST /api/v1/iam/tokens/verify; nil leaves that route answering 503.
+	IAMTokenVerifier() restiam.TokenVerifier
 	IDevIDServiceServer() platformv1.IDevIDServiceServer
 	InvitationServiceServer() platformv1.InvitationServiceServer
 	JSONWebTokenHandler() jwt.TokenHandler
@@ -1007,24 +1010,27 @@ func NewZoneExtensionPreSignHook(
 var _ service.TokenIssuer = (*jwt.UserTokenIssuer)(nil)
 
 type RegistryParams struct {
-	ACMEServerConfig         *ACMEServerConfig
-	ACMEStorageFactory       trustedca.ACMEStorageFactory
-	CA                       trustedca.CACertificateAuthority
-	CAConfig                 *trustedca.CAConfig
-	Debug                    bool
-	DNSConfig                *dns.Config
-	HTTPWriter               response.HttpWriter
-	IAMClient                restiam.IAMClient
-	XKMS                     XKMSSigner
-	KMSClient                kmsclient.Client
-	CryptoClient             cryptoclient.Client
-	DEKClient                dekclient.Client
-	SecretsClient            secretsclient.Client
-	JWTAudience              string
-	JWTClaimsIssuer          string
-	JWTExpiration            int
-	Logger                   *logging.Logger
-	PEPClient                restiam.PEPClient
+	ACMEServerConfig   *ACMEServerConfig
+	ACMEStorageFactory trustedca.ACMEStorageFactory
+	CA                 trustedca.CACertificateAuthority
+	CAConfig           *trustedca.CAConfig
+	Debug              bool
+	DNSConfig          *dns.Config
+	HTTPWriter         response.HttpWriter
+	IAMClient          restiam.IAMClient
+	XKMS               XKMSSigner
+	KMSClient          kmsclient.Client
+	CryptoClient       cryptoclient.Client
+	DEKClient          dekclient.Client
+	SecretsClient      secretsclient.Client
+	JWTAudience        string
+	JWTClaimsIssuer    string
+	JWTExpiration      int
+	Logger             *logging.Logger
+	PEPClient          restiam.PEPClient
+	// IAMTokenVerifier is the daemon's IAM token verifier, the one every
+	// other transport answers token verification through.
+	IAMTokenVerifier         restiam.TokenVerifier
 	AttestationServiceServer platformv1.AttestationServiceServer
 	CAServiceServer          platformv1.CAServiceServer
 	ComputeServiceServer     platformv1.ComputeServiceServer
@@ -1423,6 +1429,11 @@ func (registry *HandlerRegistry) KMSSDKClients() (kmsclient.Client, cryptoclient
 
 func (registry *HandlerRegistry) IAMClients() (restiam.IAMClient, restiam.PEPClient) {
 	return registry.params.IAMClient, registry.params.PEPClient
+}
+
+// IAMTokenVerifier returns the daemon's IAM token verifier, or nil.
+func (registry *HandlerRegistry) IAMTokenVerifier() restiam.TokenVerifier {
+	return registry.params.IAMTokenVerifier
 }
 
 func (registry *HandlerRegistry) SystemRestService() system.RestHandler {

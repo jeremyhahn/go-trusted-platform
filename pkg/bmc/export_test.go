@@ -63,9 +63,17 @@ func HoldUserLock(s *Service, profileID uint64) (release func()) {
 	return release
 }
 
-// UserLockCount returns the number of profile entries in the user lock table.
+// UserLockCount returns the number of user lock stripes currently held.
 func UserLockCount(s *Service) int {
-	s.userLocksMu.Lock()
-	defer s.userLocksMu.Unlock()
-	return len(s.userLocks)
+	n := 0
+	for _, ch := range s.userLockStripes() {
+		n += len(ch)
+	}
+	return n
 }
+
+// UserLockCount reports how many user-slot lock stripes the service holds.
+func (s *Service) UserLockCount() int { return len(s.userLockStripes()) }
+
+// UserLockFor returns the lock stripe serializing user-slot writes on a profile.
+func (s *Service) UserLockFor(profileID uint64) chan struct{} { return s.userLock(profileID) }

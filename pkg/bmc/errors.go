@@ -213,14 +213,38 @@ func (e ErrProfileNotFound) Error() string {
 	return fmt.Sprintf("bmc: profile not found: %d", e.ProfileID)
 }
 
-// ErrSlotOccupied indicates a user create named a BMC user slot that already
-// holds an account.
+// ErrConnectionAccount indicates a write that would change or remove the
+// account a BMC profile itself connects with: the stored profile credential
+// would no longer authenticate, locking the profile out of its BMC.
+type ErrConnectionAccount struct {
+	ProfileID uint64
+	Slot      uint8
+}
+
+func (e ErrConnectionAccount) Error() string {
+	return fmt.Sprintf("bmc: user slot %d is the connection account of profile %d; change it in the profile instead", e.Slot, e.ProfileID)
+}
+
+// As lets errors.As also match a connection-account refusal as
+// ErrInvalidConfig on the slot field, so callers that treat it as the
+// caller's input error keep working.
+func (e ErrConnectionAccount) As(target any) bool {
+	if t, ok := target.(*ErrInvalidConfig); ok {
+		*t = ErrInvalidConfig{Field: "slot", Reason: e.Error()}
+		return true
+	}
+	return false
+}
+
+// ErrSlotOccupied indicates a create on a BMC user slot that already holds
+// a user: creating there would overwrite the existing account.
 type ErrSlotOccupied struct {
-	Slot uint8
+	ProfileID uint64
+	Slot      uint8
 }
 
 func (e ErrSlotOccupied) Error() string {
-	return fmt.Sprintf("bmc: user slot %d is occupied", e.Slot)
+	return fmt.Sprintf("bmc: user slot %d of profile %d is already in use", e.Slot, e.ProfileID)
 }
 
 // ErrInvalidBootDevice indicates an unrecognized boot device value.

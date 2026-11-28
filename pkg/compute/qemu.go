@@ -695,8 +695,17 @@ func (o *QEMUOrchestrator) recordExit(instanceID string, qemuInst *qemuInstance)
 		o.logger.Warnf("VM %s exited after leaving the lifecycle: %v", instanceID, err)
 		return
 	}
-	if state != StateStopping {
-		o.logger.Warnf("VM %s exited while %s; no stop was requested, so its state stays %s", instanceID, state, state)
+	switch state {
+	case StateStopping:
+	case StateRunning, StateSuspended:
+		// An exit nobody asked for passes through stopping so the lifecycle records it as stopped.
+		if err := o.lifecycle.SetState(instanceID, StateStopping); err != nil {
+			o.logger.Errorf("VM %s exited unasked but could not be marked stopping: %v", instanceID, err)
+			return
+		}
+		o.logger.Warnf("VM %s exited while %s with no stop requested", instanceID, state)
+	default:
+		o.logger.Warnf("VM %s exited while %s; its state stays %s", instanceID, state, state)
 		return
 	}
 	if err := o.lifecycle.SetState(instanceID, StateStopped); err != nil {
@@ -1213,10 +1222,15 @@ func (o *QEMUOrchestrator) Close() error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
+	// Reap migration receivers that were never finalized.
+	o.closeReceivers()
+
 	// Stop all running instances
 	for instanceID, qemuInst := range o.instances {
 		o.closeConsole(instanceID)
-		if qemuInst.vm.IsRunning() {
+		// An adopted migrated guest may carry no VM handle; it counts as not
+		// running.
+		if qemuInst.vm != nil && qemuInst.vm.IsRunning() {
 			o.logger.Infof("Stopping instance %s during shutdown", instanceID)
 			if err := qemuInst.vm.Stop(); err != nil {
 				o.logger.Errorf("Failed to stop instance %s: %v", instanceID, err)

@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -116,6 +117,9 @@ func (s *Service) CreateBundle(ctx context.Context, opts *CreateBundleOptions) (
 	if opts.Mode == BundleModePreAssigned && opts.Hostname == "" {
 		return nil, ErrInvalidConfig{Field: "Hostname", Reason: "required for pre-assigned mode"}
 	}
+	if err := checkBundleHostname(opts.Hostname); err != nil {
+		return nil, err
+	}
 	if !opts.EKAlgorithm.IsValid() {
 		return nil, ErrInvalidEKAlgorithm{Algorithm: string(opts.EKAlgorithm)}
 	}
@@ -152,6 +156,14 @@ func (s *Service) CreateBundle(ctx context.Context, opts *CreateBundleOptions) (
 }
 
 // generateBundleID generates a unique bundle ID.
+// checkBundleHostname refuses a hostname that would give the bundle ID the import staging prefix.
+func checkBundleHostname(hostname string) error {
+	if strings.HasPrefix(hostname, importStagingPrefix) {
+		return ErrInvalidConfig{Field: "Hostname", Reason: fmt.Sprintf("must not start with %q", importStagingPrefix)}
+	}
+	return nil
+}
+
 func (s *Service) generateBundleID(hostname string) string {
 	timestamp := time.Now().UnixNano()
 	if hostname != "" {
@@ -675,9 +687,16 @@ func (s *Service) ListBundles(ctx context.Context, opts *ListOptions) ([]*Bundle
 		return nil, &WrappedError{Msg: "failed to list bundles", Err: err}
 	}
 
-	var bundles []*Bundle
+	// Non-nil so a list with no match answers an empty list, not null.
+	bundles := []*Bundle{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
+			continue
+		}
+		// An import extracts into a staging directory here before it is
+		// published; its manifest already names the final ID, so listing it
+		// would expose an unfinished (or duplicate) bundle.
+		if strings.HasPrefix(entry.Name(), importStagingPrefix) {
 			continue
 		}
 
@@ -716,7 +735,13 @@ func (s *Service) ListBundles(ctx context.Context, opts *ListOptions) ([]*Bundle
 
 	// Apply pagination
 	if opts != nil {
-		if opts.Offset > 0 && opts.Offset < len(bundles) {
+		// An offset at or past the end answers an empty page, so a client
+		// paging a multiple of the page size stops at the end instead of
+		// receiving the first page again.
+		if opts.Offset > 0 {
+			if opts.Offset >= len(bundles) {
+				return []*Bundle{}, nil
+			}
 			bundles = bundles[opts.Offset:]
 		}
 		if opts.Limit > 0 && opts.Limit < len(bundles) {
@@ -727,8 +752,30 @@ func (s *Service) ListBundles(ctx context.Context, opts *ListOptions) ([]*Bundle
 	return bundles, nil
 }
 
+// validateTemplateID refuses a template ID that is not a single path
+// element. Config.TemplatePath joins the ID onto the templates directory,
+// and create, read and delete all act on that path, so an ID such as "../x"
+// would write, read or remove outside it (#2021 Codex round 2).
+func validateTemplateID(id string) error {
+	switch {
+	case id == "":
+		return ErrInvalidTemplateID{ID: id, Reason: "must not be empty"}
+	case id == "." || id == "..":
+		return ErrInvalidTemplateID{ID: id, Reason: "must not be a relative directory reference"}
+	case strings.ContainsAny(id, "/\\\x00"):
+		return ErrInvalidTemplateID{ID: id, Reason: "must not contain a path separator or NUL byte"}
+	case filepath.Base(id) != id:
+		return ErrInvalidTemplateID{ID: id, Reason: "must be a single path element"}
+	}
+	return nil
+}
+
 // CreateTemplate creates a new vTPM template.
 func (s *Service) CreateTemplate(ctx context.Context, opts *CreateTemplateOptions) (*Template, error) {
+	if err := validateTemplateID(opts.ID); err != nil {
+		return nil, err
+	}
+
 	// Templates are bundles without EK certificate
 	bundleOpts := &CreateBundleOptions{
 		Mode:              BundleModeTemplate,
@@ -777,6 +824,9 @@ func (s *Service) CloneTemplate(ctx context.Context, opts *CloneOptions) (*Bundl
 	// Validate hostname is provided
 	if opts.Hostname == "" {
 		return nil, ErrMissingHostname{}
+	}
+	if err := checkBundleHostname(opts.Hostname); err != nil {
+		return nil, err
 	}
 
 	s.mu.Lock()
@@ -896,6 +946,9 @@ func (s *Service) GetTemplate(ctx context.Context, id string) (*Template, error)
 // getTemplateLocked retrieves a template by ID without acquiring a lock.
 // Caller must hold at least a read lock.
 func (s *Service) getTemplateLocked(id string) (*Template, error) {
+	if err := validateTemplateID(id); err != nil {
+		return nil, err
+	}
 	templatePath := s.config.TemplatePath(id)
 	manifestPath := filepath.Join(templatePath, "manifest.json")
 
@@ -932,6 +985,9 @@ func (s *Service) DeleteTemplate(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := validateTemplateID(id); err != nil {
+		return err
+	}
 	templatePath := s.config.TemplatePath(id)
 
 	if _, err := os.Stat(templatePath); err != nil {

@@ -18,6 +18,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
@@ -115,11 +116,236 @@ func requireOnlyFlow(t *testing.T, fake *ownerOVS, bridge, cookie, actions strin
 }
 
 func TestPolicyFlowCookie_OwnedAndStable(t *testing.T) {
-	assert.Equal(t, policyFlowCookie("p1"), policyFlowCookie("p1"))
-	assert.NotEqual(t, policyFlowCookie("p1"), policyFlowCookie("p2"))
-	assert.Equal(t, policyFlowCookieOwner, policyFlowCookie("p1")&^(1<<48-1))
+	assert.Equal(t, policyFlowCookie("p1", 0), policyFlowCookie("p1", 0))
+	assert.NotEqual(t, policyFlowCookie("p1", 0), policyFlowCookie("p2", 0))
+	assert.Equal(t, policyFlowCookieOwner, policyFlowCookie("p1", 0)&^(1<<48-1))
 	assert.NotEqual(t, ovs.APIFlowCookieOwner, policyFlowCookieOwner)
 	assert.NotEqual(t, uint64(0xF1BE), policyFlowCookieOwner>>48)
+
+	// Each rule of a policy has its own cookie, and both belong to the policy.
+	rule0, rule1 := policyFlowCookie("p1", 0), policyFlowCookie("p1", 1)
+	assert.NotEqual(t, rule0, rule1)
+	assert.True(t, samePolicyCookie(fmt.Sprintf("0x%x", rule0), fmt.Sprintf("0x%x", rule1)))
+}
+
+// TestPolicyOwnsCookie pins the rollback's held-entry check: every per-rule
+// cookie of the policy, and its legacy cookie, are the policy's own; another
+// policy's cookie and an unparsable rendering are not.
+func TestPolicyOwnsCookie(t *testing.T) {
+	cases := []struct {
+		name     string
+		rendered string
+		want     bool
+	}{
+		{"own rule 0", fmt.Sprintf("0x%x", policyFlowCookie("p1", 0)), true},
+		{"own rule 3", fmt.Sprintf("0x%x", policyFlowCookie("p1", 3)), true},
+		{"legacy cookie", fmt.Sprintf("0x%x", legacyPolicyFlowCookie("p1")), true},
+		{"another policy", fmt.Sprintf("0x%x", policyFlowCookie("p2", 0)), false},
+		{"another policy legacy", fmt.Sprintf("0x%x", legacyPolicyFlowCookie("p2")), false},
+		{"no 0x prefix", fmt.Sprintf("%x", policyFlowCookie("p1", 3)), true},
+		{"unparsable", "not-a-cookie", false},
+		{"zero cookie", "0x0", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, policyOwnsCookie(tc.rendered, "p1"))
+		})
+	}
+}
+
+// Two rules on one entry would install one switch flow (OFPFC_ADD keeps the
+// later) while the record keeps the first rule's cookie, so a strict delete
+// would miss the flow: ApplyPolicy refuses them before any install.
+func TestSDNService_ApplyPolicy_RefusesDuplicateEntryRules(t *testing.T) {
+	svc, fake := newOwnerOVSFixture(t)
+
+	config := &platformv1.PolicyConfig{
+		Name:     "dup",
+		Priority: 100,
+		Enabled:  true,
+		Rules: []*platformv1.PolicyRule{
+			// The /32 and the bare address encode the same entry.
+			{RuleId: "deny-a", Priority: 200, Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY,
+				Match: &platformv1.PolicyRuleMatch{SourceIp: "192.0.2.10"}},
+			{RuleId: "allow-a", Priority: 200, Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW,
+				Match: &platformv1.PolicyRuleMatch{SourceIp: "192.0.2.10/32"}},
+		},
+		Targets: []*platformv1.PolicyTarget{bridgeTarget("br0")},
+	}
+	_, err := svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: config})
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	assert.Contains(t, err.Error(), "deny-a")
+	assert.Contains(t, err.Error(), "allow-a")
+
+	flows, err := fake.ListFlows(context.Background(), "br0")
+	require.NoError(t, err)
+	assert.Empty(t, flows, "no flow is installed for a refused policy")
+	assert.Zero(t, fake.calls, "no AddFlow is attempted")
+}
+
+// Policy IDs whose truncated hashes match would share every flow cookie, so
+// ListFlows and GetFlowStats could not tell their flows apart: the second
+// policy is refused before any install.
+func TestSDNService_ApplyPolicy_RefusesCookieHashCollision(t *testing.T) {
+	const first, second = "0518cd1c11c51ee791e80b24", "60a173ed4966add101d89b26"
+	require.Equal(t, policyFlowCookie(first, 0), policyFlowCookie(second, 0), "the two IDs collide")
+
+	svc, fake := newOwnerOVSFixture(t)
+	_, err := svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: first, Config: &platformv1.PolicyConfig{
+		Name: "first", Priority: 100, Enabled: true,
+		Rules: []*platformv1.PolicyRule{{RuleId: "deny-a", Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY,
+			Match: &platformv1.PolicyRuleMatch{SourceIp: "192.0.2.10"}}},
+		Targets: []*platformv1.PolicyTarget{bridgeTarget("br0")},
+	}})
+	require.NoError(t, err)
+
+	_, err = svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: second, Config: &platformv1.PolicyConfig{
+		Name: "second", Priority: 100, Enabled: true,
+		Rules: []*platformv1.PolicyRule{{RuleId: "deny-b", Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY,
+			Match: &platformv1.PolicyRuleMatch{SourceIp: "192.0.2.20"}}},
+		Targets: []*platformv1.PolicyTarget{bridgeTarget("br0")},
+	}})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Contains(t, err.Error(), first)
+
+	flows, err := fake.ListFlows(context.Background(), "br0")
+	require.NoError(t, err)
+	require.Len(t, flows, 1, "the switch holds only the first policy's flow")
+	assert.Equal(t, fmt.Sprintf("0x%x", policyFlowCookie(first, 0)), flows[0].Cookie)
+}
+
+// After a daemon restart the policy map is empty, so the collision check
+// has no record of the first policy; its surviving flow under the same
+// truncated hash must still not be taken as the second policy's own.
+// TestSDNService_ApplyPolicy_RestartRefusesSurvivingSameHashFlowAtAnotherEntry:
+// after a restart the policy map is empty, so a surviving flow under the
+// same truncated hash at another entry must still refuse the colliding
+// policy, or both would share one flow ID and stats.
+func TestSDNService_ApplyPolicy_RestartRefusesSurvivingSameHashFlowAtAnotherEntry(t *testing.T) {
+	const first, second = "0518cd1c11c51ee791e80b24", "60a173ed4966add101d89b26"
+	require.Equal(t, policyFlowCookie(first, 0), policyFlowCookie(second, 0), "the two IDs collide")
+	ctx := context.Background()
+
+	svc, fake := newOwnerOVSFixture(t)
+	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: first, Config: &platformv1.PolicyConfig{
+		Name: "first", Priority: 100, Enabled: true,
+		Rules: []*platformv1.PolicyRule{{RuleId: "deny-a", Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY,
+			Match: &platformv1.PolicyRuleMatch{SourceIp: "192.0.2.10"}}},
+		Targets: []*platformv1.PolicyTarget{bridgeTarget("br0")},
+	}})
+	require.NoError(t, err)
+
+	// The restarted daemon: same switch, empty policy map.
+	svc2, err := NewSDNService("", WithOVSClient(fake))
+	require.NoError(t, err)
+	_, err = svc2.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: second, Config: &platformv1.PolicyConfig{
+		Name: "second", Priority: 100, Enabled: true,
+		Rules: []*platformv1.PolicyRule{{RuleId: "deny-b", Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY,
+			Match: &platformv1.PolicyRuleMatch{SourceIp: "192.0.2.20"}}},
+		Targets: []*platformv1.PolicyTarget{bridgeTarget("br0")},
+	}})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+
+	flows, err := fake.ListFlows(ctx, "br0")
+	require.NoError(t, err)
+	require.Len(t, flows, 1, "the switch keeps only the first policy's flow")
+	assert.Equal(t, fmt.Sprintf("0x%x", policyFlowCookie(first, 0)), flows[0].Cookie)
+}
+
+// After a restart the policy map is empty, and the 32-bit cookie hash cannot
+// tell the policy's own surviving flows from a colliding ID's, so a reapply
+// of an unchanged policy is refused and the switch keeps its flows.
+func TestSDNService_ApplyPolicy_RestartReapplyWithoutRecordIsRefused(t *testing.T) {
+	ctx := context.Background()
+	svc, fake := newReplacingOVSFixture(t)
+	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+	require.NoError(t, err)
+
+	svc2, err := NewSDNService("", WithOVSClient(fake))
+	require.NoError(t, err)
+	_, err = svc2.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+
+	flows, err := fake.ListFlows(ctx, "br0")
+	require.NoError(t, err)
+	require.Len(t, flows, 2, "the switch keeps the surviving flows")
+	cookies := map[string]bool{}
+	for _, fl := range flows {
+		cookies[fl.Cookie] = true
+	}
+	assert.Equal(t, twoRuleP1Cookies(), cookies)
+}
+
+// bareListOVS models the native client's ListFlows, which reports cookies, tables and priorities but neither Match nor Actions; GetFlowStats (via ownerOVS) still reports them.
+type bareListOVS struct{ *ownerOVS }
+
+func (b *bareListOVS) ListFlows(ctx context.Context, bridgeName string) ([]*ovs.Flow, error) {
+	flows, err := b.ownerOVS.ListFlows(ctx, bridgeName)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*ovs.Flow, 0, len(flows))
+	for _, fl := range flows {
+		if fl == nil {
+			continue
+		}
+		c := *fl
+		c.Match, c.Actions = "", ""
+		out = append(out, &c)
+	}
+	return out, nil
+}
+
+// The native ListFlows omits matches, so the restart check reads the
+// surviving flows' entries from flow stats; with no in-memory record the
+// reapply of an unchanged policy is refused and its flows stay.
+func TestSDNService_ApplyPolicy_RestartReapplyReadsFlowMatches(t *testing.T) {
+	ctx := context.Background()
+	_, owner := newOwnerOVSFixture(t)
+	fake := &bareListOVS{ownerOVS: owner}
+	svc, err := NewSDNService("", WithOVSClient(fake))
+	require.NoError(t, err)
+	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+	require.NoError(t, err)
+
+	svc2, err := NewSDNService("", WithOVSClient(fake))
+	require.NoError(t, err)
+	_, err = svc2.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+
+	flows, err := owner.ListFlows(ctx, "br0")
+	require.NoError(t, err)
+	require.Len(t, flows, 2, "the switch keeps the surviving flows")
+	cookies := map[string]bool{}
+	for _, fl := range flows {
+		cookies[fl.Cookie] = true
+	}
+	assert.Equal(t, twoRuleP1Cookies(), cookies)
+}
+
+// A disabled record installs nothing, so after a restart it is no proof
+// that a surviving flow under its truncated hash is its own; enabling it
+// must not replace the colliding policy's deny flow.
+// TestSDNService_ApplyPolicy_RestartSameActionCollisionIsRefused: after a
+// restart a colliding ID whose rule has the same entry and actions must not
+// adopt the first policy's flow, because deleting or changing it would remove
+// or rewrite that rule (Codex #1955 round 15). The bridge's claim keeps the
+// full ID across the restart.
+// TestSDNService_ApplyPolicy_ClaimsItsCookieHashOnTheBridge: an enabled apply
+// records the full policy ID under its cookie hash in the bridge's
+// external_ids.
+// twoRuleP1Cookies is the set of flow cookies policy p1 with
+// twoRulePolicyConfig installs: one cookie per rule, as hex strings.
+func twoRuleP1Cookies() map[string]bool {
+	return map[string]bool{
+		fmt.Sprintf("0x%x", policyFlowCookie("p1", 0)): true,
+		fmt.Sprintf("0x%x", policyFlowCookie("p1", 1)): true,
+	}
 }
 
 func TestSDNService_ApplyPolicy_FlowsCarryThePolicyCookie(t *testing.T) {
@@ -130,10 +356,13 @@ func TestSDNService_ApplyPolicy_FlowsCarryThePolicyCookie(t *testing.T) {
 	flows, err := fake.ListFlows(context.Background(), "br0")
 	require.NoError(t, err)
 	require.Len(t, flows, 2)
-	want := fmt.Sprintf("0x%x", policyFlowCookie("p1"))
+	p1 := fmt.Sprintf("0x%x", policyFlowCookie("p1", 0))
+	cookies := map[string]bool{}
 	for _, fl := range flows {
-		assert.Equal(t, want, fl.Cookie, "flow %q", fl.Match)
+		assert.True(t, samePolicyCookie(p1, fl.Cookie), "flow %q cookie %s is a p1 policy cookie", fl.Match, fl.Cookie)
+		cookies[fl.Cookie] = true
 	}
+	assert.Equal(t, twoRuleP1Cookies(), cookies, "each rule's flow carries its own rule cookie")
 
 	// The policy's own flows are not foreign occupants of their entries.
 	_, err = svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
@@ -220,6 +449,60 @@ func TestSDNService_ApplyPolicy_RestoreTriesEveryPriorFlow(t *testing.T) {
 	assert.Equal(t, platformv1.PolicyStatus_POLICY_STATUS_ERROR, getPolicy(t, svc, "p1").GetStatus())
 }
 
+// A raw API add at the entry of a prior rule the replacement drops
+// replaces the policy's flow there (OFPFC_ADD). When the replacement then
+// fails, the rollback must not restore the prior rule over the raw flow:
+// that entry is no longer the policy's to write.
+func TestSDNService_ApplyPolicy_FailedReplacementKeepsRawFlowOnDroppedEntry(t *testing.T) {
+	svc, fake := newOwnerOVSFixture(t)
+
+	// AddFlow calls 1-2: br0 deny-a, br0 deny-b.
+	_, err := svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+	require.NoError(t, err)
+	require.Equal(t, 2, fake.calls)
+	flows, err := fake.ListFlows(context.Background(), "br0")
+	require.NoError(t, err)
+	var denyA, denyB *ovs.Flow
+	for _, fl := range flows {
+		if strings.Contains(fl.Match, "192.0.2.10") {
+			denyA = fl
+		} else {
+			denyB = fl
+		}
+	}
+	require.NotNil(t, denyA)
+	require.NotNil(t, denyB)
+	// Each rule carries its own cookie (#1955): deny-b is restored with its own.
+	denyBCookie := denyB.Cookie
+
+	// A raw API add at deny-a's entry takes it over.
+	rawCookie, err := ovs.NewAPIFlowCookie()
+	require.NoError(t, err)
+	rawCookieStr := fmt.Sprintf("0x%x", rawCookie)
+	require.NoError(t, fake.replacingOVS.AddFlow(context.Background(), "br0", &ovs.FlowMod{
+		Table: denyA.Table, Priority: denyA.Priority, Match: denyA.Match, Actions: "output:2", Cookie: rawCookieStr,
+	}))
+
+	// The replacement keeps only deny-b; its install (call 3) fails.
+	config := twoRulePolicyConfig()
+	config.Rules = config.Rules[1:]
+	fake.failOn = map[int]bool{3: true}
+	_, err = svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: config})
+	assert.Equal(t, codes.Internal, status.Code(err), "err = %v", err)
+
+	flows, err = fake.ListFlows(context.Background(), "br0")
+	require.NoError(t, err)
+	require.Len(t, flows, 2)
+	for _, fl := range flows {
+		if fl.Match == denyA.Match {
+			assert.Equal(t, rawCookieStr, fl.Cookie, "the raw flow on the dropped entry was overwritten")
+			assert.Equal(t, "output:2", fl.Actions)
+		} else {
+			assert.Equal(t, denyBCookie, fl.Cookie, "prior deny-b not restored")
+		}
+	}
+}
+
 // A pre-check that cannot read the installed flows writes nothing.
 func TestSDNService_ApplyPolicy_FlowStatsFailureIsUnavailable(t *testing.T) {
 	svc, fake := newReplacingOVSFixture(t)
@@ -258,14 +541,17 @@ func TestSDNService_ApplyPolicy_AdoptsALegacyCookieZeroPolicyFlow(t *testing.T) 
 
 			flows, err := fake.ListFlows(context.Background(), "br0")
 			require.NoError(t, err)
-			want := fmt.Sprintf("0x%x", policyFlowCookie("p1"))
+			p1 := fmt.Sprintf("0x%x", policyFlowCookie("p1", 0))
+			cookies := map[string]bool{}
 			adopted := false
 			for _, fl := range flows {
-				assert.Equal(t, want, fl.Cookie, "flow %s", fl.Match)
+				assert.True(t, samePolicyCookie(p1, fl.Cookie), "flow %s cookie %s is a p1 policy cookie", fl.Match, fl.Cookie)
+				cookies[fl.Cookie] = true
 				if fl.Match == seed.Match && fl.Priority == seed.Priority {
 					adopted = true
 				}
 			}
+			assert.Equal(t, twoRuleP1Cookies(), cookies, "each rule's flow carries its own rule cookie")
 			assert.True(t, adopted, "the legacy flow's entry carries the policy flow")
 
 			_, err = svc.DeletePolicy(context.Background(), &platformv1.DeletePolicyRequest{PolicyId: "p1"})
@@ -305,4 +591,123 @@ func TestSDNService_ApplyPolicy_LegacyZeroCookieFlowWithOtherActionsIsStillRefus
 	assert.Equal(t, seed.Match, flows[0].Match)
 	assert.Equal(t, "0x0", flows[0].Cookie)
 	assert.Equal(t, "output:2", flows[0].Actions)
+}
+
+// collidingPolicyConfig is a one-rule policy on br0 for the colliding-ID tests.
+func collidingPolicyConfig(name string, action platformv1.PolicyRuleAction, enabled bool) *platformv1.PolicyConfig {
+	return &platformv1.PolicyConfig{
+		Name: name, Priority: 100, Enabled: enabled,
+		Rules: []*platformv1.PolicyRule{{RuleId: "rule-a", Action: action,
+			Match: &platformv1.PolicyRuleMatch{SourceIp: "192.0.2.10"}}},
+		Targets: []*platformv1.PolicyTarget{bridgeTarget("br0")},
+	}
+}
+
+// With no in-memory record a surviving flow under the policy's cookie hash
+// is no proof it is the policy's own, so changing its actions after a
+// restart is refused.
+func TestSDNService_ApplyPolicy_RestartChangedActionsWithoutRecordIsRefused(t *testing.T) {
+	ctx := context.Background()
+	allow := platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW
+	deny := platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY
+
+	svc, fake := newOwnerOVSFixture(t)
+	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: collidingPolicyConfig("p1", allow, true)})
+	require.NoError(t, err)
+	flows, err := fake.ListFlows(ctx, "br0")
+	require.NoError(t, err)
+	require.Len(t, flows, 1)
+	allowActions := flows[0].Actions
+
+	// The restarted daemon: same switch, empty policy map.
+	svc2, err := NewSDNService("", WithOVSClient(fake))
+	require.NoError(t, err)
+	_, err = svc2.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: collidingPolicyConfig("p1", deny, true)})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+
+	flows, err = fake.ListFlows(ctx, "br0")
+	require.NoError(t, err)
+	require.Len(t, flows, 1, "the allow flow stays")
+	assert.Equal(t, fmt.Sprintf("0x%x", policyFlowCookie("p1", 0)), flows[0].Cookie)
+	assert.Equal(t, allowActions, flows[0].Actions, "the switch keeps the allow actions")
+}
+
+func TestSDNService_ApplyPolicy_DeletedPolicyFreesItsCookieHash(t *testing.T) {
+	const first, second = "0518cd1c11c51ee791e80b24", "60a173ed4966add101d89b26"
+	require.Equal(t, policyFlowCookie(first, 0), policyFlowCookie(second, 0), "the two IDs collide")
+	ctx := context.Background()
+	deny := platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY
+
+	svc, _ := newOwnerOVSFixture(t)
+	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: first, Config: collidingPolicyConfig("first", deny, true)})
+	require.NoError(t, err)
+	_, err = svc.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: first})
+	require.NoError(t, err)
+
+	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: second, Config: collidingPolicyConfig("second", deny, true)})
+	require.NoError(t, err, "a deleted policy leaves no cookie reservation")
+}
+
+func TestSDNService_ApplyPolicy_FailedApplyLeavesNoReservation(t *testing.T) {
+	const first, second = "0518cd1c11c51ee791e80b24", "60a173ed4966add101d89b26"
+	require.Equal(t, policyFlowCookie(first, 0), policyFlowCookie(second, 0), "the two IDs collide")
+	ctx := context.Background()
+	deny := platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY
+
+	svc, fake := newOwnerOVSFixture(t)
+	fake.failOn = map[int]bool{1: true}
+	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: first, Config: collidingPolicyConfig("first", deny, true)})
+	require.Error(t, err)
+	assert.Equal(t, codes.Internal, status.Code(err), "err = %v", err)
+
+	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: second, Config: collidingPolicyConfig("second", deny, true)})
+	require.NoError(t, err, "a cleanly rolled back apply leaves no cookie reservation")
+}
+
+func TestSDNService_ApplyPolicy_DisabledPolicyLeavesNoReservation(t *testing.T) {
+	const first, second = "0518cd1c11c51ee791e80b24", "60a173ed4966add101d89b26"
+	require.Equal(t, policyFlowCookie(first, 0), policyFlowCookie(second, 0), "the two IDs collide")
+	ctx := context.Background()
+	deny := platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY
+
+	svc, _ := newOwnerOVSFixture(t)
+	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: first, Config: collidingPolicyConfig("first", deny, true)})
+	require.NoError(t, err)
+	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: first, Config: collidingPolicyConfig("first", deny, false)})
+	require.NoError(t, err)
+
+	_, err = svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: second, Config: collidingPolicyConfig("second", deny, true)})
+	require.NoError(t, err, "a disabled policy leaves no cookie reservation")
+}
+
+// After a restart a colliding ID at the same entry must not replace the
+// first policy's flow: the entry matching is no proof of ownership, and a
+// later delete would remove the first policy's enforcement (Codex #1955 r17).
+func TestSDNService_ApplyPolicy_RestartSameEntryCollisionIsRefused(t *testing.T) {
+	const first, second = "0518cd1c11c51ee791e80b24", "60a173ed4966add101d89b26"
+	require.Equal(t, policyFlowCookie(first, 0), policyFlowCookie(second, 0), "the two IDs collide")
+	ctx := context.Background()
+	allow := platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW
+	deny := platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY
+
+	svc, fake := newOwnerOVSFixture(t)
+	_, err := svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: first, Config: collidingPolicyConfig("first", deny, true)})
+	require.NoError(t, err)
+	flows, err := fake.ListFlows(ctx, "br0")
+	require.NoError(t, err)
+	require.Len(t, flows, 1)
+	denyActions := flows[0].Actions
+
+	// The restarted daemon: same switch, empty policy map.
+	svc2, err := NewSDNService("", WithOVSClient(fake))
+	require.NoError(t, err)
+	_, err = svc2.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{PolicyId: second, Config: collidingPolicyConfig("second", allow, true)})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+
+	flows, err = fake.ListFlows(ctx, "br0")
+	require.NoError(t, err)
+	require.Len(t, flows, 1, "the switch keeps only the first policy's flow")
+	assert.Equal(t, denyActions, flows[0].Actions, "the first policy's deny actions stay")
 }

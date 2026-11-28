@@ -21,17 +21,36 @@ import (
 
 // Service manages BMC client lifecycle and provides the business logic layer.
 type Service struct {
-	clients sync.Map // map[uint64]Client
-	// userLocks serializes CreateUser per profile from the session open
-	// through the write, so two creates for one free slot cannot both pass
-	// the check; a waiter gives up when its context ends. Entries are
-	// reference counted (holder plus waiters) and removed at zero, so the
-	// table only holds profiles with a create in flight.
-	userLocksMu sync.Mutex
-	userLocks   map[uint64]*userLock
-	factory     ClientFactory
-	profiles    ProfileStore
-	logger      *slog.Logger
+	clients  sync.Map // map[uint64]Client
+	factory  ClientFactory
+	profiles ProfileStore
+	logger   *slog.Logger
+
+	// userLocks are striped 1-slot channels serializing CreateUser per
+	// profile from the session open through the write, so two creates for
+	// one free slot cannot both pass the check; a waiter gives up when its
+	// context ends. A fixed array keeps the storage bounded however many
+	// distinct (even nonexistent) profile IDs are requested.
+	userLocksOnce sync.Once
+	userLocks     [64]chan struct{}
+}
+
+// userLockStripes returns the lock stripes, making them on first use.
+func (s *Service) userLockStripes() *[64]chan struct{} {
+	s.userLocksOnce.Do(func() {
+		for i := range s.userLocks {
+			s.userLocks[i] = make(chan struct{}, 1)
+		}
+	})
+	return &s.userLocks
+}
+
+// userLock returns the lock stripe serializing user-slot writes on a profile.
+// One profile always maps to the same stripe, so its occupancy check and
+// create stay serialized; distinct profiles may share a stripe.
+func (s *Service) userLock(profileID uint64) chan struct{} {
+	stripes := s.userLockStripes()
+	return stripes[profileID%uint64(len(stripes))]
 }
 
 // ServiceParams holds dependencies for creating a BMC Service.

@@ -293,6 +293,14 @@ func TestVerifyManifest_RejectsEvidenceThatFailsAppraisal(t *testing.T) {
 				assert.False(t, r.TimestampValid)
 			},
 		},
+		{
+			name:    "manifest with no timestamp",
+			mutate:  func(m *manifest.HostManifest) { m.Timestamp = time.Time{} },
+			wantErr: "manifest has no timestamp, its age cannot be established",
+			checkRes: func(t *testing.T, r *manifest.VerificationResult) {
+				assert.False(t, r.TimestampValid)
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -330,6 +338,19 @@ func TestVerifyManifest_AcceptsMatchingPCRsAndReportsAMissingMerkleRoot(t *testi
 	assert.Equal(t, manifest.VerificationStatusVerified, res.Status)
 	assert.True(t, res.HostAttestationValid)
 	assert.False(t, res.MerkleRootValid)
+}
+
+func TestVerifyManifest_RejectsAManifestWithNoTimestamp(t *testing.T) {
+	svc, _ := newVerdictService(t)
+	m := storedManifest()
+	m.Timestamp = time.Time{}
+
+	res, err := svc.VerifyManifest(context.Background(), m, nil, nil, nil, nil)
+
+	require.NoError(t, err)
+	assert.False(t, res.TimestampValid)
+	assert.Equal(t, manifest.VerificationStatusFailed, res.Status)
+	assert.Equal(t, []string{"manifest has no timestamp, its age cannot be established"}, res.Errors)
 }
 
 func TestVerifyManifest_RequiresAManifest(t *testing.T) {

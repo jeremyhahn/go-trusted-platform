@@ -133,6 +133,24 @@ func TestCreateLDevID_RejectsAMalformedBody(t *testing.T) {
 	assert.Nil(t, fake.ldevidReq, "a malformed body must not reach the service layer")
 }
 
+// The SDK must send DeviceKeyAlgorithm as its protobuf enum name: the
+// decoder runs with DiscardUnknown, so a bare value such as "ECDSA_P384"
+// is dropped and the request falls back to UNSPECIFIED (the default key).
+func TestCreateLDevID_DecodesTheAlgorithmEnumName(t *testing.T) {
+	fake := &fakeIDevIDServer{}
+	rec := postLDevID(t, newRouterWith(fake), `{"algorithm": "DEVICE_KEY_ALGORITHM_ECDSA_P384"}`)
+
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	require.NotNil(t, fake.ldevidReq)
+	assert.Equal(t, platformv1.DeviceKeyAlgorithm_DEVICE_KEY_ALGORITHM_ECDSA_P384, fake.ldevidReq.GetAlgorithm())
+
+	fake = &fakeIDevIDServer{}
+	postLDevID(t, newRouterWith(fake), `{"algorithm": "ECDSA_P384"}`)
+
+	require.NotNil(t, fake.ldevidReq)
+	assert.Equal(t, platformv1.DeviceKeyAlgorithm_DEVICE_KEY_ALGORITHM_UNSPECIFIED, fake.ldevidReq.GetAlgorithm())
+}
+
 func TestCreateLDevID_NoServiceWiredIs503(t *testing.T) {
 	rec := postLDevID(t, newRouterWith(nil), `{}`)
 

@@ -22,7 +22,9 @@ export function useTPMOps() {
     tpm.activateCredential(req)
   );
   const getRandom = useMutation((req: GetRandomRequest) => tpm.getRandom(req));
-  return { extendPCR, makeCredential, activateCredential, getRandom };
+  // getAK reads the platform AK; its name fills the credential page (#2069).
+  const getAK = useMutation(() => tpm.getAK());
+  return { extendPCR, makeCredential, activateCredential, getRandom, getAK };
 }
 
 /** Base64 of a UTF-8 string. */

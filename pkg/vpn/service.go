@@ -357,6 +357,7 @@ func (s *Service) RecordGatewayLease(ctx context.Context, gatewayID string, leas
 		ClientCertificateSHA256: lease.ClientCertificateSHA256,
 		IssuedAt:                lease.IssuedAt,
 		ExpiresAt:               lease.ExpiresAt,
+		ClientExpiresAt:         lease.ClientExpiresAt,
 		Renewals:                lease.Renewals,
 		Verdict: vpncore.VerdictSummary{
 			Passed:        lease.Verdict.Passed,
@@ -393,6 +394,7 @@ func desiredLease(l *Lease) gwstate.DesiredVPNLease {
 		ClientCertificateSHA256: slices.Clone(l.ClientCertificateSHA256),
 		IssuedAt:                l.IssuedAt,
 		ExpiresAt:               l.ExpiresAt,
+		ClientExpiresAt:         l.ClientExpiresAt,
 		Renewals:                l.Renewals,
 		Verdict: gwstate.DesiredVPNVerdict{
 			Passed:        l.Verdict.Passed,
