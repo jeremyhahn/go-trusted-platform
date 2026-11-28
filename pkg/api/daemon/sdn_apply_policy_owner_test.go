@@ -18,6 +18,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
@@ -218,6 +219,56 @@ func TestSDNService_ApplyPolicy_RestoreTriesEveryPriorFlow(t *testing.T) {
 	assert.Equal(t, []string{priorBr0[1]}, fake.matches(t, "br0"))
 	assert.ElementsMatch(t, priorBr1, fake.matches(t, "br1"))
 	assert.Equal(t, platformv1.PolicyStatus_POLICY_STATUS_ERROR, getPolicy(t, svc, "p1").GetStatus())
+}
+
+// A raw API add at the entry of a prior rule the replacement drops
+// replaces the policy's flow there (OFPFC_ADD). When the replacement then
+// fails, the rollback must not restore the prior rule over the raw flow:
+// that entry is no longer the policy's to write.
+func TestSDNService_ApplyPolicy_FailedReplacementKeepsRawFlowOnDroppedEntry(t *testing.T) {
+	svc, fake := newOwnerOVSFixture(t)
+
+	// AddFlow calls 1-2: br0 deny-a, br0 deny-b.
+	_, err := svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: twoRulePolicyConfig()})
+	require.NoError(t, err)
+	require.Equal(t, 2, fake.calls)
+	flows, err := fake.ListFlows(context.Background(), "br0")
+	require.NoError(t, err)
+	var denyA *ovs.Flow
+	for _, fl := range flows {
+		if strings.Contains(fl.Match, "192.0.2.10") {
+			denyA = fl
+		}
+	}
+	require.NotNil(t, denyA)
+	policyCookie := denyA.Cookie
+
+	// A raw API add at deny-a's entry takes it over.
+	rawCookie, err := ovs.NewAPIFlowCookie()
+	require.NoError(t, err)
+	rawCookieStr := fmt.Sprintf("0x%x", rawCookie)
+	require.NoError(t, fake.replacingOVS.AddFlow(context.Background(), "br0", &ovs.FlowMod{
+		Table: denyA.Table, Priority: denyA.Priority, Match: denyA.Match, Actions: "output:2", Cookie: rawCookieStr,
+	}))
+
+	// The replacement keeps only deny-b; its install (call 3) fails.
+	config := twoRulePolicyConfig()
+	config.Rules = config.Rules[1:]
+	fake.failOn = map[int]bool{3: true}
+	_, err = svc.ApplyPolicy(context.Background(), &platformv1.ApplyPolicyRequest{PolicyId: "p1", Config: config})
+	assert.Equal(t, codes.Internal, status.Code(err), "err = %v", err)
+
+	flows, err = fake.ListFlows(context.Background(), "br0")
+	require.NoError(t, err)
+	require.Len(t, flows, 2)
+	for _, fl := range flows {
+		if fl.Match == denyA.Match {
+			assert.Equal(t, rawCookieStr, fl.Cookie, "the raw flow on the dropped entry was overwritten")
+			assert.Equal(t, "output:2", fl.Actions)
+		} else {
+			assert.Equal(t, policyCookie, fl.Cookie, "prior deny-b not restored")
+		}
+	}
 }
 
 // A pre-check that cannot read the installed flows writes nothing.

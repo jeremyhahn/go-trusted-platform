@@ -30,6 +30,7 @@ vi.mock('@/hooks', () => ({
 import {
   normalizeCAInfo,
   pemToVerifyRequest,
+  SIGN_CSR_UNAVAILABLE_REASON,
   useCAInfo,
   useSignCSR,
   useVerifyCertificate,
@@ -106,26 +107,23 @@ describe('useVerifyCertificate', () => {
 });
 
 describe('useSignCSR', () => {
-  it('signs with a client that carries the pasted token, never the session client', async () => {
-    signCSR.mockResolvedValue({ certificate: { serial: '10' } });
+  // The server's platform-token middleware takes only DPoP-bound tokens, and
+  // the console cannot send a DPoP proof: a bearer-only request always fails.
+  it('reports the action unavailable, with the reason', () => {
     const { result } = renderHook(() => useSignCSR());
-    await act(async () => {
-      await result.current.signAsync({ csrPem: ' CSR ', token: ' tok ', validDays: 5 });
-    });
-    expect(createPlatformClient).toHaveBeenCalledWith({
-      baseUrl: 'https://ca.test',
-      credentials: 'include',
-      headers: { Authorization: 'Bearer tok' },
-    });
-    expect(signCSR).toHaveBeenCalledWith({ csrPem: 'CSR', validDays: 5 });
+    expect(result.current.available).toBe(false);
+    expect(result.current.reason).toBe(SIGN_CSR_UNAVAILABLE_REASON);
+    expect(SIGN_CSR_UNAVAILABLE_REASON).toMatch(/DPoP/);
   });
 
-  it('omits a validity that is not a positive number', async () => {
-    signCSR.mockResolvedValue({});
+  it('never sends a request, with or without a token', async () => {
     const { result } = renderHook(() => useSignCSR());
     await act(async () => {
-      await result.current.signAsync({ csrPem: 'CSR', token: 't', validDays: 0 });
+      await expect(result.current.signAsync({ csrPem: ' CSR ', token: ' tok ', validDays: 5 })).rejects.toThrow(
+        SIGN_CSR_UNAVAILABLE_REASON,
+      );
     });
-    expect(signCSR).toHaveBeenCalledWith({ csrPem: 'CSR' });
+    expect(createPlatformClient).not.toHaveBeenCalled();
+    expect(signCSR).not.toHaveBeenCalled();
   });
 });

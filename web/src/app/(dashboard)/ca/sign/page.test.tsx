@@ -18,6 +18,8 @@ const hook = vi.hoisted(() => ({
   data: undefined as unknown,
   error: null as Error | null,
   isLoading: false,
+  available: true,
+  reason: undefined as string | undefined,
   onSuccess: undefined as ((data: unknown, input: unknown) => void) | undefined,
 }));
 
@@ -30,6 +32,8 @@ vi.mock('@/hooks/use-ca-ops', () => ({
       data: hook.data,
       error: hook.error,
       isLoading: hook.isLoading,
+      available: hook.available,
+      reason: hook.reason,
     };
   },
 }));
@@ -71,6 +75,8 @@ beforeEach(() => {
   hook.data = undefined;
   hook.error = null;
   hook.isLoading = false;
+  hook.available = true;
+  hook.reason = undefined;
   hook.onSuccess = undefined;
   caps.capability.mockReset();
   caps.capability.mockImplementation(() => ({ enabled: true }));
@@ -152,6 +158,18 @@ describe('Sign CSR page', () => {
     expect(submit().getAttribute('data-capability-op')).toBe('POST /api/v1/ca/sign-csr');
     expect(submit().getAttribute('data-capability-enabled')).toBe('false');
     fireEvent.click(submit());
+    expect(hook.sign).not.toHaveBeenCalled();
+  });
+
+  it('disables submit and shows the reason when the hook reports signing unavailable', () => {
+    hook.available = false;
+    hook.reason = 'needs a DPoP proof';
+    render(<SignCSRPage />);
+    fireEvent.change(csr(), { target: { value: CSR } });
+    fireEvent.change(token(), { target: { value: 'tok-1' } });
+    expect(submit().disabled).toBe(true);
+    expect(screen.getByText('needs a DPoP proof')).toBeTruthy();
+    fireEvent.submit(submit().closest('form') as HTMLFormElement);
     expect(hook.sign).not.toHaveBeenCalled();
   });
 
