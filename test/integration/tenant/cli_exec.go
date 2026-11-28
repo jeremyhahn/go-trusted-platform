@@ -103,14 +103,10 @@ func (a *CLIAdapter) Teardown(ctx context.Context) error {
 	return os.RemoveAll(a.configDir)
 }
 
-// runCommand executes a CLI command and returns its stdout. Stderr is kept
-// apart so warnings never corrupt JSON output, and reported on failure.
-func (a *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
-	return a.runCommandInput(ctx, "", args...)
-}
-
-// runCommandInput is runCommand with stdin fed from the given string, so a
-// secret such as the barrier passphrase never goes in argv.
+// runCommandInput executes a CLI command with stdin fed from the given
+// string, so a secret such as the barrier passphrase never goes in argv, and
+// returns its stdout. Stderr is kept apart so warnings never corrupt JSON
+// output, and reported on failure.
 func (a *CLIAdapter) runCommandInput(ctx context.Context, stdin string, args ...string) ([]byte, error) {
 	if a.configPath != "" {
 		args = append([]string{"--config", a.configPath}, args...)
