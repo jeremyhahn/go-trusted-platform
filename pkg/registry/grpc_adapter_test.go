@@ -617,7 +617,7 @@ func TestGRPCAdapter_ListPagesCountOnlyVisibleImages(t *testing.T) {
 
 	seen := map[string]bool{}
 	for off := 0; off < 3; off++ {
-		resp, err := a.List(ctx, &grpcapi.RegistryListRequest{Repository: "alpine", Limit: 1, Offset: int32(off)})
+		resp, err := a.List(ctx, &grpcapi.RegistryListRequest{Limit: 1, Offset: int32(off)})
 		if err != nil {
 			t.Fatalf("List offset %d: %v", off, err)
 		}
@@ -636,7 +636,7 @@ func TestGRPCAdapter_ListPagesCountOnlyVisibleImages(t *testing.T) {
 		}
 	}
 
-	past, err := a.List(ctx, &grpcapi.RegistryListRequest{Repository: "alpine", Limit: 1, Offset: 3})
+	past, err := a.List(ctx, &grpcapi.RegistryListRequest{Limit: 1, Offset: 3})
 	if err != nil {
 		t.Fatalf("List offset 3: %v", err)
 	}
@@ -644,7 +644,7 @@ func TestGRPCAdapter_ListPagesCountOnlyVisibleImages(t *testing.T) {
 		t.Fatalf("List offset 3: %d artifacts, want 0", len(past.Artifacts))
 	}
 
-	all, err := a.List(ctx, &grpcapi.RegistryListRequest{Repository: "alpine"})
+	all, err := a.List(ctx, &grpcapi.RegistryListRequest{})
 	if err != nil {
 		t.Fatalf("List all: %v", err)
 	}

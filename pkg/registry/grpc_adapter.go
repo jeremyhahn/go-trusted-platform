@@ -229,13 +229,16 @@ func (a *GRPCAdapter) PullStream(ctx context.Context, req *grpcapi.RegistryPullR
 }
 
 // List delegates to Registry.List, then projects the manifests into
-// the RegistryArtifact shape consumed by the gRPC service.
+// the RegistryArtifact shape consumed by the gRPC service. Offset and
+// Limit apply to the visible images, after the digest-keyed copies are
+// dropped, so a page never counts an entry it does not answer.
 func (a *GRPCAdapter) List(ctx context.Context, req *grpcapi.RegistryListRequest) (*grpcapi.RegistryListResponse, error) {
 	opts := RegistryListOptions{}
+	offset, limit := 0, 0
 	if req != nil {
 		opts.Repository = req.Repository
-		opts.Limit = int(req.Limit)
-		opts.Offset = int(req.Offset)
+		offset = int(req.Offset)
+		limit = int(req.Limit)
 	}
 	manifests, err := a.registry.List(ctx, opts)
 	if err != nil {
@@ -258,6 +261,17 @@ func (a *GRPCAdapter) List(ctx context.Context, req *grpcapi.RegistryListRequest
 		}
 		artifacts = append(artifacts, artifact)
 	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(artifacts) {
+		offset = len(artifacts)
+	}
+	end := len(artifacts)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	artifacts = artifacts[offset:end]
 	return &grpcapi.RegistryListResponse{
 		Artifacts: artifacts,
 		Total:     int32(len(artifacts)),
