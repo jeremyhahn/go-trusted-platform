@@ -462,14 +462,18 @@ func TestSDNService_ApplyPolicy_FailedReplacementKeepsRawFlowOnDroppedEntry(t *t
 	require.Equal(t, 2, fake.calls)
 	flows, err := fake.ListFlows(context.Background(), "br0")
 	require.NoError(t, err)
-	var denyA *ovs.Flow
+	var denyA, denyB *ovs.Flow
 	for _, fl := range flows {
 		if strings.Contains(fl.Match, "192.0.2.10") {
 			denyA = fl
+		} else {
+			denyB = fl
 		}
 	}
 	require.NotNil(t, denyA)
-	policyCookie := denyA.Cookie
+	require.NotNil(t, denyB)
+	// Each rule carries its own cookie (#1955): deny-b is restored with its own.
+	denyBCookie := denyB.Cookie
 
 	// A raw API add at deny-a's entry takes it over.
 	rawCookie, err := ovs.NewAPIFlowCookie()
@@ -494,7 +498,7 @@ func TestSDNService_ApplyPolicy_FailedReplacementKeepsRawFlowOnDroppedEntry(t *t
 			assert.Equal(t, rawCookieStr, fl.Cookie, "the raw flow on the dropped entry was overwritten")
 			assert.Equal(t, "output:2", fl.Actions)
 		} else {
-			assert.Equal(t, policyCookie, fl.Cookie, "prior deny-b not restored")
+			assert.Equal(t, denyBCookie, fl.Cookie, "prior deny-b not restored")
 		}
 	}
 }
