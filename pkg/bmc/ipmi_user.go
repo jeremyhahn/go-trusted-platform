@@ -217,22 +217,20 @@ func (m *ipmiUserManager) ListUsers(_ context.Context) ([]User, error) {
 // explicitly disabled, because DeleteUser leaves a slot's global enable
 // flag set.
 //
-// When any write fails, CreateUser rolls the slot back: it disables the
-// user, revokes its channel access and clears the name, and returns the
-// failure joined with any rollback error. The name write is rolled back
-// too, because a BMC may apply it and lose only the response. The rollback
-// first re-reads the slot name and runs only when the slot is empty or still
-// holds u.Username; a slot another caller filled meanwhile is left untouched
-// and ErrSlotOccupied is joined to the failure.
+// When any write fails, CreateUser writes nothing more, because IPMI cannot
+// prove the slot holds this call's account (another caller may have written
+// the same username). It re-reads the slot name and returns the failure
+// joined with ErrSlotOccupied when the slot shows a name (the operator
+// inspects it with ListUsers and removes a leftover with DeleteUser), or
+// with the re-read error.
 //
 // It first reads the slot's name and refuses a populated slot with
-// ErrSlotOccupied, writing nothing, so a rollback never touches an
+// ErrSlotOccupied, writing nothing, so a create never touches an
 // existing account.
 //
 // It refuses slot 1, the built-in anonymous user, with ErrInvalidConfig
 // before any command: its empty name does not mean the slot is free, and a
-// rollback there would disable the anonymous user and revoke its channel
-// access.
+// create there would overwrite the anonymous user's name and access.
 func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memguard.MemoryEnclave) error {
 	if err := validateSlot(u.Slot); err != nil {
 		return err
@@ -258,9 +256,9 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 		return ErrInvalidConfig{Field: "password", Reason: "an enabled user needs a password"}
 	}
 	// Probe the slot before the first write: a slot that already holds an
-	// account is refused here, so the rollback below only ever clears a slot
-	// this call found empty. Callers that skip Service.CreateUser (the CLI)
-	// get the same check. A short answer is an error, not an empty slot.
+	// account is refused here, so a create only ever writes a slot it found
+	// empty. Callers that skip Service.CreateUser (the CLI) get the same
+	// check. A short answer is an error, not an empty slot.
 	name, err := m.getUserName(u.Slot)
 	if err != nil {
 		return err
@@ -269,20 +267,16 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 		return ErrSlotOccupied{Slot: u.Slot}
 	}
 	if err := m.setUserName(u.Slot, u.Username); err != nil {
-		// The BMC may have applied the name and lost only the response;
-		// a populated slot would refuse every retry as occupied.
-		return errors.Join(err, m.rollbackOwnCreate(u))
+		// The BMC may have applied the name and lost only the response, and
+		// a name cannot show whose write it was, so the slot is left as it is.
+		return errors.Join(err, m.leaveFailedCreate(u))
 	}
 	if err := m.finishCreate(u, password); err != nil {
-		// Roll the slot back. A failed step may still have been applied on
-		// the BMC (an enable whose UDP response is lost), so clearing the
-		// name is not enough: disable the user and revoke its channel
-		// access too, then clear the name so a retry is not refused as
-		// occupied. Every step runs, and every cleanup error is returned
-		// joined to the first, so a caller sees a rollback that failed.
-		// The rollback runs only while the slot still shows this caller's
-		// name (rollbackOwnCreate).
-		return errors.Join(err, m.rollbackOwnCreate(u))
+		// A failed step may still have been applied on the BMC (an enable
+		// whose UDP response is lost), but nothing proves the slot is this
+		// call's, so it is not rolled back: the failure is returned with
+		// ErrSlotOccupied joined when the slot shows a name.
+		return errors.Join(err, m.leaveFailedCreate(u))
 	}
 	return nil
 }
@@ -315,37 +309,22 @@ func (m *ipmiUserManager) finishCreate(u User, password *memguard.MemoryEnclave)
 	return err
 }
 
-// rollbackCreate revokes whatever a failed CreateUser may have applied:
-// it disables the user (Set User Password op 00b), sets NoAccess with the
-// enable bits clear on the channel finishCreate used, and clears the name.
-// All three run; their errors are joined (nil when all succeed).
-func (m *ipmiUserManager) rollbackCreate(u User) error {
-	channel := u.Channel
-	if channel == 0 {
-		channel = m.channel
-	}
-	_, disableErr := m.sender.Send(netFnApp, cmdSetUserPassword, []byte{u.Slot & ipmiMaxUserSlot, pwdOpDisable})
-	accessErr := m.setUserAccess(u.Slot, channel, PrivilegeNoAccess, false)
-	nameErr := m.setUserName(u.Slot, "")
-	return errors.Join(disableErr, accessErr, nameErr)
-}
-
-// rollbackOwnCreate rolls back only a slot this call may own. IPMI has no
-// compare-and-set on a user slot, so another manager (another profile,
-// daemon or CLI) can fill a slot both probed empty. It re-reads the name and
-// calls rollbackCreate only when the slot is empty or still shows
-// u.Username; any other name means the slot is not ours, so it returns
-// ErrSlotOccupied and writes nothing. A failed re-read is returned and
-// nothing is rolled back.
-func (m *ipmiUserManager) rollbackOwnCreate(u User) error {
+// leaveFailedCreate decides what a failed CreateUser reports and writes
+// nothing. IPMI has no compare-and-set or owner field on a user slot, so a
+// name read cannot prove this call wrote the slot: another manager (another
+// profile, daemon or CLI) may have created the same username there. The slot
+// is never rolled back and is left for the operator. A slot that shows any
+// name returns ErrSlotOccupied, an empty slot returns nil, and a failed
+// re-read returns its error.
+func (m *ipmiUserManager) leaveFailedCreate(u User) error {
 	name, err := m.getUserName(u.Slot)
 	if err != nil {
 		return err
 	}
-	if name != "" && name != u.Username {
+	if name != "" {
 		return ErrSlotOccupied{Slot: u.Slot}
 	}
-	return m.rollbackCreate(u)
+	return nil
 }
 
 // SetUserPassword changes the password of an existing slot.
