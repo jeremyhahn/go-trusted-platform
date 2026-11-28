@@ -174,6 +174,14 @@ var (
 	// requested but the orchestrator config does not declare shared storage.
 	ErrLiveMigrationRequiresSharedStorage = errors.New("live migration requires shared storage to be configured")
 
+	// ErrMigrationVTPMUnsupported is returned when the guest has a vTPM: the
+	// receiver does not restore swtpm state, so the guest would lose its TPM.
+	ErrMigrationVTPMUnsupported = errors.New("migration of a guest with a vTPM is not supported: the receiver does not restore its TPM state")
+
+	// ErrLiveMigrationDiskLayout is returned when a live migration is asked
+	// for a guest whose disk is not the image the receiver opens.
+	ErrLiveMigrationDiskLayout = errors.New("live migration needs the guest disk at the shared layout <work dir>/<instance id>/disk.qcow2")
+
 	// ErrMigrationDestinationRequired is returned when the destination address
 	// is empty.
 	ErrMigrationDestinationRequired = errors.New("migration destination is required")

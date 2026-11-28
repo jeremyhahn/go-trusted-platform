@@ -20,6 +20,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -42,6 +44,33 @@ type fakeIncomingReceiver struct {
 	diskPath  string
 	pid       int
 	exited    chan struct{}
+
+	// waits counts Wait calls (the process reaps); waitedOnce closes waited at
+	// the first one.
+	waits      atomic.Int32
+	waitedMu   sync.Mutex
+	waited     chan struct{}
+	waitedOnce sync.Once
+}
+
+// waitedChan is closed at the receiver's first Wait.
+func (f *fakeIncomingReceiver) waitedChan() chan struct{} {
+	f.waitedMu.Lock()
+	defer f.waitedMu.Unlock()
+	if f.waited == nil {
+		f.waited = make(chan struct{})
+	}
+	return f.waited
+}
+
+// requireReaped fails unless the receiver's process was reaped within 5 s.
+func (f *fakeIncomingReceiver) requireReaped(t *testing.T) {
+	t.Helper()
+	select {
+	case <-f.waitedChan():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the receiver's process was never reaped (Wait not called)")
+	}
 }
 
 func (f *fakeIncomingReceiver) PID() int { return f.pid }
@@ -60,6 +89,8 @@ func (f *fakeIncomingReceiver) WorkDir() string { return f.workDir }
 func (f *fakeIncomingReceiver) DiskPath() string { return f.diskPath }
 
 func (f *fakeIncomingReceiver) Wait() error {
+	f.waits.Add(1)
+	f.waitedOnce.Do(func() { close(f.waitedChan()) })
 	if f.exited != nil {
 		<-f.exited
 	}
@@ -207,6 +238,8 @@ func TestQEMUOrchestrator_CloseAbortsPreparedReceivers(t *testing.T) {
 	orch.Close()
 
 	assert.True(t, recv.aborted, "Close aborts a prepared receiver")
+	recv.requireReaped(t)
+	assert.Equal(t, int32(1), recv.waits.Load(), "Close reaps the aborted receiver's process once")
 	assert.True(t, tlsProv.cleanedUp, "Close releases the receiver's creds")
 	require.NotNil(t, gotParams)
 	assert.Error(t, gotParams.lifetime.Err(), "Close cancels the receiver's lifetime")
@@ -279,6 +312,8 @@ func TestReceiveIncoming_AbandonedReceiverExpires(t *testing.T) {
 		synctest.Wait()
 
 		assert.True(t, recv.aborted, "an abandoned receiver is aborted at its deadline")
+		recv.requireReaped(t)
+		assert.Equal(t, int32(1), recv.waits.Load(), "an expired receiver's process is reaped once")
 		assert.True(t, tlsProv.cleanedUp, "an abandoned receiver's creds are released")
 		require.NotNil(t, gotParams)
 		assert.Error(t, gotParams.lifetime.Err(), "an abandoned receiver's lifetime is cancelled")
@@ -291,6 +326,7 @@ func TestReceiveIncoming_AbandonedReceiverExpires(t *testing.T) {
 		handle, err = orch.ReceiveIncoming(context.Background(), spec)
 		require.NoError(t, err)
 		require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, false))
+		finalized.requireReaped(t)
 		finalized.aborted = false
 
 		time.Sleep(receiverMaxLifetime + time.Minute)
@@ -411,6 +447,27 @@ func TestReceiveIncoming_MissingSpecConfig(t *testing.T) {
 
 	_, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{VMName: "guest"})
 	require.ErrorIs(t, err, ErrMigrationSpecRequired)
+}
+
+func TestReceiveIncoming_RefusesAVTPMGuest(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
+
+	launched := 0
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		launched++
+		return &fakeIncomingReceiver{port: 5002}, nil
+	})
+
+	_, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Mode:   MigrateModeCold,
+		Config: &InstanceConfig{Memory: 1024, TPMEnabled: true},
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrMigrationVTPMUnsupported)
+	assert.Zero(t, launched, "no receiver is launched for a vTPM guest")
 }
 
 func TestReceiveIncoming_AcceptsTheSourceGuestArch(t *testing.T) {
@@ -584,6 +641,8 @@ func TestFinalizeIncoming_CommitRegistersTheReceivedGuest(t *testing.T) {
 		Config:     &InstanceConfig{Memory: 1024, CPUs: 1},
 	})
 	assert.False(t, recv.aborted)
+	recv.requireReaped(t)
+	assert.Equal(t, int32(1), recv.waits.Load(), "a committed receiver gets only adoptReceived's waiter")
 
 	inst, err := orch.Get(ctx, "vm1")
 	require.NoError(t, err)
@@ -777,6 +836,8 @@ func TestFinalizeIncoming_Abort(t *testing.T) {
 	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, false))
 	assert.True(t, recv.aborted)
 	assert.False(t, recv.committed)
+	recv.requireReaped(t)
+	assert.Equal(t, int32(1), recv.waits.Load(), "an explicitly aborted receiver's process is reaped once")
 }
 
 func TestFinalizeIncoming_UnknownReceiver(t *testing.T) {
