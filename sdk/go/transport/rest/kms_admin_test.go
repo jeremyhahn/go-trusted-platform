@@ -185,6 +185,30 @@ func TestKMSAdmin_RefusedBeforeTheWire(t *testing.T) {
 	}
 }
 
+// TestKMSAdmin_ImportKeyRefusesUnsupportedSpec: the REST import route has
+// no field for deletion protection, exportability or key size, so a spec
+// asking for any of them is refused before the wire rather than silently
+// importing a key without the requested property.
+func TestKMSAdmin_ImportKeyRefusesUnsupportedSpec(t *testing.T) {
+	for name, spec := range map[string]*platformv1.KMSKeySpec{
+		"DeletionProtection": {DeletionProtection: true},
+		"Exportable":         {Exportable: true},
+		"KeySize":            {KeySize: 256},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, captured := kmsAdapter(t, `{}`)
+			err := a.Connection().Invoke(context.Background(), platformv1.KeyManagementService_ImportKey_FullMethodName,
+				&platformv1.ImportKeyRequest{Name: "k", KeySpec: spec}, &platformv1.ImportKeyResponse{})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("code = %v, want InvalidArgument (err %v)", status.Code(err), err)
+			}
+			if captured.method != "" {
+				t.Fatalf("request reached the server: %s %s", captured.method, captured.path)
+			}
+		})
+	}
+}
+
 // TestKMSAdmin_VersionsAndBackendDecode checks the reply fields of
 // GetKeyVersions, BackendStatus and ImportKey.
 func TestKMSAdmin_VersionsAndBackendDecode(t *testing.T) {

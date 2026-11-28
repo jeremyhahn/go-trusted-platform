@@ -155,9 +155,12 @@ func TestQuicBaaSIAMAdapter_CreatePolicyRefusesMalformedSubjects(t *testing.T) {
 	t.Parallel()
 	const rule = "  rules:\n    - name: r\n      effect: allow\n      actions: [read]\n      resources: [\"*\"]\n"
 	for name, spec := range map[string]string{
-		"spec list":      "spec:\n  subjects: [reader]\n" + rule,
-		"spec scalar":    "spec:\n  subjects: reader\n" + rule,
-		"top-level list": "subjects: [u1]\nrules:\n  - name: r\n    effect: allow\n    actions: [read]\n    resources: [\"*\"]\n",
+		"spec list":   "spec:\n  subjects: [reader]\n" + rule,
+		"spec scalar": "spec:\n  subjects: reader\n" + rule,
+		// The rules decode on their own while the selector does not: the
+		// guard must refuse, never fall through to a selector-less create.
+		"spec undecodable": "spec:\n  subjects: !!int not-an-int\n" + rule,
+		"top-level list":   "subjects: [u1]\nrules:\n  - name: r\n    effect: allow\n    actions: [read]\n    resources: [\"*\"]\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

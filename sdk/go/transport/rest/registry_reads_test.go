@@ -124,6 +124,23 @@ func TestRegistryReads_EmptyRefNeverReachesTheWire(t *testing.T) {
 	}
 }
 
+// TestRegistryReads_InspectRefusesPinnedDigest: the REST route resolves the
+// reference only, while gRPC gives Digest precedence; a pinned digest is
+// refused before the wire so REST never serves the artifact a moved tag
+// points at instead.
+func TestRegistryReads_InspectRefusesPinnedDigest(t *testing.T) {
+	a, seen := registryReadsAdapter(t, func(*http.Request) string { return registryReadsEnvelope(`{}`) })
+	err := a.Connection().Invoke(context.Background(), platformv1.RegistryService_Inspect_FullMethodName,
+		&platformv1.InspectArtifactRequest{Repository: "team/app", Reference: "latest", Digest: "sha256:" + strings.Repeat("a", 64)},
+		&platformv1.InspectArtifactResponse{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("code = %v (%v), want InvalidArgument", status.Code(err), err)
+	}
+	if calls := seen(); len(calls) != 0 {
+		t.Errorf("server saw %+v, want no request", calls)
+	}
+}
+
 func TestRegistryReads_DecodeTheServedReplies(t *testing.T) {
 	const listBody = `{"images":[{"repository":"team/app","tag":"v1","digest":"sha256:aa","media_type":"m","size":42,"layers":2,` +
 		`"annotations":{"k":"v"},"created_at":"2025-01-02T03:04:05Z","updated_at":"2025-01-03T03:04:05Z"}],"total":7}`
