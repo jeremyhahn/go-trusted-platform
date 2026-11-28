@@ -203,7 +203,8 @@ type selResult struct {
 }
 
 // selEnv is the step env of a case; the keys match the step's env: block.
-// vars overrides the repository variables HS, C1 and C2 (12, 4 and 4).
+// vars overrides the repository variables HS, C1 and C2 (12, 4 and 4) and
+// ML and MLD (ci-template v1.63, empty).
 type selEnv struct {
 	server, event, headRepo, ref string
 	vars                         map[string]string
@@ -271,7 +272,7 @@ func runSel(t *testing.T, script string, replies map[string]selReply, e selEnv) 
 		"PRIVATE=" + fmt.Sprint(e.private),
 		"WAIT_LIMIT=600",
 	}
-	for k, v := range map[string]string{"HS": "12", "C1": "4", "C2": "4"} {
+	for k, v := range map[string]string{"HS": "12", "C1": "4", "C2": "4", "ML": "", "MLD": ""} {
 		if o, ok := e.vars[k]; ok {
 			v = o
 		}
@@ -314,12 +315,12 @@ func runSel(t *testing.T, script string, replies map[string]selReply, e selEnv) 
 func TestRunnerSelectionStepEnv(t *testing.T) {
 	got := readSelStep(t, readCI(t)).env
 	sort.Strings(got)
-	want := []string{"API", "C1", "C2", "EVENT", "HEAD_REPO", "HS", "JOB_TOKEN", "PRIVATE", "REF", "REPO", "RUN_ID", "SERVER", "WAIT_LIMIT"}
+	want := []string{"API", "C1", "C2", "EVENT", "HEAD_REPO", "HS", "JOB_TOKEN", "ML", "MLD", "PRIVATE", "REF", "REPO", "RUN_ID", "SERVER", "WAIT_LIMIT"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("the selection step's env keys are %v; this test sets %v", got, want)
 	}
 	body := string(readCI(t))
-	for _, v := range []string{"HS: ${{ vars.CI_HOSTED_SHARE }}", "C1: ${{ vars.CI_SELF_HOSTED_BIGDISK }}", "C2: ${{ vars.CI_SELF_HOSTED_BIGDISK_DOCKER }}", "PRIVATE: ${{ github.event.repository.private }}", "WAIT_LIMIT: 600"} {
+	for _, v := range []string{"HS: ${{ vars.CI_HOSTED_SHARE }}", "C1: ${{ vars.CI_SELF_HOSTED_BIGDISK }}", "C2: ${{ vars.CI_SELF_HOSTED_BIGDISK_DOCKER }}", "PRIVATE: ${{ github.event.repository.private }}", "WAIT_LIMIT: 600", "ML: ${{ vars.CI_MAIN_RUNNER_LABEL }}", "MLD: ${{ vars.CI_MAIN_RUNNER_LABEL_DOCKER }}"} {
 		if !strings.Contains(body, v) {
 			t.Errorf("the selection step does not read %q", v)
 		}
