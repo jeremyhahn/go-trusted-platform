@@ -238,4 +238,39 @@ describe('GatewayAdmittedVTEPs', () => {
     expect(detail.textContent).toContain('HTTP 404: vtep not admitted');
     expect(hook.get).toHaveBeenCalledWith('192.0.2.10');
   });
+
+  it('drops the refreshed list when the gateway changes', async () => {
+    hook.vteps = [{ vtep: '198.51.100.5', host_id: 'h-a' }];
+    const { rerender } = render(<GatewayAdmittedVTEPs gatewayId="gw1" overlay={overlay()} />);
+
+    const refresh = button('Refresh');
+    await waitFor(() => expect(refresh.getAttribute('data-capability-enabled')).toBe('true'));
+    await act(async () => {
+      fireEvent.click(refresh);
+    });
+    expect(await screen.findByText('198.51.100.5')).toBeDefined();
+
+    rerender(
+      <GatewayAdmittedVTEPs
+        gatewayId="gw2"
+        overlay={overlay({ admitted_vteps: [{ vtep: '203.0.113.9', host_id: 'h-b' }] })}
+      />
+    );
+
+    expect(await screen.findByText('203.0.113.9')).toBeDefined();
+    expect(screen.queryByText('198.51.100.5')).toBeNull();
+  });
+
+  it('closes an open Details when the gateway changes', async () => {
+    const { rerender } = render(<GatewayAdmittedVTEPs gatewayId="gw1" overlay={overlay()} />);
+
+    await act(async () => {
+      fireEvent.click(button('Details 192.0.2.10'));
+    });
+    expect(await screen.findByTestId('gateway-admitted-vtep-detail')).toBeDefined();
+
+    rerender(<GatewayAdmittedVTEPs gatewayId="gw2" overlay={overlay()} />);
+
+    await waitFor(() => expect(screen.queryByTestId('gateway-admitted-vtep-detail')).toBeNull());
+  });
 });
