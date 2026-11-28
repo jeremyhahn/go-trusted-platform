@@ -249,6 +249,102 @@ func TestManager_BarrierLifecycleThroughSDKAdapter(t *testing.T) {
 	}
 }
 
+// TestSDKTenantBarrierClient_UnsealRefusesWrongKey: like go-qrdb's
+// TenantBarrierUnseal, an unseal whose key is not the init passphrase is
+// refused and the tenant stays sealed; the init passphrase opens it.
+func TestSDKTenantBarrierClient_UnsealRefusesWrongKey(t *testing.T) {
+	fake := newFakeQRDBTenants()
+	bc := NewTenantBarrierClient(fake)
+	ctx := context.Background()
+	const id = "t"
+
+	if err := bc.TenantBarrierInit(ctx, &quicbaassdk.QRDBTenantBarrierInitRequest{TenantID: id, Passphrase: []byte("operator-pass")}); err != nil {
+		t.Fatalf("TenantBarrierInit: %v", err)
+	}
+	if err := bc.TenantBarrierUnseal(ctx, &quicbaassdk.QRDBTenantBarrierUnsealRequest{TenantID: id, Key: []byte("wrong-pass")}); err == nil {
+		t.Fatal("TenantBarrierUnseal with a wrong key = nil, want a refusal")
+	}
+	st, err := bc.TenantBarrierStatus(ctx, &quicbaassdk.QRDBTenantBarrierStatusRequest{TenantID: id})
+	if err != nil {
+		t.Fatalf("TenantBarrierStatus: %v", err)
+	}
+	if !st.Sealed || !st.Initialized {
+		t.Fatalf("status after a wrong-key unseal = %+v, want sealed and initialized", st)
+	}
+	if err := bc.TenantBarrierUnseal(ctx, &quicbaassdk.QRDBTenantBarrierUnsealRequest{TenantID: id, Key: []byte("operator-pass")}); err != nil {
+		t.Fatalf("TenantBarrierUnseal with the init passphrase: %v", err)
+	}
+	st, err = bc.TenantBarrierStatus(ctx, &quicbaassdk.QRDBTenantBarrierStatusRequest{TenantID: id})
+	if err != nil {
+		t.Fatalf("TenantBarrierStatus: %v", err)
+	}
+	if st.Sealed {
+		t.Fatalf("status after unseal with the init passphrase = %+v, want unsealed", st)
+	}
+}
+
+// TestSDKTenantBarrierClient_UnsealUninitializedRefused: a tenant whose
+// barrier was never initialized cannot be unsealed.
+func TestSDKTenantBarrierClient_UnsealUninitializedRefused(t *testing.T) {
+	fake := newFakeQRDBTenants()
+	bc := NewTenantBarrierClient(fake)
+	if err := bc.TenantBarrierUnseal(context.Background(), &quicbaassdk.QRDBTenantBarrierUnsealRequest{TenantID: "never-init", Key: []byte("operator-pass")}); err == nil {
+		t.Fatal("TenantBarrierUnseal of a never-initialized tenant = nil, want a refusal")
+	}
+}
+
+// TestManager_UnsealRefusesKeyOtherThanInitPassphrase: through the manager a
+// wrong unseal key is an ErrBarrierOperationFailed for "unseal", the barrier
+// stays sealed, and the init passphrase unseals it.
+func TestManager_UnsealRefusesKeyOtherThanInitPassphrase(t *testing.T) {
+	fake := newFakeQRDBTenants()
+	m := newSDKAdapterManager(t, fake)
+	ctx := context.Background()
+	entity, err := m.CreateTenant(ctx, &CreateTenantRequest{Name: "wrong-key-tenant"})
+	if err != nil {
+		t.Fatalf("CreateTenant: %v", err)
+	}
+	id := entity.ID
+	if err := m.InitTenantBarrier(ctx, id, []byte("operator-pass")); err != nil {
+		t.Fatalf("InitTenantBarrier: %v", err)
+	}
+
+	err = m.UnsealTenantBarrier(ctx, id, []byte("wrong-pass"))
+	var failed ErrBarrierOperationFailed
+	if !errors.As(err, &failed) || failed.Operation != "unseal" {
+		t.Fatalf("UnsealTenantBarrier with a wrong key: err = %v, want ErrBarrierOperationFailed for unseal", err)
+	}
+	st, err := m.TenantBarrierStatus(ctx, id)
+	if err != nil {
+		t.Fatalf("TenantBarrierStatus after a wrong-key unseal: %v", err)
+	}
+	if !st.Sealed {
+		t.Fatalf("status after a wrong-key unseal = %+v, want sealed", st)
+	}
+
+	if err := m.UnsealTenantBarrier(ctx, id, []byte("operator-pass")); err != nil {
+		t.Fatalf("UnsealTenantBarrier with the init passphrase: %v", err)
+	}
+	st, err = m.TenantBarrierStatus(ctx, id)
+	if err != nil {
+		t.Fatalf("TenantBarrierStatus after unseal: %v", err)
+	}
+	if st.Sealed {
+		t.Fatalf("status after unseal with the init passphrase = %+v, want unsealed", st)
+	}
+
+	if err := m.SealTenantBarrier(ctx, id); err != nil {
+		t.Fatalf("SealTenantBarrier: %v", err)
+	}
+	st, err = m.TenantBarrierStatus(ctx, id)
+	if err != nil {
+		t.Fatalf("TenantBarrierStatus after seal: %v", err)
+	}
+	if !st.Sealed {
+		t.Fatalf("status after seal = %+v, want sealed", st)
+	}
+}
+
 // newSDKAdapterManager builds a Manager whose barrier client is the SDK
 // adapter over fake.
 func newSDKAdapterManager(t *testing.T, fake *fakeQRDBTenants) *Manager {
