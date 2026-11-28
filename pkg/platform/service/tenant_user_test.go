@@ -1526,6 +1526,93 @@ func TestTenantUserService_Workspace_RefusesAPrincipalWithNoWorkspace(t *testing
 	})
 }
 
+// TestTenantUserService_Workspace_RefusesAnUnfinishedRedemption covers a
+// user saved by an invitation redemption whose Accept never completed: a
+// passkey login must not land it in the invited tenant until its
+// originating invitation is accepted.
+func TestTenantUserService_Workspace_RefusesAnUnfinishedRedemption(t *testing.T) {
+	ctx := context.Background()
+	const email = "ann@example.com"
+
+	build := func(invitationID uint64) (TenantUserServicer, *MockInvitationServicer, *MockTenantManager) {
+		users := new(MockUserServicer)
+		invitations := new(MockInvitationServicer)
+		tenants := new(MockTenantManager)
+		service := NewTenantUserService(&TenantUserServiceConfig{
+			Logger:            newTestLogger(),
+			UserService:       users,
+			InvitationService: invitations,
+			TenantManager:     tenants,
+		})
+		users.On("GetByEmail", ctx, email).Return(&entities.User{
+			ID: 7, Email: email, TenantID: "workspace-ann", InvitationID: invitationID,
+		}, nil)
+		// Stubbed so a refusal that wrongly reaches GetTenant fails by
+		// assertion rather than by an unexpected mock call.
+		tenants.On("GetTenant", ctx, "workspace-ann").
+			Return(&tenant.TenantEntity{ID: "workspace-ann", Name: "workspace-ann"}, nil).Maybe()
+		return service, invitations, tenants
+	}
+
+	for _, status := range []entities.InvitationStatus{
+		entities.InvitationStatusPending,
+		entities.InvitationStatusRevoked,
+		entities.InvitationStatusExpired,
+	} {
+		t.Run("invitation "+string(status), func(t *testing.T) {
+			service, invitations, tenants := build(42)
+			invitations.On("GetByID", ctx, uint64(42)).
+				Return(&entities.Invitation{ID: 42, Status: status}, nil)
+
+			workspace, err := service.Workspace(ctx, email)
+
+			var unfinished ErrRedemptionUnfinished
+			require.ErrorAs(t, err, &unfinished)
+			assert.Equal(t, uint64(42), unfinished.InvitationID)
+			assert.Equal(t, status, unfinished.Status)
+			assert.Empty(t, workspace)
+			tenants.AssertNotCalled(t, "GetTenant", mock.Anything, mock.Anything)
+		})
+	}
+
+	t.Run("invitation lookup fails", func(t *testing.T) {
+		service, invitations, tenants := build(42)
+		invitations.On("GetByID", ctx, uint64(42)).Return(nil, errors.New("datastore down"))
+
+		workspace, err := service.Workspace(ctx, email)
+
+		var unfinished ErrRedemptionUnfinished
+		require.ErrorAs(t, err, &unfinished)
+		assert.Empty(t, unfinished.Status)
+		assert.Empty(t, workspace)
+		tenants.AssertNotCalled(t, "GetTenant", mock.Anything, mock.Anything)
+	})
+
+	t.Run("invitation accepted", func(t *testing.T) {
+		service, invitations, tenants := build(42)
+		invitations.On("GetByID", ctx, uint64(42)).
+			Return(&entities.Invitation{ID: 42, Status: entities.InvitationStatusAccepted}, nil)
+
+		workspace, err := service.Workspace(ctx, email)
+
+		require.NoError(t, err)
+		assert.Equal(t, "workspace-ann", workspace)
+		tenants.AssertCalled(t, "GetTenant", ctx, "workspace-ann")
+		invitations.AssertExpectations(t)
+	})
+
+	t.Run("no originating invitation", func(t *testing.T) {
+		service, invitations, tenants := build(0)
+
+		workspace, err := service.Workspace(ctx, email)
+
+		require.NoError(t, err)
+		assert.Equal(t, "workspace-ann", workspace)
+		tenants.AssertCalled(t, "GetTenant", ctx, "workspace-ann")
+		invitations.AssertNotCalled(t, "GetByID", mock.Anything, mock.Anything)
+	})
+}
+
 // TestTenantUserService_IsTenantOwner_Success verifies successful owner check
 func TestTenantUserService_IsTenantOwner_Success(t *testing.T) {
 	logger := newTestLogger()

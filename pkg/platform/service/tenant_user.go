@@ -801,6 +801,20 @@ func (e ErrInvitationRedemptionInProgress) Error() string {
 	return fmt.Sprintf("a registration for %s is already in progress; retry", e.Email)
 }
 
+// ErrRedemptionUnfinished is returned by Workspace for a user whose
+// originating invitation was never accepted: the user was saved but the
+// redemption did not complete, so it has no workspace to land in. Status is
+// empty when the invitation could not be read.
+type ErrRedemptionUnfinished struct {
+	Email        string
+	InvitationID uint64
+	Status       entities.InvitationStatus
+}
+
+func (e ErrRedemptionUnfinished) Error() string {
+	return fmt.Sprintf("invitation redemption for %s is unfinished: invitation %d is %s", e.Email, e.InvitationID, e.Status)
+}
+
 // ErrInvalidUserInput is returned when user input is invalid.
 type ErrInvalidUserInput struct {
 	Reason string
