@@ -381,6 +381,38 @@ func TestCreateUser_InvalidUsername(t *testing.T) {
 	}
 }
 
+// An empty or NUL-containing name decodes as an empty slot, so ListUsers
+// hides the account and the occupied-slot guard lets a later create
+// overwrite it. CreateUser refuses both before any BMC write.
+func TestCreateUser_RefusesEmptyOrNULUsernameWritesNothing(t *testing.T) {
+	cases := []struct {
+		name     string
+		username string
+	}{
+		{name: "empty", username: ""},
+		{name: "leading_nul", username: "\x00admin"},
+		{name: "embedded_nul", username: "ad\x00min"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMock()
+			err := newUM(m).CreateUser(context.Background(), User{
+				Slot: 5, Username: tc.username, Enabled: true, Privilege: PrivilegeOperator,
+			}, memguard.NewMemoryEnclave([]byte("s3cret")))
+			var cfgErr ErrInvalidConfig
+			if !errors.As(err, &cfgErr) {
+				t.Fatalf("err = %v, want ErrInvalidConfig", err)
+			}
+			if cfgErr.Field != "username" {
+				t.Errorf("Field = %q, want username", cfgErr.Field)
+			}
+			if len(m.calls) != 0 {
+				t.Fatalf("want no BMC write, got %d calls (first cmd 0x%02x)", len(m.calls), m.calls[0].cmd)
+			}
+		})
+	}
+}
+
 func TestCreateUser_InvalidPrivilege(t *testing.T) {
 	um := newUM(newMock())
 	err := um.CreateUser(context.Background(), User{
