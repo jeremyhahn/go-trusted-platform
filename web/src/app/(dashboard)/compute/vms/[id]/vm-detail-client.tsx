@@ -403,6 +403,13 @@ export default function VMDetailPage() {
               <VMMigrateButton
                 vmId={vmId}
                 disabled={actionLoading}
+                // Fail closed: an unknown TPM state counts as a vTPM, which
+                // the server refuses to migrate (ErrMigrationVTPMUnsupported).
+                unsupportedReason={
+                  vm.config?.tpm?.enabled === false
+                    ? undefined
+                    : 'Live migration of a guest with a vTPM is not supported'
+                }
                 onMigrated={() => {
                   // MigrateVM removed the source instance: leave its page.
                   stopPolling();

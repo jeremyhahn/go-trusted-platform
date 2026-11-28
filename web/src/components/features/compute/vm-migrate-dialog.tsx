@@ -13,6 +13,11 @@ import { useVMMigration } from '@/hooks/use-vm-migration';
 export interface VMMigrateButtonProps {
   vmId: string;
   disabled?: boolean;
+  /**
+   * When set, the guest cannot be migrated (for example it has a vTPM, whose
+   * state migration does not carry): Migrate is disabled and this is shown.
+   */
+  unsupportedReason?: string;
   onMigrated: () => void;
 }
 
@@ -30,7 +35,7 @@ function errorText(err: unknown): string {
  * VMMigrateButton opens a dialog that sends MigrateVM through the SDK
  * ComputeService (useVMMigration), behind the server's capability gate (#2044).
  */
-export function VMMigrateButton({ vmId, disabled, onMigrated }: VMMigrateButtonProps) {
+export function VMMigrateButton({ vmId, disabled, unsupportedReason, onMigrated }: VMMigrateButtonProps) {
   const { toast } = useToast();
   const { migrate } = useVMMigration(vmId);
   const [open, setOpen] = useState(false);
@@ -75,11 +80,17 @@ export function VMMigrateButton({ vmId, disabled, onMigrated }: VMMigrateButtonP
   return (
     <>
       <Gated op="POST /api/v1/compute/vms/{id}/migrate">
-        <Button variant="outline" onClick={() => setOpen(true)} disabled={disabled}>
+        <Button
+          variant="outline"
+          onClick={() => setOpen(true)}
+          disabled={disabled || !!unsupportedReason}
+          title={unsupportedReason}
+        >
           <ArrowRightLeft className="mr-2 h-4 w-4" />
           Migrate
         </Button>
       </Gated>
+      {unsupportedReason ? <p className="text-xs text-muted-foreground">{unsupportedReason}</p> : null}
       <Dialog
         open={open}
         onOpenChange={(next) => {
