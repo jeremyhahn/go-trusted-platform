@@ -1419,7 +1419,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 				// the policy's to write: restoring it would overwrite that
 				// owner's flow, so only empty or still-owned entries return.
 				priorFlows, _ := s.policyFlows(policyID, prior.bridgeNames, prior.rules, prior.priority)
-				priorFlows, heldErr := s.unheldPolicyFlows(rbCtx, client, priorFlows, policyFlowCookie(policyID))
+				priorFlows, heldErr := s.unheldPolicyFlows(rbCtx, client, priorFlows, policyID)
 				if heldErr != nil {
 					rollbackErr = errors.Join(rollbackErr, heldErr)
 				}
@@ -2135,7 +2135,7 @@ func (s *SDNService) restorePolicyFlows(ctx context.Context, client ovs.ClientIn
 // whose entry another owner now holds is dropped, so a rollback restore
 // never overwrites it. A flow whose entry cannot be read is dropped too,
 // and the read errors are returned joined.
-func (s *SDNService) unheldPolicyFlows(ctx context.Context, client ovs.ClientInterface, flows []policyFlow, cookie uint64) ([]policyFlow, error) {
+func (s *SDNService) unheldPolicyFlows(ctx context.Context, client ovs.ClientInterface, flows []policyFlow, policyID string) ([]policyFlow, error) {
 	var kept []policyFlow
 	var errs []error
 	for _, flow := range flows {
@@ -2151,7 +2151,7 @@ func (s *SDNService) unheldPolicyFlows(ctx context.Context, client ovs.ClientInt
 		want := flowKey(flow)
 		held := false
 		for _, fl := range installed {
-			if fl == nil || flowCookieIs(fl.Cookie, cookie) {
+			if fl == nil || policyOwnsCookie(fl.Cookie, policyID) {
 				continue
 			}
 			theirs := policyFlow{bridge: flow.bridge, mod: &ovs.FlowMod{Table: fl.Table, Priority: fl.Priority, Match: fl.Match}}
@@ -2167,12 +2167,17 @@ func (s *SDNService) unheldPolicyFlows(ctx context.Context, client ovs.ClientInt
 	return kept, errors.Join(errs...)
 }
 
-// flowCookieIs reports whether an installed flow's cookie, as the switch
-// renders it (hex with or without 0x), is cookie.
-func flowCookieIs(rendered string, cookie uint64) bool {
+// policyOwnsCookie reports whether an installed flow's cookie, as the switch
+// renders it (hex with or without 0x), belongs to policyID: one of its
+// per-rule cookies (same bits above the low 16 as rule 0) or its legacy
+// cookie.
+func policyOwnsCookie(rendered string, policyID string) bool {
 	v := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(rendered)), "0x")
 	n, err := strconv.ParseUint(v, 16, 64)
-	return err == nil && n == cookie
+	if err != nil {
+		return false
+	}
+	return n>>16 == policyFlowCookie(policyID, 0)>>16 || n == legacyPolicyFlowCookie(policyID)
 }
 
 // removePolicyFlows deletes each flow by its exact table, priority and match
