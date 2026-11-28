@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 )
@@ -259,5 +260,66 @@ func TestService_CreateUserEnabledWithoutPasswordOpensNoSession(t *testing.T) {
 	}
 	if cfgErr.Field != "password" {
 		t.Errorf("Field = %q, want password", cfgErr.Field)
+	}
+}
+
+// TestService_CreateUserCancelledWhileWaitingWritesNothing: a create that
+// waits on the profile's user lock and whose context ends meanwhile returns
+// the context error, opens no BMC session and writes no user (Codex #2199
+// round 18).
+func TestService_CreateUserCancelledWhileWaitingWritesNothing(t *testing.T) {
+	cases := []struct {
+		name string
+		ctx  func() (context.Context, context.CancelFunc)
+		want error
+	}{
+		{
+			name: "cancelled",
+			ctx: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx, cancel
+			},
+			want: context.Canceled,
+		},
+		{
+			name: "deadline_while_waiting",
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 50*time.Millisecond)
+			},
+			want: context.DeadlineExceeded,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc := newSimUserService(t)
+			release := bmc.HoldUserLock(svc, 1)
+			ctx, cancel := tc.ctx()
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				done <- svc.CreateUser(ctx, 1, bmc.User{Slot: 7, Username: "late", Enabled: true, Privilege: bmc.PrivilegeOperator}, "s3cret-pass")
+			}()
+			var err error
+			select {
+			case err = <-done:
+				release()
+			case <-time.After(15 * time.Second):
+				release()
+				err = <-done
+				t.Fatalf("CreateUser waited on the held user lock after its context ended, then returned %v", err)
+			}
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("CreateUser err = %v, want %v", err, tc.want)
+			}
+			var connFailed bmc.ErrConnectionFailed
+			if errors.As(err, &connFailed) {
+				t.Errorf("a cancelled create opened a BMC session before taking the lock: %v", err)
+			}
+			if got, ok := userInSlot(t, svc, 7); ok {
+				t.Errorf("slot 7 = %+v, want no user: a cancelled create wrote the BMC", got)
+			}
+		})
 	}
 }

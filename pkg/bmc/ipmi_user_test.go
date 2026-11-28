@@ -1033,6 +1033,72 @@ func TestCreateUser_ShortNameProbeWritesNothing(t *testing.T) {
 	}
 }
 
+// cancelOnNameSender cancels the create's context once the name is written,
+// as a caller that disconnects mid-create would.
+type cancelOnNameSender struct {
+	*mockSender
+	cancel context.CancelFunc
+}
+
+func (s cancelOnNameSender) Send(netFn, cmd byte, data []byte) ([]byte, error) {
+	resp, err := s.mockSender.Send(netFn, cmd, data)
+	if cmd == cmdSetUserName {
+		s.cancel()
+	}
+	return resp, err
+}
+
+// TestCreateUser_CancelledContextStopsWrites: a create whose context ends
+// writes nothing more, so a caller that timed out or disconnected cannot
+// leave an account created and enabled behind it (Codex #2199 round 18).
+func TestCreateUser_CancelledContextStopsWrites(t *testing.T) {
+	user := User{Slot: 3, Username: "carol", Privilege: PrivilegeOperator, Enabled: true}
+
+	t.Run("cancelled_before_create", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		mock := newMock()
+		m := newUM(mock)
+		pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+		err := m.CreateUser(ctx, user, pwd)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CreateUser err = %v, want context.Canceled", err)
+		}
+		for _, c := range mock.calls {
+			switch c.cmd {
+			case cmdSetUserName, cmdSetUserPassword, cmdSetUserAccess:
+				t.Errorf("cancelled create wrote command %#x", c.cmd)
+			}
+		}
+	})
+
+	t.Run("cancelled_after_name_write", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		mock := newMock()
+		m := newUM(cancelOnNameSender{mockSender: mock, cancel: cancel})
+		pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+		err := m.CreateUser(ctx, user, pwd)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CreateUser err = %v, want context.Canceled", err)
+		}
+		named := false
+		for _, c := range mock.calls {
+			switch c.cmd {
+			case cmdSetUserName:
+				named = true
+			case cmdSetUserPassword, cmdSetUserAccess:
+				if named {
+					t.Errorf("create wrote command %#x after its context was cancelled", c.cmd)
+				}
+			}
+		}
+		if !named {
+			t.Fatal("the name was never written; the test did not reach the cancel")
+		}
+	})
+}
+
 // --- SetUserPassword ---
 
 func TestSetUserPassword(t *testing.T) {

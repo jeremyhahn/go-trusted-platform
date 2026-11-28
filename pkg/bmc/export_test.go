@@ -16,6 +16,7 @@ package bmc
 import (
 	"context"
 	"log/slog"
+	"sync"
 )
 
 // TestRMCPSession is a test-only wrapper exposing a minimal view over
@@ -55,3 +56,12 @@ func (t *TestRMCPSession) K2() []byte { return t.inner.k2 }
 // BMCSessionID returns the negotiated BMC session identifier, or 0
 // pre-handshake.
 func (t *TestRMCPSession) BMCSessionID() uint32 { return t.inner.bmcSessionID }
+
+// HoldUserLock takes the profile's CreateUser lock for an external test and
+// returns its release.
+func HoldUserLock(s *Service, profileID uint64) (release func()) {
+	v, _ := s.userLocks.LoadOrStore(profileID, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}

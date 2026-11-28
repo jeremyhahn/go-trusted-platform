@@ -1316,6 +1316,28 @@ func TestBMCGRPCCreateUser_SlotOccupiedIsAlreadyExists(t *testing.T) {
 	}
 }
 
+// TestBMCGRPCCreateUser_JoinedSlotOccupiedKeepsTheFailure: a partial create
+// joins its failure with ErrSlotOccupied; the gRPC message keeps both, as
+// REST does, so the operator can tell a partly made account from an
+// untouched occupied slot (Codex #2199 round 18).
+func TestBMCGRPCCreateUser_JoinedSlotOccupiedKeepsTheFailure(t *testing.T) {
+	joined := errors.Join(errors.New("enable response lost"), bmc.ErrSlotOccupied{Slot: 4})
+	fake := &fakeBMCService{createUserErr: joined}
+	svc := newTestService(fake, nil)
+	_, err := svc.CreateUser(context.Background(), &platformv1.BMCCreateUserRequest{
+		ProfileId: 1,
+		User: &platformv1.BMCUser{
+			Slot: 4, Privilege: platformv1.BMCUserPrivilege_BMC_USER_PRIVILEGE_USER,
+		},
+	})
+	if got := statusCode(err); got != codes.AlreadyExists {
+		t.Fatalf("code = %v, want AlreadyExists", got)
+	}
+	if got := status.Convert(err).Message(); got != joined.Error() {
+		t.Errorf("message = %q, want the whole joined error %q", got, joined.Error())
+	}
+}
+
 // TestBMCGRPCCreateUser_EnabledWithoutPasswordIsInvalidArgument pins that an
 // Enabled user with no password is refused before the service is called.
 func TestBMCGRPCCreateUser_EnabledWithoutPasswordIsInvalidArgument(t *testing.T) {
