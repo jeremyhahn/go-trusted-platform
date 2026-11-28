@@ -370,7 +370,14 @@ func (m *ipmiUserManager) leaveFailedCreate(u User) error {
 	return nil
 }
 
-// SetUserPassword changes the password of an existing slot.
+// SetUserPassword changes the password of an existing slot and then sets
+// the slot's IPMI user enable flag (Set User Password, enable user).
+//
+// The enable is the activation path for a slot CreateUser made disabled: it
+// is sent only after the password write succeeded, so it never activates a
+// stale or blank password. A failed password write sends no enable; a failed
+// enable returns its error. Login still needs channel access, which
+// SetUserPrivilege grants, so a NoAccess account stays unable to log in.
 //
 // password must be non-nil and contain at least one byte. Empty passwords
 // are rejected since they are interpreted as "disable" by some BMCs and
@@ -383,7 +390,11 @@ func (m *ipmiUserManager) SetUserPassword(_ context.Context, slot uint8, passwor
 	if password == nil || password.Size() == 0 {
 		return ErrInvalidConfig{Field: "password", Reason: "password is required"}
 	}
-	return m.setUserPassword(slot, pwdOpSet, password)
+	if err := m.setUserPassword(slot, pwdOpSet, password); err != nil {
+		return err
+	}
+	_, err := m.sender.Send(netFnApp, cmdSetUserPassword, []byte{slot & ipmiMaxUserSlot, pwdOpEnable})
+	return err
 }
 
 // SetUserPrivilege updates the channel privilege of an existing slot and

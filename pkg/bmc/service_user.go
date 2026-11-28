@@ -103,17 +103,33 @@ func (s *Service) dropUserLock(profileID uint64, l *userLock) {
 // refuseLoginAccount refuses a write to the account the profile logs in as,
 // because the stored profile credential would no longer open a management
 // session. It returns ErrInvalidConfig on the slot, with reason, when the
-// user in slot has the profile's username. A failed user list is returned,
+// user in slot has the profile's username. A profile with an empty username
+// logs in as the null (anonymous) user, which ListUsers omits because its
+// name is empty: for it, slot 1 (the built-in anonymous account) is always
+// refused, and so is every slot no listed user holds, since the anonymous
+// login may resolve to any null-named slot. A failed user list is returned,
 // so the check fails closed.
 func refuseLoginAccount(ctx context.Context, mgr ManagedUserManager, cfg *Config, slot uint8, reason string) error {
 	users, err := mgr.ListUsers(ctx)
 	if err != nil {
 		return err
 	}
+	anonymous := cfg.Username == ""
+	if anonymous && slot == ipmiAnonymousUserSlot {
+		return ErrInvalidConfig{Field: "slot", Reason: reason}
+	}
+	listed := false
 	for _, u := range users {
-		if u.Slot == slot && u.Username == cfg.Username {
+		if u.Slot != slot {
+			continue
+		}
+		listed = true
+		if u.Username == cfg.Username {
 			return ErrInvalidConfig{Field: "slot", Reason: reason}
 		}
+	}
+	if anonymous && !listed {
+		return ErrInvalidConfig{Field: "slot", Reason: reason}
 	}
 	return nil
 }

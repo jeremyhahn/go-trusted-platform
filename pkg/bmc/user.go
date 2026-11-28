@@ -112,7 +112,9 @@ type UserManager interface {
 	// most BMCs reject empty-password users.
 	CreateUser(ctx context.Context, u User, password *memguard.MemoryEnclave) error
 
-	// SetUserPassword changes the password of an existing user slot.
+	// SetUserPassword changes the password of an existing user slot. On
+	// IPMI it then sets the slot's user enable flag, which activates a
+	// slot created disabled once its password is known.
 	SetUserPassword(ctx context.Context, slot uint8, password *memguard.MemoryEnclave) error
 
 	// SetUserPrivilege updates the channel privilege and enabled state of

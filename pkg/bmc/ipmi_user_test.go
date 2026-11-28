@@ -1135,6 +1135,15 @@ func TestCreateUser_CancelledContextStopsWrites(t *testing.T) {
 
 // --- SetUserPassword ---
 
+// wantEnableFrame asserts c is the 2-byte Set User Password enable-user
+// frame for slot.
+func wantEnableFrame(t *testing.T, c mockCall, slot uint8) {
+	t.Helper()
+	if c.cmd != cmdSetUserPassword || len(c.data) != 2 || c.data[0] != slot || c.data[1] != pwdOpEnable {
+		t.Errorf("last call = cmd 0x%02x % x, want SetUserPassword enable for slot %d", c.cmd, c.data, slot)
+	}
+}
+
 func TestSetUserPassword(t *testing.T) {
 	m := newMock()
 	um := newUM(m)
@@ -1144,7 +1153,11 @@ func TestSetUserPassword(t *testing.T) {
 	if err := um.SetUserPassword(context.Background(), 5, pwd); err != nil {
 		t.Fatalf("SetUserPassword: %v", err)
 	}
-	c := m.lastCall(t)
+	if len(m.calls) != 2 {
+		t.Fatalf("calls = %d, want the set then the enable", len(m.calls))
+	}
+	wantEnableFrame(t, m.lastCall(t), 5)
+	c := m.calls[0]
 	if c.cmd != cmdSetUserPassword {
 		t.Errorf("cmd = 0x%02x, want SetUserPassword", c.cmd)
 	}
@@ -1175,7 +1188,14 @@ func TestSetUserPassword_LongPasswordSets20ByteFlag(t *testing.T) {
 	if err := um.SetUserPassword(context.Background(), 5, pwd); err != nil {
 		t.Fatalf("SetUserPassword: %v", err)
 	}
-	c := m.lastCall(t)
+	if len(m.calls) != 2 {
+		t.Fatalf("calls = %d, want the set then the enable", len(m.calls))
+	}
+	wantEnableFrame(t, m.lastCall(t), 5)
+	c := m.calls[0]
+	if c.data[1] != pwdOpSet {
+		t.Errorf("op = 0x%02x, want pwdOpSet", c.data[1])
+	}
 	if c.data[0]&0x80 == 0 {
 		t.Error("expected 20-byte password form (bit 7 = 1)")
 	}
