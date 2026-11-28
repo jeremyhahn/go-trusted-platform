@@ -231,7 +231,11 @@ func (m *ipmiUserManager) ListUsers(_ context.Context) ([]User, error) {
 // It refuses slot 1, the built-in anonymous user, with ErrInvalidConfig
 // before any command: its empty name does not mean the slot is free, and a
 // create there would overwrite the anonymous user's name and access.
-func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memguard.MemoryEnclave) error {
+//
+// It checks ctx before every write and stops when ctx has ended: before the
+// name write it returns ctx.Err() with nothing written; after it, the stop
+// follows the failure path above.
+func (m *ipmiUserManager) CreateUser(ctx context.Context, u User, password *memguard.MemoryEnclave) error {
 	if err := validateSlot(u.Slot); err != nil {
 		return err
 	}
@@ -266,12 +270,16 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 	if name != "" {
 		return ErrSlotOccupied{Slot: u.Slot}
 	}
+	// Nothing is written yet, so a context that has ended returns as is.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := m.setUserName(u.Slot, u.Username); err != nil {
 		// The BMC may have applied the name and lost only the response, and
 		// a name cannot show whose write it was, so the slot is left as it is.
 		return errors.Join(err, m.leaveFailedCreate(u))
 	}
-	if err := m.finishCreate(u, password); err != nil {
+	if err := m.finishCreate(ctx, u, password); err != nil {
 		// A failed step may still have been applied on the BMC (an enable
 		// whose UDP response is lost), but nothing proves the slot is this
 		// call's, so it is not rolled back: the failure is returned with
@@ -283,9 +291,12 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 
 // finishCreate sets the password, the channel access and the IPMI enable
 // flag (set for an Enabled user, cleared otherwise) of a slot whose name
-// CreateUser has written.
-func (m *ipmiUserManager) finishCreate(u User, password *memguard.MemoryEnclave) error {
+// CreateUser has written. It stops before any write once ctx has ended.
+func (m *ipmiUserManager) finishCreate(ctx context.Context, u User, password *memguard.MemoryEnclave) error {
 	if password != nil && password.Size() > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := m.setUserPassword(u.Slot, pwdOpSet, password); err != nil {
 			return err
 		}
@@ -293,6 +304,9 @@ func (m *ipmiUserManager) finishCreate(u User, password *memguard.MemoryEnclave)
 	channel := u.Channel
 	if channel == 0 {
 		channel = m.channel
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := m.setUserAccess(u.Slot, channel, u.Privilege, u.Enabled); err != nil {
 		return err
@@ -304,6 +318,9 @@ func (m *ipmiUserManager) finishCreate(u User, password *memguard.MemoryEnclave)
 	op := byte(pwdOpDisable)
 	if u.Enabled {
 		op = pwdOpEnable
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	_, err := m.sender.Send(netFnApp, cmdSetUserPassword, []byte{u.Slot & ipmiMaxUserSlot, op})
 	return err

@@ -22,9 +22,10 @@ import (
 // Service manages BMC client lifecycle and provides the business logic layer.
 type Service struct {
 	clients sync.Map // map[uint64]Client
-	// userLocks serializes the slot check and the write of CreateUser per
-	// profile, so two creates for one free slot cannot both pass the check.
-	userLocks sync.Map // map[uint64]*sync.Mutex
+	// userLocks serializes CreateUser per profile from the session open
+	// through the write, so two creates for one free slot cannot both pass
+	// the check; a waiter gives up when its context ends.
+	userLocks sync.Map // map[uint64]chan struct{}
 	factory   ClientFactory
 	profiles  ProfileStore
 	logger    *slog.Logger

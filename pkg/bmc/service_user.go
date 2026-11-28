@@ -15,7 +15,6 @@ package bmc
 
 import (
 	"context"
-	"sync"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
 )
@@ -42,6 +41,27 @@ func (s *Service) profileConfig(ctx context.Context, profileID uint64) (*Config,
 		return nil, ErrProfileNotFound{ProfileID: profileID}
 	}
 	return cfg, nil
+}
+
+// lockUsers takes the profile's user lock, a 1-slot channel, and returns
+// its release. It waits in a select on ctx.Done(): when ctx ends first it
+// returns ctx.Err() without the lock. A select picks at random when both
+// are ready, so ctx is checked once more after the lock is taken, and on
+// error the lock is released and the error returned.
+func (s *Service) lockUsers(ctx context.Context, profileID uint64) (func(), error) {
+	v, _ := s.userLocks.LoadOrStore(profileID, make(chan struct{}, 1))
+	lock := v.(chan struct{})
+	select {
+	case lock <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	release := func() { <-lock }
+	if err := ctx.Err(); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
 }
 
 // refuseLoginAccount refuses a write to the account the profile logs in as,
@@ -77,21 +97,25 @@ func (s *Service) ListUsers(ctx context.Context, profileID uint64) ([]User, erro
 // duration of the call. An Enabled user needs a password; a name-only entry
 // (empty password) must have Enabled false. An Enabled user with an empty
 // password is refused before any session is opened or lock taken.
+//
+// It takes the profile's user lock before opening the BMC session, and
+// returns ctx.Err(), writing nothing, when ctx ends while it waits for the
+// lock or before the write.
 func (s *Service) CreateUser(ctx context.Context, profileID uint64, user User, password string) error {
 	if user.Enabled && password == "" {
 		return ErrInvalidConfig{Field: "password", Reason: "an enabled user needs a password"}
 	}
+	// Hold the profile's user lock from the session open through the write.
+	unlock, err := s.lockUsers(ctx, profileID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	mgr, err := s.userManagerFor(ctx, profileID)
 	if err != nil {
 		return err
 	}
 	defer mgr.Close()
-
-	// Hold the profile's user lock from the slot check through the write.
-	lock, _ := s.userLocks.LoadOrStore(profileID, &sync.Mutex{})
-	mu := lock.(*sync.Mutex)
-	mu.Lock()
-	defer mu.Unlock()
 
 	// Refuse a slot that already holds an account: writing it would silently
 	// overwrite that account (on most BMCs slot 1 or 2 is the administrator).
@@ -103,6 +127,9 @@ func (s *Service) CreateUser(ctx context.Context, profileID uint64, user User, p
 		if u.Slot == user.Slot {
 			return ErrSlotOccupied{Slot: user.Slot}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	pwSecret := memguard.NewMemoryEnclaveFromString(password)

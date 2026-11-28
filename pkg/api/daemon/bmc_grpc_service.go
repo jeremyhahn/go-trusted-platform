@@ -863,9 +863,12 @@ func (s *BMCGRPCService) toGRPCError(operation string, err error) error {
 	if errors.As(err, &profileNotFound) {
 		return status.Error(codes.NotFound, profileNotFound.Error())
 	}
+	// The message keeps the whole error, because a failed create joins its
+	// failure with ErrSlotOccupied and the operator needs both (REST does
+	// the same).
 	var slotOccupied bmc.ErrSlotOccupied
 	if errors.As(err, &slotOccupied) {
-		return status.Error(codes.AlreadyExists, slotOccupied.Error())
+		return status.Error(codes.AlreadyExists, err.Error())
 	}
 	var nilConfig bmc.ErrNilConfig
 	if errors.As(err, &nilConfig) {
