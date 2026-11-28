@@ -14,7 +14,9 @@
 package tenant
 
 import (
+	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/gorilla/mux"
 
@@ -48,12 +50,40 @@ func (h *Handlers) ensure(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// pagingParam reads a non-negative int32 query parameter; an absent one
+// is 0.
+func pagingParam(r *http.Request, name string) (int32, error) {
+	v := r.URL.Query().Get(name)
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 32)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative integer", name)
+	}
+	return int32(n), nil
+}
+
 // ListTenants handles GET /api/v1/tenants.
 func (h *Handlers) ListTenants(w http.ResponseWriter, r *http.Request) {
 	if !h.ensure(w, r) {
 		return
 	}
-	resp, err := h.server.ListTenants(r.Context(), &platformv1.ListTenantsRequest{})
+	limit, err := pagingParam(r, "limit")
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	offset, err := pagingParam(r, "offset")
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	// Absent parameters stay 0, so the server's default page size applies.
+	resp, err := h.server.ListTenants(r.Context(), &platformv1.ListTenantsRequest{
+		Limit:  limit,
+		Offset: offset,
+	})
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return

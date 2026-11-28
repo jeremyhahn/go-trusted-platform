@@ -19,6 +19,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -154,10 +155,33 @@ export default function AttestationPage() {
             Monitor and verify TPM-based device attestations
           </p>
         </div>
-        <Button variant="outline" onClick={() => loadData()} disabled={loading || reportsLoading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading || reportsLoading ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/attestation/callers"
+            data-testid="attestation-link-callers"
+            className="text-sm text-muted-foreground hover:underline"
+          >
+            Caller policy
+          </Link>
+          <Link
+            href="/attestation/verdicts"
+            data-testid="attestation-link-verdicts"
+            className="text-sm text-muted-foreground hover:underline"
+          >
+            Device verdicts
+          </Link>
+          <Link
+            href="/attestation/collect"
+            data-testid="attestation-link-collect"
+            className="text-sm text-muted-foreground hover:underline"
+          >
+            Collect attestation
+          </Link>
+          <Button variant="outline" onClick={() => loadData()} disabled={loading || reportsLoading}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${loading || reportsLoading ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Error Message */}

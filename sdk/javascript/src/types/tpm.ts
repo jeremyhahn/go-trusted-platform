@@ -666,6 +666,8 @@ export interface GetAKResponse {
   handle: number;
   /** Algorithm */
   algorithm: KeyAlgorithm;
+  /** TPM name of the AK (base64) */
+  name?: string;
 }
 
 /**

@@ -17,6 +17,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/netip"
 
@@ -25,14 +26,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
 )
-
-// vpnHubZoneEnforced stays false until the hub's traffic is wired through
-// the compiled zone policy (SPEC.md:80, docs/vpn/architecture.md:160-163;
-// Codex #2029 round 2): until then the kernel hub plane is not built. A
-// configuration that names the hub then fails the wireguard child's start
-// with ErrVPNHubZoneUnenforced, so the supervisor never sees a ready child
-// that refuses every InstallVPNPeer (Codex #2029 round 3).
-var vpnHubZoneEnforced = false
 
 // vpnDataPlanes is gatewayd's plane factory. It builds the WireGuard hub
 // plane when the management VPN offers wireguard and names the hub's key
@@ -54,10 +47,11 @@ func vpnDataPlanes(cfg *ServeConfig, hubKey *vpnHubKey, logger *slog.Logger) ([]
 			slog.String("key_ref", wg.KeyRef))
 		return nil, nil
 	}
-	if !vpnHubZoneEnforced {
+	zones, err := installVPNHubZoneEnforcement(cfg, logger)
+	if err != nil || zones == nil {
 		hubKey.erase()
-		logger.Error("The datapath hosts no VPN data plane: the WireGuard hub has no destination-zone enforcement yet",
-			slog.String("key_ref", wg.KeyRef))
+		logger.Error("The datapath hosts no VPN data plane: the WireGuard hub's destination-zone enforcement is not installed",
+			slog.String("key_ref", wg.KeyRef), slog.Any("error", err))
 		return nil, &ErrVPNHubZoneUnenforced{KeyRef: wg.KeyRef}
 	}
 	hub, err := tunnel.NewWireGuardHub(logger, tunnel.WireGuardHubConfig{
@@ -73,7 +67,7 @@ func vpnDataPlanes(cfg *ServeConfig, hubKey *vpnHubKey, logger *slog.Logger) ([]
 	if err != nil {
 		return nil, err
 	}
-	return []vpn.ManagedDataPlane{hubNetworkPlane{ManagedDataPlane: plane, network: wg.Address.Masked(), hub: wg.Address.Addr()}}, nil
+	return []vpn.ManagedDataPlane{hubNetworkPlane{ManagedDataPlane: plane, network: wg.Address.Masked(), hub: wg.Address.Addr(), zones: zones}}, nil
 }
 
 // vpnHubKeyRef is the hub key's reference when the configuration builds a
@@ -123,14 +117,19 @@ func resolveVPNHubKeyWith(ctx context.Context, cfg *ServeConfig, resolve bgp.Sec
 // hubNetworkPlane holds the WireGuard plane to the hub's network: a peer
 // whose address is outside it, or is the hub's own, is refused (SPEC.md:80).
 // The plane itself checks only that the address is a single host (Codex
-// #2029 round 1).
+// #2029 round 1). It serves only leases with a deadline, which the datapath's
+// plane host enforces: a peer goes with its accepts once its lease expires,
+// also while the admission service is down.
 type hubNetworkPlane struct {
 	vpn.ManagedDataPlane
 	network netip.Prefix
 	hub     netip.Addr
+	// zones is the installed destination-zone enforcement (#2093).
+	zones *vpnHubZoneEnforcement
 }
 
-// InstallPeer refuses a lease address outside the hub's network.
+// InstallPeer refuses a lease address outside the hub's network and a lease
+// without a deadline.
 func (p hubNetworkPlane) InstallPeer(ctx context.Context, lease *vpn.Lease) error {
 	if lease != nil && lease.Address.IsValid() {
 		addr := lease.Address.Addr()
@@ -141,15 +140,60 @@ func (p hubNetworkPlane) InstallPeer(ctx context.Context, lease *vpn.Lease) erro
 			return &vpn.ErrPeerKeyInvalid{Kind: vpn.DataPlaneWireGuard, Reason: "lease address is the hub's own"}
 		}
 	}
-	return p.ManagedDataPlane.InstallPeer(ctx, lease)
-}
-
-// ReconcilePeers forwards to the plane, which is a vpn.PeerReconciler.
-func (p hubNetworkPlane) ReconcilePeers(ctx context.Context, keep []vpn.LeaseID) error {
-	if r, ok := p.ManagedDataPlane.(vpn.PeerReconciler); ok {
-		return r.ReconcilePeers(ctx, keep)
+	if err := p.zones.admitLease(lease); err != nil {
+		return err
+	}
+	// The hub serves only leases with a deadline: the plane host removes
+	// the peer, and with it these accepts, once the deadline passes.
+	if lease != nil && lease.ExpiresAt.IsZero() {
+		return &vpn.ErrInvalidRequest{Field: "expires_at", Reason: "the lease carries no deadline"}
+	}
+	// The lease's accepts are programmed before the peer exists; a failed
+	// program refuses the peer (#2093).
+	if err := p.forward().admit(ctx, lease); err != nil {
+		return err
+	}
+	if err := p.ManagedDataPlane.InstallPeer(ctx, lease); err != nil {
+		if lease != nil {
+			return errors.Join(err, p.forward().forget(ctx, lease.ID))
+		}
+		return err
 	}
 	return nil
+}
+
+// forward is the hub's programmed forward chain, nil when none is installed.
+func (p hubNetworkPlane) forward() *vpnHubForwardFilter {
+	if p.zones == nil {
+		return nil
+	}
+	return p.zones.forward
+}
+
+// RemovePeer withdraws the lease's accepts, then removes the peer.
+func (p hubNetworkPlane) RemovePeer(ctx context.Context, id vpn.LeaseID) error {
+	return errors.Join(p.forward().forget(ctx, id), p.ManagedDataPlane.RemovePeer(ctx, id))
+}
+
+// ReconcilePeers forwards to the plane, which is a vpn.PeerReconciler, and
+// withdraws the accepts of every lease not kept.
+func (p hubNetworkPlane) ReconcilePeers(ctx context.Context, keep []vpn.LeaseID) error {
+	var err error
+	if r, ok := p.ManagedDataPlane.(vpn.PeerReconciler); ok {
+		err = r.ReconcilePeers(ctx, keep)
+	}
+	return errors.Join(err, p.forward().keep(ctx, keep))
+}
+
+// Stop stops the plane first. When that fails the hub's device and its
+// kernel peers may still be up, so the forward chain table, with its
+// closing drop and lease accepts, is kept and the error returned; the
+// table is deleted only after a clean stop (#2093).
+func (p hubNetworkPlane) Stop(ctx context.Context) error {
+	if err := p.ManagedDataPlane.Stop(ctx); err != nil {
+		return err
+	}
+	return p.forward().remove(ctx)
 }
 
 // vpnHubListeners is the WireGuard hub's UDP listener for the host

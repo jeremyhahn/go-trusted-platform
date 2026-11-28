@@ -109,11 +109,19 @@ type PEPClient interface {
 }
 
 // IAMHandlers provides REST handlers for IAM operations
+// TokenVerifier verifies a bearer token and answers its verdict and claims.
+// It is optional: without one the verify route answers 503.
+type TokenVerifier interface {
+	Verify(ctx context.Context, token string) (*TokenVerification, error)
+}
+
 type IAMHandlers struct {
 	logger     *logging.Logger
 	iamClient  IAMClient
 	pepClient  PEPClient
 	respWriter response.HttpWriter
+	// tokenVerifier is nil until the daemon wires one (SetTokenVerifier).
+	tokenVerifier TokenVerifier
 }
 
 // NewIAMHandlers creates a new IAMHandlers instance
@@ -302,7 +310,19 @@ func (h *IAMHandlers) consistentTenant(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (h *IAMHandlers) handleError(w http.ResponseWriter, r *http.Request, err error) {
+	if st, ok := status.FromError(err); ok && st.Code() == codes.Unimplemented {
+		// An operation the IAM service does not implement (e.g. policy
+		// simulation over the embedded transport) is 501, never 500.
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
 	errStr := err.Error()
+	if st, ok := status.FromError(err); ok && st.Code() == codes.Unimplemented {
+		// An operation the IAM service does not implement (e.g. policy
+		// simulation over the embedded transport) is 501, never 500.
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
 	switch {
 	case strings.Contains(errStr, "not found"):
 		h.respWriter.Error404(w, r, err)
@@ -1489,6 +1509,65 @@ func (h *IAMHandlers) CheckPermission(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// VerifyToken verifies a token through the wired TokenVerifier. The claims
+// of a valid token are answered only when the token belongs to the
+// resolved tenant; another tenant's token answers valid=false with the
+// reason "foreign_tenant" and no claims. Without a verifier it answers 503.
+func (h *IAMHandlers) VerifyToken(w http.ResponseWriter, r *http.Request) {
+	if h.tokenVerifier == nil {
+		err := ErrTokenVerifierMissing{}
+		h.respWriter.Write(w, r, http.StatusServiceUnavailable, restwire.WebServiceResponse{
+			Code:  http.StatusServiceUnavailable,
+			Error: err.Error(),
+		})
+		return
+	}
+
+	tenantID := h.getTenantID(r)
+	if tenantID == "" {
+		h.respWriter.Error400(w, r, ErrMissingTenantID{})
+		return
+	}
+
+	var req VerifyTokenRequest
+	if !h.decodeTenantBody(w, r, tenantID, &req) {
+		return
+	}
+	if req.Token == "" {
+		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: "token is required"})
+		return
+	}
+
+	ctx, cancel := h.createContext()
+	defer cancel()
+
+	v, err := h.tokenVerifier.Verify(ctx, req.Token)
+	if err != nil {
+		h.handleError(w, r, err)
+		return
+	}
+	if v == nil {
+		h.handleError(w, r, ErrTokenVerifierMissing{})
+		return
+	}
+
+	resp := &VerifyTokenResponse{Valid: v.Valid, Reason: v.Reason}
+	if v.Valid {
+		if v.TenantID != tenantID {
+			resp = &VerifyTokenResponse{Valid: false, Reason: "foreign_tenant"}
+		} else {
+			resp.Subject = v.Subject
+			resp.TenantID = v.TenantID
+			resp.Scopes = v.Scopes
+			resp.Roles = v.Roles
+			if !v.ExpiresAt.IsZero() {
+				resp.ExpiresAt = v.ExpiresAt.Unix()
+			}
+		}
+	}
+	h.respWriter.Success200(w, r, resp)
+}
+
 // toAnyMap widens a string map to the map[string]interface{} the PEP's
 // subject attributes and request context take; an empty map stays nil.
 func toAnyMap(in map[string]string) map[string]interface{} {
@@ -1527,9 +1606,11 @@ func (h *IAMHandlers) RegisterApp(w http.ResponseWriter, r *http.Request) {
 
 	req.Resolve()
 	sdkReq := &iamsdk.RegisterAppRequest{
-		Name:         req.Name,
-		RedirectURIs: req.RedirectURIs,
-		GrantTypes:   parseGrantTypes(req.GrantTypes),
+		Name:           req.Name,
+		RedirectURIs:   req.RedirectURIs,
+		GrantTypes:     parseGrantTypes(req.GrantTypes),
+		ResponseTypes:  req.ResponseTypes,
+		ResourcePrefix: req.ResourcePrefix,
 	}
 
 	app, err := h.iamClient.RegisterApp(ctx, tenantID, sdkReq)
@@ -1625,9 +1706,11 @@ func (h *IAMHandlers) UpdateApp(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	sdkReq := &iamsdk.UpdateAppRequest{
-		Name:         req.Name,
-		RedirectURIs: req.RedirectURIs,
-		GrantTypes:   parseGrantTypes(req.GrantTypes),
+		Name:           req.Name,
+		RedirectURIs:   req.RedirectURIs,
+		GrantTypes:     parseGrantTypes(req.GrantTypes),
+		ResponseTypes:  req.ResponseTypes,
+		ResourcePrefix: req.ResourcePrefix,
 	}
 
 	app, err := h.iamClient.UpdateApp(ctx, tenantID, appID, sdkReq)
@@ -1702,6 +1785,9 @@ func appToResponse(a *iamsdk.Application) AppResponse {
 		Name:         a.Name,
 		RedirectURIs: a.RedirectURIs,
 		GrantTypes:   grantTypesToStrings(a.GrantTypes),
+
+		ResponseTypes:  a.ResponseTypes,
+		ResourcePrefix: a.ResourcePrefix,
 	}
 	if !a.CreatedAt.IsZero() {
 		t := a.CreatedAt

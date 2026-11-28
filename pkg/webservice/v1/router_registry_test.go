@@ -150,11 +150,22 @@ type testHandlerRegistry struct {
 	// assert the skip.
 	iamClient restiam.IAMClient
 	pepClient restiam.PEPClient
+	// The daemon's token verifier the console's IAM router answers
+	// POST /iam/tokens/verify through. Nil keeps the route at 503.
+	tokenVerifier restiam.TokenVerifier
 	// The admin-claim ceremony handler. Nil in the older tests, which assert
 	// the skip; the route-table fixture builds one so the five claim routes
 	// are walked (#420).
 	adminClaim *adminclaim.RestHandler
 }
+
+// stubBMCHandler satisfies bmcwebsvc.RestHandler for the route-table walk. Its
+// methods are never reached: the admin gate refuses every probe first.
+type stubBMCHandler struct{ bmcwebsvc.RestHandler }
+
+// ProvisioningConfigured reports the provisioning store wired, so the
+// router mounts the BMC routes on a fixture built on this stub.
+func (stubBMCHandler) ProvisioningConfigured() bool { return true }
 
 func (r *testHandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 	return r.acmeService
@@ -170,6 +181,9 @@ func (r *testHandlerRegistry) DeviceBootHandler() device.BootHandler {
 
 func (r *testHandlerRegistry) IAMClients() (restiam.IAMClient, restiam.PEPClient) {
 	return r.iamClient, r.pepClient
+}
+func (r *testHandlerRegistry) IAMTokenVerifier() restiam.TokenVerifier {
+	return r.tokenVerifier
 }
 
 func (r *testHandlerRegistry) JSONWebTokenHandler() jwt.TokenHandler {
