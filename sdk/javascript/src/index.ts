@@ -337,10 +337,15 @@ export type {
   ListDeviceReportsResponse,
   RefreshDeviceReportResponse,
   CallerPolicyDescription,
+  PollDeviceVerdictsRequest,
+  PollDeviceVerdictsResponse,
+  DeviceVerdictEvent,
 } from './types/attestation.js';
 
 // Attestation values: the response-shape gate for a device report route
 export { classifyDeviceReport } from './types/attestation.js';
+// Attestation values: the server's cap on a device verdicts poll wait
+export { POLL_DEVICE_VERDICTS_MAX_WAIT_MS } from './types/attestation.js';
 
 // CA types
 export type {
