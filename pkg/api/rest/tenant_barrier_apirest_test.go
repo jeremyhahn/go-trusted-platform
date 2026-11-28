@@ -48,7 +48,7 @@ func TestTenantBarrierAPIRest_Lifecycle(t *testing.T) {
 	assert.True(t, st.Sealed, "an uninitialized barrier reports sealed")
 	assert.False(t, st.Initialized)
 
-	resp := barrierAction(t, router, "tenant-123", "init", InitTenantBarrierRequest{Threshold: 2, Shares: 3, Passphrase: "operator-pass"})
+	resp := barrierAction(t, router, "tenant-123", "init", InitTenantBarrierRequest{Passphrase: "operator-pass"})
 	assert.Equal(t, TenantBarrierActionResponse{
 		TenantID: "tenant-123", Success: true, Message: "tenant barrier initialized", Timestamp: resp.Timestamp,
 	}, resp)
@@ -188,4 +188,19 @@ func TestTenantBarrierAPIRest_Preconditions(t *testing.T) {
 			assert.Equal(t, ErrInvalidTenantID{}.Error(), errResp.Error)
 		})
 	}
+}
+
+func TestTenantBarrierAPIRest_InitRefusesShamirParameters(t *testing.T) {
+	mgr := newMockTenantManager()
+	mgr.addTenant(createTestTenantEntity("tenant-123", "test-tenant"))
+	router := newBarrierTestRouter(mgr)
+
+	body := InitTenantBarrierRequest{Threshold: 2, Shares: 3, Passphrase: "operator-pass"}
+	rr := executeTenantRequest(router, http.MethodPost, "/api/v1/tenants/tenant-123/barrier/init", body)
+	require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+	var errResp ErrorResponse
+	decodeResponse(t, rr.Body, &errResp)
+	assert.Contains(t, errResp.Error, "Shamir threshold 2 of 3 shares is not supported")
+
+	assert.False(t, barrierStatus(t, router, "tenant-123").Initialized, "a refused init never reaches the manager")
 }

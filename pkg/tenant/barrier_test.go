@@ -43,6 +43,11 @@ type testBarrierClient struct {
 	// isolation answers TenantIsolationType per tenant; a tenant not listed
 	// is barrier-isolated.
 	isolation map[string]string
+	// isolationErr, when set, fails every TenantIsolationType lookup.
+	isolationErr error
+
+	// statusCalls counts TenantBarrierStatus calls to the backend.
+	statusCalls int
 }
 
 func newTestBarrierClient() *testBarrierClient {
@@ -94,11 +99,12 @@ func (c *testBarrierClient) TenantBarrierSeal(ctx context.Context, req *quicbaas
 }
 
 func (c *testBarrierClient) TenantBarrierStatus(ctx context.Context, req *quicbaassdk.QRDBTenantBarrierStatusRequest) (*quicbaassdk.QRDBTenantBarrierStatusResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.statusCalls++
 	if c.statusErr != nil {
 		return nil, c.statusErr
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	unsealed, ok := c.barriers[req.TenantID]
 	return &quicbaassdk.QRDBTenantBarrierStatusResponse{
 		TenantID:       req.TenantID,
@@ -112,6 +118,9 @@ func (c *testBarrierClient) TenantBarrierStatus(ctx context.Context, req *quicba
 func (c *testBarrierClient) TenantIsolationType(ctx context.Context, tenantID string) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.isolationErr != nil {
+		return "", c.isolationErr
+	}
 	if iso, ok := c.isolation[tenantID]; ok {
 		return iso, nil
 	}
@@ -767,6 +776,69 @@ func TestTenantBarrierStatus_SDKError(t *testing.T) {
 	var storageErr ErrStorageFailed
 	if !errors.As(err, &storageErr) {
 		t.Errorf("expected ErrStorageFailed, got: %T", err)
+	}
+}
+
+func TestTenantBarrierStatus_PrefixTenantIsNotApplicable(t *testing.T) {
+	m, _, barrierClient := newTestManagerWithBarrier(t)
+	barrierClient.isolation = map[string]string{"prefix-tenant": ""}
+
+	st, err := m.TenantBarrierStatus(context.Background(), "prefix-tenant")
+	if err != nil {
+		t.Fatalf("TenantBarrierStatus: %v", err)
+	}
+	if st == nil {
+		t.Fatal("expected non-nil state")
+	}
+	if st.Isolation != "prefix" {
+		t.Errorf("Isolation = %q, want prefix", st.Isolation)
+	}
+	if st.Sealed || st.Initialized {
+		t.Errorf("a prefix tenant has no barrier to be sealed or initialized, got %+v", st)
+	}
+	if st.TenantID != "prefix-tenant" {
+		t.Errorf("TenantID = %q, want prefix-tenant", st.TenantID)
+	}
+	if barrierClient.statusCalls != 0 {
+		t.Errorf("backend status called %d times for a tenant with no barrier", barrierClient.statusCalls)
+	}
+}
+
+func TestTenantBarrierStatus_ReportsBarrierIsolation(t *testing.T) {
+	m, _, barrierClient := newTestManagerWithBarrier(t)
+
+	st, err := m.TenantBarrierStatus(context.Background(), "tenant-x")
+	if err != nil {
+		t.Fatalf("TenantBarrierStatus: %v", err)
+	}
+	if st.Isolation != "barrier" {
+		t.Errorf("Isolation = %q, want barrier", st.Isolation)
+	}
+	if !st.Sealed {
+		t.Errorf("an uninitialized barrier reports sealed, got %+v", st)
+	}
+	if barrierClient.statusCalls != 1 {
+		t.Errorf("backend status calls = %d, want 1", barrierClient.statusCalls)
+	}
+}
+
+func TestTenantBarrierStatus_IsolationLookupFailureFailsClosed(t *testing.T) {
+	m, _, barrierClient := newTestManagerWithBarrier(t)
+	barrierClient.isolationErr = errors.New("lookup down")
+
+	st, err := m.TenantBarrierStatus(context.Background(), "tenant-x")
+	if err == nil {
+		t.Fatal("expected an error when the isolation lookup fails")
+	}
+	if st != nil {
+		t.Errorf("expected no state on a failed lookup, got %+v", st)
+	}
+	var storageErr ErrStorageFailed
+	if !errors.As(err, &storageErr) {
+		t.Errorf("expected ErrStorageFailed, got: %T", err)
+	}
+	if barrierClient.statusCalls != 0 {
+		t.Errorf("backend status called %d times after a failed lookup", barrierClient.statusCalls)
 	}
 }
 
