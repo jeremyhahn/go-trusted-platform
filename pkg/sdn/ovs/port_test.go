@@ -654,6 +654,135 @@ func TestParsePort(t *testing.T) {
 	})
 }
 
+func TestParsePortVLANDecode(t *testing.T) {
+	base := func(tag, mode interface{}) map[string]interface{} {
+		row := map[string]interface{}{
+			"_uuid": []interface{}{"uuid", "port-uuid"},
+			"name":  "eth0",
+		}
+		if tag != nil {
+			row["tag"] = tag
+		}
+		if mode != nil {
+			row["vlan_mode"] = mode
+		}
+		return row
+	}
+
+	t.Run("singleton set tag", func(t *testing.T) {
+		port, err := parsePort(base([]interface{}{"set", []interface{}{float64(401)}}, nil))
+		require.NoError(t, err)
+		assert.Equal(t, int64(401), port.Tag)
+	})
+	t.Run("empty set tag", func(t *testing.T) {
+		port, err := parsePort(base([]interface{}{"set", []interface{}{}}, nil))
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), port.Tag)
+	})
+	t.Run("scalar tag", func(t *testing.T) {
+		port, err := parsePort(base(float64(402), nil))
+		require.NoError(t, err)
+		assert.Equal(t, int64(402), port.Tag)
+	})
+	t.Run("multi-element set tag is an error", func(t *testing.T) {
+		_, err := parsePort(base([]interface{}{"set", []interface{}{float64(401), float64(402)}}, nil))
+		require.Error(t, err)
+	})
+	t.Run("vlan_mode trunk scalar", func(t *testing.T) {
+		port, err := parsePort(base(nil, "trunk"))
+		require.NoError(t, err)
+		assert.Equal(t, "trunk", port.VLANMode)
+	})
+	t.Run("vlan_mode access singleton set", func(t *testing.T) {
+		port, err := parsePort(base(float64(401), []interface{}{"set", []interface{}{"access"}}))
+		require.NoError(t, err)
+		assert.Equal(t, "access", port.VLANMode)
+		assert.Equal(t, int64(401), port.Tag)
+	})
+	t.Run("vlan_mode empty set", func(t *testing.T) {
+		port, err := parsePort(base(nil, []interface{}{"set", []interface{}{}}))
+		require.NoError(t, err)
+		assert.Equal(t, "", port.VLANMode)
+	})
+	t.Run("vlan_mode multi-element set is an error", func(t *testing.T) {
+		_, err := parsePort(base(nil, []interface{}{"set", []interface{}{"access", "trunk"}}))
+		require.Error(t, err)
+	})
+}
+
+func TestListPortsStrictDecodesSetEncodedVLAN(t *testing.T) {
+	ctx := context.Background()
+	client, server := setupPortTest(t)
+	defer server.Close()
+	defer client.Close()
+	_, err := client.AddPort(ctx, "br-port-test", "eth-setq")
+	require.NoError(t, err)
+	_, err = client.AddPort(ctx, "br-port-test", "eth-trunk")
+	require.NoError(t, err)
+
+	server.mu.RLock()
+	for _, db := range server.databases {
+		db.mu.RLock()
+		if tbl, ok := db.tables[portTable]; ok {
+			tbl.mu.Lock()
+			for _, row := range tbl.rows {
+				switch row["name"] {
+				case "eth-setq":
+					row["tag"] = []interface{}{"set", []interface{}{float64(401)}}
+					row["vlan_mode"] = []interface{}{"set", []interface{}{"access"}}
+				case "eth-trunk":
+					row["tag"] = []interface{}{"set", []interface{}{}}
+					row["vlan_mode"] = "trunk"
+				}
+			}
+			tbl.mu.Unlock()
+		}
+		db.mu.RUnlock()
+	}
+	server.mu.RUnlock()
+
+	ports, err := client.ListPortsStrict(ctx, "br-port-test")
+	require.NoError(t, err)
+	byName := map[string]*Port{}
+	for _, p := range ports {
+		byName[p.Name] = p
+	}
+	require.Contains(t, byName, "eth-setq")
+	require.Contains(t, byName, "eth-trunk")
+	assert.Equal(t, int64(401), byName["eth-setq"].Tag)
+	assert.Equal(t, "access", byName["eth-setq"].VLANMode)
+	assert.Equal(t, int64(0), byName["eth-trunk"].Tag)
+	assert.Equal(t, "trunk", byName["eth-trunk"].VLANMode)
+}
+
+func TestListPortsStrictRejectsMultiElementTag(t *testing.T) {
+	ctx := context.Background()
+	client, server := setupPortTest(t)
+	defer server.Close()
+	defer client.Close()
+	_, err := client.AddPort(ctx, "br-port-test", "eth-multi")
+	require.NoError(t, err)
+
+	server.mu.RLock()
+	for _, db := range server.databases {
+		db.mu.RLock()
+		if tbl, ok := db.tables[portTable]; ok {
+			tbl.mu.Lock()
+			for _, row := range tbl.rows {
+				if row["name"] == "eth-multi" {
+					row["tag"] = []interface{}{"set", []interface{}{float64(401), float64(402)}}
+				}
+			}
+			tbl.mu.Unlock()
+		}
+		db.mu.RUnlock()
+	}
+	server.mu.RUnlock()
+
+	_, err = client.ListPortsStrict(ctx, "br-port-test")
+	require.Error(t, err)
+}
+
 func TestParseInterface(t *testing.T) {
 	t.Run("parse complete interface row", func(t *testing.T) {
 		row := map[string]interface{}{

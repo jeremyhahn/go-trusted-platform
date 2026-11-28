@@ -24,6 +24,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2406,4 +2407,88 @@ func TestService_UpdateDeviceState_FailedVLANWriteKeepsState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateBooting, reloaded.State)
 	assert.Equal(t, provisioningVLAN, reloaded.CurrentVLAN)
+}
+
+// restoreFailingPort is a recordingPort whose flow installs fail after the
+// first failAfter installs, while deletes keep succeeding. It records each
+// flow operation in order.
+type restoreFailingPort struct {
+	recordingPort
+	mu        sync.Mutex
+	installs  int
+	failAfter int
+	ops       []string
+}
+
+var errFlowInstall = errors.New("flow install failed")
+
+func (p *restoreFailingPort) InstallFlows(string, []zoneflows.FlowRule) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.installs++
+	if p.failAfter > 0 && p.installs > p.failAfter {
+		p.ops = append(p.ops, "install-failed")
+		return errFlowInstall
+	}
+	p.ops = append(p.ops, "install")
+	return nil
+}
+
+func (p *restoreFailingPort) DeleteFlowsByPort(string, string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.ops = append(p.ops, "delete")
+	return nil
+}
+
+// TestService_UpdateDeviceState_QuarantineRestoreFailureDropsAll: a
+// discovered-to-booting move installs provisioning flows, then the state
+// write fails and every quarantine restore fails too. Through the real
+// zone flow manager, which may roll the failed quarantine install back to
+// the provisioning placement, the service must end with the port's flows
+// removed (drop-all) and return the error (#2081 Codex round 11).
+func TestService_UpdateDeviceState_QuarantineRestoreFailureDropsAll(t *testing.T) {
+	svc, _, store, id := newStoreBackedService(t, StateQuarantined)
+	port := &restoreFailingPort{}
+	zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName: "br-fabric", FlowController: port, PortController: port, Plan: testNetPlan,
+	})
+	require.NoError(t, err)
+	svc.vlanManager = NewVLANIntegrationWrapper(WithFlowManager(zfm))
+	setStoredDevice(t, svc, store, id, StateDiscovered, svc.config.QuarantineVLAN,
+		func(d *DeviceInfo) bool { return d.State == StateBooting })
+
+	port.mu.Lock()
+	port.installs = 0
+	port.ops = nil
+	port.failAfter = 1 // the provisioning install succeeds, every later install fails
+	port.mu.Unlock()
+
+	err = svc.UpdateDeviceState(context.Background(), id, StateBooting, "pxe boot")
+	require.Error(t, err)
+
+	port.mu.Lock()
+	ops := append([]string(nil), port.ops...)
+	port.mu.Unlock()
+	require.NotEmpty(t, ops)
+	assert.Contains(t, ops, "install", "the provisioning flows are installed")
+	assert.GreaterOrEqual(t, countOps(ops, "install-failed"), 2,
+		"the quarantine restore is tried again after it fails")
+	assert.Equal(t, "delete", ops[len(ops)-1],
+		"a port whose quarantine cannot be restored ends with its flows dropped: %v", ops)
+
+	got, err := svc.stateManager.Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateDiscovered, got.State)
+	assert.Equal(t, svc.config.QuarantineVLAN, got.CurrentVLAN)
+}
+
+func countOps(ops []string, op string) int {
+	n := 0
+	for _, o := range ops {
+		if o == op {
+			n++
+		}
+	}
+	return n
 }
