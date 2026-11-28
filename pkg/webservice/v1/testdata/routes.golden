@@ -59,6 +59,8 @@ DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth
 DELETE /api/v1/sdn/flows
 DELETE /api/v1/sdn/gateway/ipam/allocations/{ip}
 DELETE /api/v1/sdn/gateway/ipam/pools/{id}
+DELETE /api/v1/sdn/policies/{id}
+DELETE /api/v1/sdn/vlans/{vlan_id}
 DELETE /api/v1/sdn/zones/{name}
 DELETE /api/v1/tenants/{id}
 DELETE /api/v1/tpm/ak

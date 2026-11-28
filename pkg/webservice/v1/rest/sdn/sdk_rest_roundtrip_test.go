@@ -159,6 +159,10 @@ func TestSDKRESTRoundTrip(t *testing.T) {
 			resp: &platformv1.CreateVLANResponse{Status: ok, Vlan: testVLAN()}},
 		{name: "ListVLANs", req: &platformv1.ListVLANsRequest{BridgeId: "br0"},
 			resp: &platformv1.ListVLANsResponse{Vlans: []*platformv1.VLAN{testVLAN()}}},
+		{name: "DeleteVLAN", req: &platformv1.DeleteVLANRequest{BridgeId: "br0", VlanId: 20},
+			resp: &platformv1.DeleteVLANResponse{Status: ok}},
+		{name: "DeletePolicy", req: &platformv1.DeletePolicyRequest{PolicyId: "p1"},
+			resp: &platformv1.DeletePolicyResponse{Status: ok}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
