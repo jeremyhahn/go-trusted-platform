@@ -154,6 +154,8 @@ type replacingOVS struct {
 	addCalls  int   // AddFlow calls so far
 	failAddOn int   // the 1-based AddFlow call that fails; 0 never
 	deleteErr error // returned by DeleteFlow and DeleteFlowStrict when set
+
+	extIDs map[string]map[string]string // bridge external_ids; guarded by mu
 }
 
 func newReplacingOVSFixture(t *testing.T) (*SDNService, *replacingOVS) {
@@ -217,6 +219,35 @@ func (f *replacingOVS) removeLocked(bridgeName string, drop func(*ovs.Flow) bool
 		}
 	}
 	return kept
+}
+
+// SetBridgeExternalIDs records the bridge's external_ids. Like the native
+// client, it upserts the given keys and leaves the others.
+func (f *replacingOVS) SetBridgeExternalIDs(_ context.Context, name string, ids map[string]string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.extIDs == nil {
+		f.extIDs = make(map[string]map[string]string)
+	}
+	if f.extIDs[name] == nil {
+		f.extIDs[name] = make(map[string]string, len(ids))
+	}
+	for k, v := range ids {
+		f.extIDs[name][k] = v
+	}
+	return nil
+}
+
+// GetBridgeExternalIDs returns a copy of the bridge's external_ids (an empty
+// map when none were set).
+func (f *replacingOVS) GetBridgeExternalIDs(_ context.Context, name string) (map[string]string, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	out := make(map[string]string, len(f.extIDs[name]))
+	for k, v := range f.extIDs[name] {
+		out[k] = v
+	}
+	return out, nil
 }
 
 func (f *replacingOVS) matches(t *testing.T, bridgeName string) []string {
