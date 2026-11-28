@@ -85,6 +85,8 @@ export function AttestationQuoteCard() {
   const [akPem, setAkPem] = React.useState("");
   const [expectedNonce, setExpectedNonce] = React.useState("");
   const [channelBinding, setChannelBinding] = React.useState("");
+  // True while the binding field holds what Get quote filled in, not what the operator typed.
+  const [bindingFromQuote, setBindingFromQuote] = React.useState(false);
   const [verifying, setVerifying] = React.useState(false);
   const [verdict, setVerdict] = React.useState<Verdict | null>(null);
   const [verifyError, setVerifyError] = React.useState<string | null>(null);
@@ -126,6 +128,7 @@ export function AttestationQuoteCard() {
       setResult({ quote: res.data.quote, channelBinding: res.data.channelBinding });
       staleVerdict();
       setChannelBinding(res.data.channelBinding ?? "");
+      setBindingFromQuote(true);
       if (res.data.quote) {
         setQuoteJson(JSON.stringify(res.data.quote, null, 2));
         // The quote's own nonce is SHA-256(nonce || channelBinding) when bound;
@@ -145,6 +148,7 @@ export function AttestationQuoteCard() {
     setVerdict(null);
     let quote: Quote;
     let envelopeBinding = "";
+    let isEnvelope = false;
     try {
       const parsed: unknown = JSON.parse(quoteJson);
       if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -154,6 +158,7 @@ export function AttestationQuoteCard() {
       // A pasted GetAttestationQuote answer: { quote, channelBinding }.
       if (obj.quote !== null && typeof obj.quote === "object" && !Array.isArray(obj.quote) && !("quoteData" in obj)) {
         quote = obj.quote as Quote;
+        isEnvelope = true;
         if (typeof obj.channelBinding === "string") envelopeBinding = obj.channelBinding;
       } else {
         quote = parsed as Quote;
@@ -177,7 +182,10 @@ export function AttestationQuoteCard() {
         expectedNonce: expectedNonce.trim(),
       };
       const typed = channelBinding.trim();
-      const binding = typed !== "" ? typed : envelopeBinding.trim();
+      // An imported envelope names its own binding (none when the key is absent)
+      // and replaces one Get quote filled in for another quote; a binding the
+      // operator typed wins (Codex #2370 round 11).
+      const binding = isEnvelope && (bindingFromQuote || typed === "") ? envelopeBinding.trim() : typed;
       if (binding !== "") request.channelBinding = binding;
       const res = await attestation.verifyQuote(request);
       if (stale()) return;
@@ -315,6 +323,7 @@ export function AttestationQuoteCard() {
               value={channelBinding}
               onChange={(e) => {
                 setChannelBinding(e.target.value);
+                setBindingFromQuote(false);
                 staleVerdict();
               }}
             />
