@@ -88,7 +88,11 @@ export function useLDevID() {
     const api = client.getApiClient();
     return {
       createLDevID: (input: CreateLDevIDInput) =>
-        api.post<CreateLDevIDResult>("/v1/idevid/ldevid", ldevidRequestBody(input)),
+        api.post<CreateLDevIDResult>("/v1/idevid/ldevid", ldevidRequestBody(input), {
+          // A lost response must not replay the create: it would issue a
+          // second key and certificate, or replace one on overwrite.
+          retry: { enabled: false },
+        }),
     };
   }, [client]);
 }

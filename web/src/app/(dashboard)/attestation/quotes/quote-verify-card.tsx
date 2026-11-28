@@ -102,6 +102,8 @@ export function QuoteVerifyCard(): React.JSX.Element {
 
   const onVerifyQuote = async () => {
     if (!quote) return;
+    // A refused verification must not leave the previous verdict showing.
+    setVerdict(undefined);
     setBusy(true);
     try {
       const res = await verify.verifyQuote({
@@ -164,14 +166,20 @@ export function QuoteVerifyCard(): React.JSX.Element {
             aria-label="Nonce"
             placeholder="base64 nonce"
             value={nonce}
-            onChange={(e) => setNonce(e.target.value)}
+            onChange={(e) => {
+              setNonce(e.target.value);
+              setVerdict(undefined);
+            }}
           />
         </div>
         <Textarea
           aria-label="AK public key (PEM)"
           placeholder="-----BEGIN PUBLIC KEY-----"
           value={pem}
-          onChange={(e) => setPem(e.target.value)}
+          onChange={(e) => {
+            setPem(e.target.value);
+            setVerdict(undefined);
+          }}
         />
         <div className="flex gap-2">
           <Gated op="POST /api/v1/attestation/quote">

@@ -90,12 +90,21 @@ export default function SDNPoliciesPage() {
   }, []);
 
   const handleApply = React.useCallback(async () => {
+    const id = form.policyId.trim();
+    // ApplyPolicy replaces the whole config, and this form carries no rules
+    // or targets: refuse to overwrite a policy that already exists.
+    if (policies.some((p) => p.id === id)) {
+      setApplyError(
+        `Policy ${id} already exists. Replacing it from this form would remove its enforcement rules; delete it first or edit it through the API.`
+      );
+      return;
+    }
     setApplying(true);
     setApplyError(null);
     try {
       const priority = Number.parseInt(form.priority, 10);
       await apply({
-        policyId: form.policyId.trim(),
+        policyId: id,
         config: {
           name: form.name.trim(),
           type: form.type,
@@ -109,7 +118,7 @@ export default function SDNPoliciesPage() {
     } finally {
       setApplying(false);
     }
-  }, [form, apply]);
+  }, [form, apply, policies]);
 
   const openDetail = React.useCallback(
     async (policy: SDNPolicy) => {

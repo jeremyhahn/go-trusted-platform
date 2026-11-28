@@ -44,7 +44,6 @@ import { Gated } from '@/components/features/capabilities/gated';
 import { useSDN, useApi, useToast } from '@/hooks';
 import type { FlowRule } from '@/types/infrastructure';
 import type { BridgeType } from 'trusted-platform-sdk';
-import { Gated } from '@/components/features/capabilities/gated';
 import {
   bridgeKindLabels,
   flowActionKind,

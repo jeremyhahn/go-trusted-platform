@@ -561,10 +561,18 @@ export class DeviceService extends BaseService {
     // The server decodes snake_case names; at least one of deviceId,
     // ekSerial or macAddress must be set, or it answers 400.
     const body: Record<string, unknown> = { profile_id: request.profileId };
-    if (request.ekSerial !== undefined) body.ek_serial = request.ekSerial;
-    if (request.macAddress !== undefined) body.mac_address = request.macAddress;
-    if (request.ekCert !== undefined) body.ek_cert = request.ekCert;
-    if (request.deviceId !== undefined) body.device_id = request.deviceId;
+    if (request.ekSerial !== undefined) {
+      body.ek_serial = request.ekSerial;
+    }
+    if (request.macAddress !== undefined) {
+      body.mac_address = request.macAddress;
+    }
+    if (request.ekCert !== undefined) {
+      body.ek_cert = request.ekCert;
+    }
+    if (request.deviceId !== undefined) {
+      body.device_id = request.deviceId;
+    }
     return this.client.post<DeviceProfile>(
       this.singularUrl(`/profiles/${request.profileId}/assign`),
       body

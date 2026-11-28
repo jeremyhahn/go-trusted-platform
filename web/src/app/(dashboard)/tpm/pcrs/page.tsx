@@ -51,7 +51,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Gated } from "@/components/features/capabilities/gated";
 import { textToBase64, useApi, useTPM, useTPMOps, useToast } from "@/hooks";
 import type { PCRBank as SDKPCRBank } from "trusted-platform-sdk";
 
