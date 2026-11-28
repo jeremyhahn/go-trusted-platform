@@ -128,6 +128,31 @@ func TestPolicyFlowCookie_OwnedAndStable(t *testing.T) {
 	assert.True(t, samePolicyCookie(fmt.Sprintf("0x%x", rule0), fmt.Sprintf("0x%x", rule1)))
 }
 
+// TestPolicyOwnsCookie pins the rollback's held-entry check: every per-rule
+// cookie of the policy, and its legacy cookie, are the policy's own; another
+// policy's cookie and an unparsable rendering are not.
+func TestPolicyOwnsCookie(t *testing.T) {
+	cases := []struct {
+		name     string
+		rendered string
+		want     bool
+	}{
+		{"own rule 0", fmt.Sprintf("0x%x", policyFlowCookie("p1", 0)), true},
+		{"own rule 3", fmt.Sprintf("0x%x", policyFlowCookie("p1", 3)), true},
+		{"legacy cookie", fmt.Sprintf("0x%x", legacyPolicyFlowCookie("p1")), true},
+		{"another policy", fmt.Sprintf("0x%x", policyFlowCookie("p2", 0)), false},
+		{"another policy legacy", fmt.Sprintf("0x%x", legacyPolicyFlowCookie("p2")), false},
+		{"no 0x prefix", fmt.Sprintf("%x", policyFlowCookie("p1", 3)), true},
+		{"unparsable", "not-a-cookie", false},
+		{"zero cookie", "0x0", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, policyOwnsCookie(tc.rendered, "p1"))
+		})
+	}
+}
+
 // Two rules on one entry would install one switch flow (OFPFC_ADD keeps the
 // later) while the record keeps the first rule's cookie, so a strict delete
 // would miss the flow: ApplyPolicy refuses them before any install.
