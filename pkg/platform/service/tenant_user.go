@@ -103,7 +103,9 @@ type TokenIssuer interface {
 // same email twice should not produce duplicate IAM rows. A mirror
 // failure is fatal to registration and is rolled back: the saved
 // platform user is deleted (and a self-registered tenant removed), so a
-// user the IAM surface cannot see is never registered.
+// user the IAM surface cannot see is never registered. An invited user
+// is deleted only while the redemption still owns the record; one another
+// redemption may have committed is kept.
 type IAMUserMirror interface {
 	MirrorUser(ctx context.Context, tenantID, email, displayName string, roles []string) error
 	// MirrorInvitedUser mirrors like MirrorUser and returns an undo that
@@ -209,6 +211,31 @@ func (s *TenantUserService) unacceptedRedemption(ctx context.Context, existing *
 		inv.Email == existing.Email &&
 		inv.TenantID == existing.TenantID &&
 		!existing.CreatedAt.Before(inv.CreatedAt)
+}
+
+// ownsSavedUser reports whether the user this redemption saved is still
+// its own record, so the IAM mirror-failure compensation may delete it
+// (#2362). Another platformd sharing the stores can save the same
+// email-derived ID and accept the invitation while this call's mirror is
+// outstanding; deleting then would remove that daemon's committed user.
+// The record is this call's only while the invitation is still pending
+// and the stored user carries this invitation's ID and the instant this
+// call stamped. Every failed read or differing value answers false, so an
+// ambiguous answer keeps the record. A redemption that commits between
+// this check and the Delete is not excluded: closing that window needs a
+// conditional delete the store does not offer.
+func (s *TenantUserService) ownsSavedUser(
+	ctx context.Context, userID uint64, token string, invitationID uint64, savedAt time.Time,
+) bool {
+	inv, err := s.invitationService.GetByToken(ctx, token)
+	if err != nil || inv == nil || inv.Status != entities.InvitationStatusPending {
+		return false
+	}
+	stored, err := s.userService.Get(ctx, userID)
+	if err != nil || stored == nil {
+		return false
+	}
+	return stored.InvitationID == invitationID && stored.CreatedAt.Equal(savedAt)
 }
 
 // RegisterNewUser creates a new tenant and registers the user as the owner.
@@ -378,16 +405,17 @@ const DefaultTenantOwnerRole = "admin"
 
 // RegisterInvitedUser registers a user from an invitation, joining an existing tenant.
 // Steps:
-// 0. Claim the redemption for the email; a concurrent one is refused
-// 1. Get invitation by token
-// 2. Verify invitation is pending and not expired
-// 3. Get tenant via tenantManager
-// 4. Set user.TenantID = invitation.TenantID
-// 5. Set user.IsTenantOwner = false
-// 6. Add role from invitation to user
-// 7. Save the user
-// 8. Accept the invitation; a refusal keeps the saved user and the IAM mirror for a retry
-// 9. Return the RegisterResult with IsNewTenant = false
+//  0. Claim the redemption for the email; a concurrent one is refused
+//  1. Get invitation by token
+//  2. Verify invitation is pending and not expired
+//  3. Get tenant via tenantManager
+//  4. Set user.TenantID = invitation.TenantID
+//  5. Set user.IsTenantOwner = false
+//  6. Add role from invitation to user
+//  7. Save the user, then mirror it into IAM; a mirror failure deletes the
+//     saved user only while this call still owns it (ownsSavedUser), else keeps it
+//  8. Accept the invitation; a refusal keeps the saved user and the IAM mirror for a retry
+//  9. Return the RegisterResult with IsNewTenant = false
 func (s *TenantUserService) RegisterInvitedUser(
 	ctx context.Context,
 	user *entities.User,
@@ -508,8 +536,10 @@ func (s *TenantUserService) RegisterInvitedUser(
 	// the IAM surface cannot see is not registered (#2362). The IAM roles
 	// are the invitation's role, plus the owner role for an owner
 	// invitation, so an ordinary invitee keeps the access it was invited
-	// with. A mirror failure deletes the saved user and leaves the
-	// invitation pending so the link can be redeemed again. An Accept
+	// with. A mirror failure leaves the invitation pending and deletes the
+	// saved user only while this redemption can still prove it owns the
+	// record (ownsSavedUser); any other answer keeps it, since another
+	// daemon may have committed the same user meanwhile. An Accept
 	// refusal undoes nothing: another redemption may have committed the
 	// same records.
 	if s.iamMirror != nil {
@@ -522,13 +552,20 @@ func (s *TenantUserService) RegisterInvitedUser(
 				"tenant_id", invitation.TenantID,
 			)
 			rbCtx, cancel := rollbackContext(ctx)
-			delErr := s.userService.Delete(rbCtx, user.ID)
-			cancel()
-			if delErr != nil {
-				s.logger.Error(delErr, "failed to delete invited user after IAM mirror failure",
+			if s.ownsSavedUser(rbCtx, user.ID, invitationToken, invitation.ID, now) {
+				if delErr := s.userService.Delete(rbCtx, user.ID); delErr != nil {
+					s.logger.Error(delErr, "failed to delete invited user after IAM mirror failure",
+						"user_id", user.ID,
+					)
+				}
+			} else {
+				s.logger.Warn("kept the saved invited user after IAM mirror failure: this redemption cannot prove it still owns the record",
 					"user_id", user.ID,
+					"email", user.Email,
+					"tenant_id", invitation.TenantID,
 				)
 			}
+			cancel()
 			return nil, ErrIAMMirrorFailed{Email: user.Email, TenantID: invitation.TenantID, Cause: err}
 		}
 	}
