@@ -14,7 +14,7 @@
  */
 
 import { useMemo } from "react";
-import { usePlatformClient } from "trusted-platform-sdk";
+import { usePlatformClient, type ApiResponse } from "trusted-platform-sdk";
 
 /** GenerateDataKey answer; the keys are base64. */
 export interface KMSDataKey {
@@ -55,18 +55,32 @@ export function useKMSDataKeys() {
   const client = usePlatformClient();
   return useMemo(() => {
     const api = client.getApiClient();
-    const ctx = (text?: string) => {
-      const c = encryptionContext(text);
-      return c ? { context: c } : {};
-    };
     return {
-      generateDataKey: (keyId: string, contextText?: string) =>
-        api.post<KMSDataKey>("/v1/kms/data-keys", { key_id: keyId.trim(), ...ctx(contextText) }),
-      generateWrappedDataKey: (wrappingKeyId: string, contextText?: string) =>
-        api.post<KMSWrappedDataKey>("/v1/kms/data-keys/wrapped", {
-          wrapping_key_id: wrappingKeyId.trim(),
-          ...ctx(contextText),
-        }),
+      generateDataKey: (keyId: string, contextText?: string): Promise<ApiResponse<KMSDataKey>> =>
+        encryptionContext(contextText)
+          ? Promise.resolve(contextRefused())
+          : api.post<KMSDataKey>("/v1/kms/data-keys", { key_id: keyId.trim() }),
+      generateWrappedDataKey: (
+        wrappingKeyId: string,
+        contextText?: string,
+      ): Promise<ApiResponse<KMSWrappedDataKey>> =>
+        encryptionContext(contextText)
+          ? Promise.resolve(contextRefused())
+          : api.post<KMSWrappedDataKey>("/v1/kms/data-keys/wrapped", {
+              wrapping_key_id: wrappingKeyId.trim(),
+            }),
     };
   }, [client]);
+}
+
+/**
+ * #2180 round 9: the pinned backend ignores the encryption/wrapping context,
+ * so a key generated "under" one would unwrap without it. A nonempty context
+ * is refused before any request rather than silently dropped.
+ */
+export const CONTEXT_UNSUPPORTED =
+  "An encryption context is not supported: the KMS backend does not bind it to the key yet";
+
+function contextRefused<T>(): ApiResponse<T> {
+  return { success: false, error: { code: "CONTEXT_UNSUPPORTED", status: 400, message: CONTEXT_UNSUPPORTED } };
 }

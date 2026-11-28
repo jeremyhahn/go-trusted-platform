@@ -676,24 +676,6 @@ export interface CallerPolicyDescription {
 }
 
 /**
- * One attestation verdict on the tenant's feed (`platform.v1.DeviceVerdictEvent`).
- * Field names are protojson lowerCamelCase.
- */
-export interface DeviceVerdictEvent {
-  eventId: string;
-  /** RFC 3339 timestamp (protojson google.protobuf.Timestamp) */
-  recordedAt?: string;
-  /** uint64 device id, a protojson decimal string */
-  deviceId: string;
-  tenantId: string;
-  hostId: string;
-  serial: string;
-  passed: boolean;
-  cryptographic: boolean;
-  reason: string;
-}
-
-/**
  * `GET /api/v1/attestation/verdicts` response
  * (`platform.v1.PollDeviceVerdictsResponse`).
  */

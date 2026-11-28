@@ -21,14 +21,13 @@ export function WrappedDataKeyCard() {
   const { generateWrappedDataKey } = useKMSDataKeys();
   const { toast } = useToast();
   const [wrappingKeyId, setWrappingKeyId] = useState('');
-  const [context, setContext] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<KMSWrappedDataKey | null>(null);
 
   const generate = async () => {
     setBusy(true);
     try {
-      const res = await generateWrappedDataKey(wrappingKeyId, context);
+      const res = await generateWrappedDataKey(wrappingKeyId);
       if (res.success && res.data) {
         const data = res.data;
         setResult(data);
@@ -66,16 +65,6 @@ export function WrappedDataKeyCard() {
             aria-label="Wrapping key ID"
             value={wrappingKeyId}
             onChange={(e) => setWrappingKeyId(e.target.value)}
-          />
-        </div>
-        <div className="grid gap-2">
-          <Label htmlFor="wrapping-context">Wrapping context</Label>
-          <Input
-            id="wrapping-context"
-            aria-label="Wrapping context"
-            placeholder="optional"
-            value={context}
-            onChange={(e) => setContext(e.target.value)}
           />
         </div>
         <div>

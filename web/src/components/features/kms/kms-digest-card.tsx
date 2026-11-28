@@ -1,27 +1,27 @@
 'use client';
 
 /**
- * KmsDigestCard — hash text, and compute and check an HMAC, on the KMS
- * backend (#2057).
+ * KmsDigestCard — hash text on the KMS backend (#2057).
  *
  * The text is hashed by the KMS backend, not in the browser: the card sends
  * it to POST /api/v1/kms/hash through the API client and shows the digest the
- * server answers. HMAC keys are named KMS keys: the card computes a tag under
- * one at POST /api/v1/kms/hmac/{name} and checks a tag at .../verify. A
- * refusal is shown verbatim.
+ * server answers. A refusal is shown verbatim.
+ *
+ * HMAC generate and verify are withheld (#2180 round 9): the backend makes a
+ * fresh MAC key per call, so a tag it computes never verifies. The card says
+ * so and offers no HMAC control until the backend uses a stable MAC key.
  */
 
 import { useState } from 'react';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Gated } from '@/components/features/capabilities/gated';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import {
   DIGEST_ALGORITHMS,
+  HMAC_UNAVAILABLE,
   useKmsDigest,
   type DigestAlgorithm,
   type KmsHashResult,
@@ -42,13 +42,6 @@ export function KmsDigestCard(): JSX.Element {
   const [text, setText] = useState('');
   const [alg, setAlg] = useState<DigestAlgorithm>('SHA-256');
   const [hashResult, setHashResult] = useState<KmsHashResult | null>(null);
-
-  const [macKey, setMacKey] = useState('');
-  const [macText, setMacText] = useState('');
-  const [macAlg, setMacAlg] = useState<DigestAlgorithm>('SHA-256');
-  const [tag, setTag] = useState('');
-  const [tagOut, setTagOut] = useState<string | null>(null);
-  const [verdict, setVerdict] = useState<boolean | null>(null);
 
   const refuse = (title: string, description: string) =>
     toast({ title, description, variant: 'destructive' });
@@ -71,49 +64,11 @@ export function KmsDigestCard(): JSX.Element {
     }
   };
 
-  const handleHmac = async () => {
-    const name = macKey.trim();
-    setBusy(true);
-    try {
-      const res = await digest.hmac(name, macText, macAlg);
-      if (res.success && res.data) {
-        const out = res.data.hmac ?? '';
-        setTagOut(out);
-        setTag(out);
-        setVerdict(null);
-        toast({ title: 'HMAC computed', description: `Key ${res.data.key_id ?? name}`, variant: 'success' });
-      } else {
-        refuse('HMAC failed', res.error?.message || 'The KMS did not compute an HMAC');
-      }
-    } catch (err) {
-      refuse('HMAC failed', errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleVerify = async () => {
-    setBusy(true);
-    setVerdict(null);
-    try {
-      const res = await digest.verifyHmac(macKey.trim(), macText, tag, macAlg);
-      if (res.success && res.data) {
-        setVerdict(res.data.valid === true);
-      } else {
-        refuse('HMAC verify failed', res.error?.message || 'The KMS did not check the HMAC');
-      }
-    } catch (err) {
-      refuse('HMAC verify failed', errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <Card data-testid="kms-digest-card">
       <CardHeader>
         <CardTitle>Digest and HMAC</CardTitle>
-        <CardDescription>Hash text, or compute and check an HMAC with a KMS key.</CardDescription>
+        <CardDescription>Hash text with the KMS backend.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
         <section className="space-y-3">
@@ -158,81 +113,9 @@ export function KmsDigestCard(): JSX.Element {
 
         <section className="space-y-3">
           <h3 className="text-sm font-medium">HMAC</h3>
-          <div className="space-y-1">
-            <Label htmlFor="kms-hmac-key">Key name</Label>
-            <Input
-              id="kms-hmac-key"
-              value={macKey}
-              onChange={(e) => {
-                setMacKey(e.target.value);
-                setVerdict(null);
-              }}
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="kms-hmac-text">Message</Label>
-            <Textarea
-              id="kms-hmac-text"
-              value={macText}
-              onChange={(e) => {
-                setMacText(e.target.value);
-                setVerdict(null);
-              }}
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="kms-hmac-alg">HMAC hash</Label>
-            <select
-              id="kms-hmac-alg"
-              className={SELECT_CLASS}
-              value={macAlg}
-              onChange={(e) => setMacAlg(e.target.value as DigestAlgorithm)}
-            >
-              {DIGEST_ALGORITHMS.map((a) => (
-                <option key={a} value={a}>
-                  {a}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="kms-hmac-tag">Tag (base64)</Label>
-            <Input
-              id="kms-hmac-tag"
-              value={tag}
-              onChange={(e) => {
-                setTag(e.target.value);
-                setVerdict(null);
-              }}
-            />
-          </div>
-          <div className="flex gap-2">
-            <Gated op="POST /api/v1/kms/hmac/{name}">
-              <Button onClick={handleHmac} disabled={busy || macKey.trim() === ''}>
-                Compute HMAC
-              </Button>
-            </Gated>
-            <Gated op="POST /api/v1/kms/hmac/{name}/verify">
-              <Button
-                variant="outline"
-                onClick={handleVerify}
-                disabled={busy || macKey.trim() === '' || tag.trim() === ''}
-              >
-                Verify HMAC
-              </Button>
-            </Gated>
-          </div>
-          {tagOut !== null && (
-            <code
-              data-testid="kms-hmac-tag-out"
-              className="block rounded bg-muted p-2 text-xs font-mono break-all"
-            >{tagOut}</code>
-          )}
-          {verdict !== null && (
-            <Badge data-testid="kms-hmac-verdict" variant={verdict ? 'default' : 'destructive'}>
-              {verdict ? 'Valid' : 'Invalid'}
-            </Badge>
-          )}
+          <p data-testid="kms-hmac-withheld" className="text-sm text-muted-foreground">
+            {HMAC_UNAVAILABLE}.
+          </p>
         </section>
       </CardContent>
     </Card>

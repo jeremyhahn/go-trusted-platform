@@ -18,7 +18,6 @@ import {
 import { Gated } from "@/components/features/capabilities/gated";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -29,7 +28,6 @@ import {
 } from "@/components/ui/dialog";
 import { useAttestation, useToast } from "@/hooks";
 import { useAttestationVerify } from "@/hooks/use-attestation-verify";
-import { textToBase64 } from "@/hooks/use-tpm-ops";
 
 function yesNo(v: boolean | undefined): string {
   return v ? "Yes" : "No";
@@ -48,7 +46,6 @@ export function ManifestActionsCard({
 
   const [selectedId, setSelectedId] = React.useState("");
   const [nonce, setNonce] = React.useState("");
-  const [pem, setPem] = React.useState("");
   const [verdict, setVerdict] = React.useState<ManifestVerificationResult | undefined>();
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -59,14 +56,13 @@ export function ManifestActionsCard({
   const onVerify = async () => {
     if (!selected) return;
     const n = nonce.trim();
-    const p = pem.trim();
     setBusy(true);
     try {
       const res = await verify.verifyManifest({
         manifest: selected,
         ...(n ? { expectedNonce: n } : {}),
-        // public_key_pem is a proto `bytes` field: send the PEM text as base64.
-        ...(p ? { publicKeyPem: textToBase64(p) } : {}),
+        // No public key: the control plane checks no manifest signature and
+        // refuses one (ErrAttestationManifestSignatureUnchecked).
       });
       if (!res.success || !res.data?.result) {
         toast({
@@ -110,7 +106,7 @@ export function ManifestActionsCard({
       <CardHeader>
         <CardTitle>Verify or delete a manifest</CardTitle>
         <CardDescription>
-          Verify a host manifest against an expected nonce and public key, or delete it.
+          Verify a host manifest against an expected nonce, or delete it.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -143,13 +139,6 @@ export function ManifestActionsCard({
             disabled={empty}
           />
         </div>
-        <Textarea
-          aria-label="Public key (PEM)"
-          placeholder="-----BEGIN PUBLIC KEY-----"
-          value={pem}
-          onChange={(e) => setPem(e.target.value)}
-          disabled={empty}
-        />
         <div className="flex gap-2">
           <Gated op="POST /api/v1/attestation/manifests/verify">
             <Button onClick={onVerify} disabled={empty || busy}>
@@ -165,11 +154,14 @@ export function ManifestActionsCard({
         {verdict && (
           <div data-testid="manifest-verdict" className="flex flex-col gap-1 text-sm">
             <p className="font-medium">Status: {verdict.status}</p>
-            <p>Signature valid: {yesNo(verdict.signatureValid)}</p>
+            {/* The control plane sets signatureValid without verifying a
+                signature and accepts the host with no expected PCRs: both are
+                placeholders, so neither is shown as a pass. */}
+            <p title="The control plane does not verify manifest signatures yet">Signature valid: not checked</p>
             <p>Merkle root valid: {yesNo(verdict.merkleRootValid)}</p>
             <p>Nonce valid: {yesNo(verdict.nonceValid)}</p>
             <p>Timestamp valid: {yesNo(verdict.timestampValid)}</p>
-            <p>Host attestation valid: {yesNo(verdict.hostAttestationValid)}</p>
+            <p title="The control plane accepts the host with no expected PCRs">Host attestation valid: not checked</p>
             {verdict.errors && verdict.errors.length > 0 ? (
               <ul className="list-disc pl-5">
                 {verdict.errors.map((e, i) => (

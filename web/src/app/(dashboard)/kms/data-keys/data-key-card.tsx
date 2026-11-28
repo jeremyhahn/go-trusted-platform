@@ -24,14 +24,13 @@ export function DataKeyCard() {
   const { generateDataKey } = useKMSDataKeys();
   const { toast } = useToast();
   const [keyId, setKeyId] = useState('');
-  const [context, setContext] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ShownDataKey | null>(null);
 
   const generate = async () => {
     setBusy(true);
     try {
-      const res = await generateDataKey(keyId, context);
+      const res = await generateDataKey(keyId);
       if (res.success && res.data) {
         const data = res.data;
         setResult(data);
@@ -69,16 +68,6 @@ export function DataKeyCard() {
             aria-label="Key ID"
             value={keyId}
             onChange={(e) => setKeyId(e.target.value)}
-          />
-        </div>
-        <div className="grid gap-2">
-          <Label htmlFor="data-key-context">Encryption context</Label>
-          <Input
-            id="data-key-context"
-            aria-label="Encryption context"
-            placeholder="optional"
-            value={context}
-            onChange={(e) => setContext(e.target.value)}
           />
         </div>
         <div>

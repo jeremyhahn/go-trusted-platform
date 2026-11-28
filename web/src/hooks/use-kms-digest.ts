@@ -11,7 +11,7 @@
  */
 
 import { useMemo } from 'react';
-import { usePlatformClient } from 'trusted-platform-sdk';
+import { usePlatformClient, type ApiResponse } from 'trusted-platform-sdk';
 
 export type DigestAlgorithm = 'SHA-256' | 'SHA-384' | 'SHA-512';
 
@@ -40,14 +40,27 @@ export function useKmsDigest() {
   const client = usePlatformClient();
   return useMemo(() => {
     const api = client.getApiClient();
-    const key = (name: string) => `/v1/kms/hmac/${encodeURIComponent(name)}`;
     return {
       hash: (text: string, hash: DigestAlgorithm) =>
         api.post<KmsHashResult>('/v1/kms/hash', { data: toBase64(text), hash }),
-      hmac: (name: string, text: string, hash: DigestAlgorithm) =>
-        api.post<KmsHmacResult>(key(name), { data: toBase64(text), hash }),
-      verifyHmac: (name: string, text: string, tag: string, hash: DigestAlgorithm) =>
-        api.post<KmsHmacVerdict>(`${key(name)}/verify`, { data: toBase64(text), hmac: tag.trim(), hash }),
+      // #2180 round 9: the backend makes a fresh MAC key per HMAC call, so a
+      // tag it computes never verifies. Both calls are withheld, with no
+      // request, until the backend uses a stable MAC key.
+      hmac: (_name: string, _text: string, _hash: DigestAlgorithm): Promise<ApiResponse<KmsHmacResult>> =>
+        Promise.resolve(hmacWithheld<KmsHmacResult>()),
+      verifyHmac: (
+        _name: string,
+        _text: string,
+        _tag: string,
+        _hash: DigestAlgorithm,
+      ): Promise<ApiResponse<KmsHmacVerdict>> => Promise.resolve(hmacWithheld<KmsHmacVerdict>()),
     };
   }, [client]);
+}
+
+/** Why the HMAC controls are withheld (#2180 round 9). */
+export const HMAC_UNAVAILABLE = 'HMAC is not available until the backend uses a stable MAC key';
+
+function hmacWithheld<T>(): ApiResponse<T> {
+  return { success: false, error: { code: 'HMAC_UNAVAILABLE', status: 501, message: HMAC_UNAVAILABLE } };
 }
