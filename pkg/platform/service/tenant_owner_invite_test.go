@@ -198,11 +198,11 @@ func TestRegisterInvitedUser_MirrorFailureLeavesInvitationPending(t *testing.T) 
 	invitationService.AssertNotCalled(t, "Accept", mock.Anything, mock.Anything, mock.Anything)
 }
 
-// TestRegisterInvitedUser_AcceptFailureUndoesTheIAMMirror: Accept rechecks
-// the invitation after the IAM write, so an invitation revoked or expired
-// while the user was being mirrored must not leave an IAM user holding the
-// invited roles or a platform user (#2362).
-func TestRegisterInvitedUser_AcceptFailureUndoesTheIAMMirror(t *testing.T) {
+// TestRegisterInvitedUser_AcceptFailureKeepsTheSavedUser: whatever Accept
+// answers, this redemption cannot tell whether another one committed the
+// same email-derived user and IAM identity, so the saved user and the mirror
+// are kept and the error is returned (Tenant ruling, Codex #2362 round 16).
+func TestRegisterInvitedUser_AcceptFailureKeepsTheSavedUser(t *testing.T) {
 	cases := []struct {
 		name   string
 		err    func(token string) error
@@ -218,6 +218,11 @@ func TestRegisterInvitedUser_AcceptFailureUndoesTheIAMMirror(t *testing.T) {
 			err:    func(token string) error { return ErrInvitationExpired{Token: token} },
 			target: func() any { return new(ErrInvitationExpired) },
 		},
+		{
+			name:   "not found during mirroring",
+			err:    func(token string) error { return ErrInvitationNotFound{Token: token} },
+			target: func() any { return new(ErrInvitationNotFound) },
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,14 +234,14 @@ func TestRegisterInvitedUser_AcceptFailureUndoesTheIAMMirror(t *testing.T) {
 			svc, userService, invitationService := newMirroredInvitedRegistration(t, mirror, invitation)
 			invitationService.On("Accept", ctx, invitation.Token, mock.AnythingOfType("uint64")).
 				Return(tc.err(invitation.Token))
-			userService.On("Delete", mock.Anything, mock.AnythingOfType("uint64")).Return(nil)
+			userService.On("Delete", mock.Anything, mock.AnythingOfType("uint64")).Return(nil).Maybe()
 
 			result, err := svc.RegisterInvitedUser(ctx, newTestUser(invitation.Email), invitation.Token)
 			assert.Nil(t, result)
 			require.ErrorAs(t, err, tc.target())
 			assert.Len(t, mirror.calls, 1)
-			assert.Equal(t, []string{invitation.Email}, mirror.undone)
-			userService.AssertCalled(t, "Delete", mock.Anything, mock.AnythingOfType("uint64"))
+			assert.Empty(t, mirror.undone, "an Accept failure undid the IAM mirror")
+			userService.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
 		})
 	}
 }
@@ -384,6 +389,176 @@ func TestRegisterInvitedUser_AcrossServicesAnAcceptLoserKeepsTheWinner(t *testin
 	assert.Len(t, mirror.calls, 2)
 }
 
+// TestRegisterInvitedUser_AcrossServicesANotFoundAcceptKeepsTheWinner: as the
+// AlreadyAccepted case above, but A's Accept answers ErrInvitationNotFound (a
+// canceled or failed lookup). A cannot tell whether B committed, so it must
+// not delete B's user or undo B's IAM identity (Codex #2362 round 16).
+func TestRegisterInvitedUser_AcrossServicesANotFoundAcceptKeepsTheWinner(t *testing.T) {
+	ctx := context.Background()
+	invitation, err := entities.NewInvitation(
+		"tenant-a", "member@example.test", "viewer", 999, 7*24*time.Hour, time.Now())
+	require.NoError(t, err)
+	mirror := &gatedIAMMirror{entered: make(chan struct{}), release: make(chan struct{})}
+	svcA, userService, invitationService := newMirroredInvitedRegistration(t, mirror, invitation)
+
+	// A second platformd over the same user store, invitation store and IAM.
+	tenantManagerB := new(MockTenantManager)
+	tenantManagerB.On("GetTenant", ctx, invitation.TenantID).Return(&tenant.TenantEntity{
+		ID:   invitation.TenantID,
+		Name: invitation.TenantID,
+	}, nil)
+	svcB := NewTenantUserService(&TenantUserServiceConfig{
+		Logger:            logging.DefaultLogger(),
+		UserService:       userService,
+		InvitationService: invitationService,
+		TenantManager:     tenantManagerB,
+		TokenIssuer:       new(MockTokenIssuer),
+		IAMMirror:         mirror,
+	})
+
+	invitationService.On("Accept", ctx, invitation.Token, mock.AnythingOfType("uint64")).Return(nil).Once()
+	invitationService.On("Accept", ctx, invitation.Token, mock.AnythingOfType("uint64")).
+		Return(ErrInvitationNotFound{Token: invitation.Token})
+	userService.On("Delete", mock.Anything, mock.AnythingOfType("uint64")).Return(nil).Maybe()
+
+	type outcome struct {
+		result *RegisterResult
+		err    error
+	}
+	doneA := make(chan outcome, 1)
+	go func() {
+		result, err := svcA.RegisterInvitedUser(ctx, newTestUser(invitation.Email), invitation.Token)
+		doneA <- outcome{result, err}
+	}()
+	<-mirror.entered
+
+	resultB, errB := svcB.RegisterInvitedUser(ctx, newTestUser(invitation.Email), invitation.Token)
+	close(mirror.release)
+	a := <-doneA
+
+	require.NoError(t, errB, "B wins the invitation")
+	assert.NotNil(t, resultB)
+	require.ErrorAs(t, a.err, new(ErrInvitationNotFound))
+	assert.Nil(t, a.result)
+	// A Delete here is the Accept loser deleting the winner's user.
+	userService.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+	assert.Empty(t, mirror.undone, "the Accept loser undid the IAM identity the winner uses")
+	userService.AssertNumberOfCalls(t, "Save", 2)
+	invitationService.AssertNumberOfCalls(t, "Accept", 2)
+	assert.Len(t, mirror.calls, 2)
+}
+
+// TestRegisterInvitedUser_ARetryAfterAFailedAcceptCompletes: a failed Accept
+// keeps the saved user, and a retry of the same invitation completes the
+// redemption instead of being refused as an existing user (Tenant ruling,
+// Codex #2362 round 16).
+func TestRegisterInvitedUser_ARetryAfterAFailedAcceptCompletes(t *testing.T) {
+	ctx := context.Background()
+	invitation, err := entities.NewInvitation(
+		"tenant-a", "member@example.test", "viewer", 999, 7*24*time.Hour, time.Now())
+	require.NoError(t, err)
+	mirror := &fakeIAMMirror{}
+
+	userService := new(MockUserServicer)
+	invitationService := new(MockInvitationServicer)
+	tenantManager := new(MockTenantManager)
+	svc := NewTenantUserService(&TenantUserServiceConfig{
+		Logger:            logging.DefaultLogger(),
+		UserService:       userService,
+		InvitationService: invitationService,
+		TenantManager:     tenantManager,
+		TokenIssuer:       new(MockTokenIssuer),
+		IAMMirror:         mirror,
+	})
+
+	leftover := new(entities.User)
+	userService.On("GetByEmail", ctx, invitation.Email).
+		Return(nil, ErrUserNotFound{Email: invitation.Email}).Once()
+	userService.On("GetByEmail", ctx, invitation.Email).Return(leftover, nil)
+	invitationService.On("GetByToken", ctx, invitation.Token).Return(invitation, nil)
+	tenantManager.On("GetTenant", ctx, invitation.TenantID).Return(&tenant.TenantEntity{
+		ID:   invitation.TenantID,
+		Name: invitation.TenantID,
+	}, nil)
+	userService.On("Save", ctx, mock.AnythingOfType("*entities.User")).
+		Run(func(args mock.Arguments) { *leftover = *args.Get(1).(*entities.User) }).
+		Return(nil)
+	invitationService.On("Accept", ctx, invitation.Token, mock.AnythingOfType("uint64")).
+		Return(context.DeadlineExceeded).Once()
+	invitationService.On("Accept", ctx, invitation.Token, mock.AnythingOfType("uint64")).Return(nil)
+	userService.On("Delete", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	_, err = svc.RegisterInvitedUser(ctx, newTestUser(invitation.Email), invitation.Token)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	// A Delete here is a failed Accept deleting the saved user.
+	userService.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+	assert.Empty(t, mirror.undone)
+
+	result, err := svc.RegisterInvitedUser(ctx, newTestUser(invitation.Email), invitation.Token)
+	require.NoError(t, err, "the retry completes the redemption")
+	assert.NotNil(t, result)
+	userService.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+	assert.Empty(t, mirror.undone)
+	userService.AssertNumberOfCalls(t, "Save", 2)
+	invitationService.AssertNumberOfCalls(t, "Accept", 2)
+	assert.Len(t, mirror.calls, 2)
+}
+
+// TestRegisterInvitedUser_AnExistingUserIsStillRefused: only an unaccepted
+// redemption's own record lets a retry through. Another tenant's user, a
+// user with no tenant, and the user of an accepted invitation are refused
+// with ErrUserAlreadyExists and nothing is saved (#2362).
+func TestRegisterInvitedUser_AnExistingUserIsStillRefused(t *testing.T) {
+	cases := []struct {
+		name     string
+		existing *entities.User
+		status   entities.InvitationStatus
+	}{
+		{
+			name:     "another tenant's user",
+			existing: &entities.User{ID: 7, Email: "member@example.test", TenantID: "tenant-b", CreatedAt: time.Now()},
+			status:   entities.InvitationStatusPending,
+		},
+		{
+			name:     "no tenant",
+			existing: &entities.User{ID: 7, Email: "member@example.test", TenantID: "", CreatedAt: time.Now()},
+			status:   entities.InvitationStatusPending,
+		},
+		{
+			name:     "accepted invitation",
+			existing: &entities.User{ID: 7, Email: "member@example.test", TenantID: "tenant-a", CreatedAt: time.Now()},
+			status:   entities.InvitationStatusAccepted,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			invitation, err := entities.NewInvitation(
+				"tenant-a", "member@example.test", "viewer", 999, 7*24*time.Hour, time.Now())
+			require.NoError(t, err)
+			invitation.Status = tc.status
+
+			userService := new(MockUserServicer)
+			invitationService := new(MockInvitationServicer)
+			svc := NewTenantUserService(&TenantUserServiceConfig{
+				Logger:            logging.DefaultLogger(),
+				UserService:       userService,
+				InvitationService: invitationService,
+				TenantManager:     new(MockTenantManager),
+				TokenIssuer:       new(MockTokenIssuer),
+				IAMMirror:         &fakeIAMMirror{},
+			})
+			userService.On("GetByEmail", ctx, invitation.Email).Return(tc.existing, nil)
+			invitationService.On("GetByToken", ctx, invitation.Token).Return(invitation, nil).Maybe()
+
+			result, err := svc.RegisterInvitedUser(ctx, newTestUser(invitation.Email), invitation.Token)
+			require.ErrorAs(t, err, new(ErrUserAlreadyExists))
+			assert.Nil(t, result)
+			userService.AssertNotCalled(t, "Save", mock.Anything, mock.Anything)
+		})
+	}
+}
+
 // cancelingIAMMirror cancels the request right after its IAM write, and
 // records the context the returned undo runs on: whether it was already
 // canceled and whether it carries a deadline.
@@ -412,15 +587,14 @@ func (c *cancelingIAMMirror) MirrorInvitedUser(
 }
 
 // TestRegisterInvitedUser_RollbackOutlivesACanceledRequest: a request
-// canceled after the IAM write must still undo the mirror and delete the
-// saved user, or the identity, its roles and the user record outlive a
-// failed redemption (#2362).
+// canceled during a failed IAM mirror must still delete the saved user, on a
+// bounded context the cancel does not reach. An Accept failure rolls nothing
+// back (TestRegisterInvitedUser_AcceptFailureKeepsTheSavedUser) (#2362).
 func TestRegisterInvitedUser_RollbackOutlivesACanceledRequest(t *testing.T) {
 	cases := []struct {
 		name      string
 		mirrorErr error
 	}{
-		{"accept refused after the IAM write", nil},
 		{"mirror failed", context.Canceled},
 	}
 	for _, tc := range cases {
@@ -470,12 +644,6 @@ func TestRegisterInvitedUser_RollbackOutlivesACanceledRequest(t *testing.T) {
 			assert.NoError(t, deleteCtxErr,
 				"the saved user is deleted on a context the request's cancel does not reach")
 			assert.True(t, deleteHasDeadline, "the rollback context is bounded")
-			if tc.mirrorErr == nil {
-				require.True(t, mirror.undoRan)
-				assert.NoError(t, mirror.undoCtxErr,
-					"the IAM undo runs on a context the request's cancel does not reach")
-				assert.True(t, mirror.undoHasDeadline)
-			}
 		})
 	}
 }
@@ -497,7 +665,7 @@ func TestRegisterNewUser_RefusedWhileARedemptionOfTheEmailRuns(t *testing.T) {
 	tenantManager.On("DeleteTenant", mock.Anything, mock.Anything).Return(nil)
 	invitationService.On("Accept", ctx, invitation.Token, mock.AnythingOfType("uint64")).
 		Return(ErrInvitationExpired{Token: invitation.Token})
-	userService.On("Delete", mock.Anything, mock.AnythingOfType("uint64")).Return(nil)
+	userService.On("Delete", mock.Anything, mock.AnythingOfType("uint64")).Return(nil).Maybe()
 
 	doneA := make(chan error, 1)
 	go func() {
@@ -516,7 +684,7 @@ func TestRegisterNewUser_RefusedWhileARedemptionOfTheEmailRuns(t *testing.T) {
 	require.ErrorAs(t, errA, new(ErrInvitationExpired))
 	tenantManager.AssertNotCalled(t, "CreateTenant", mock.Anything, mock.Anything)
 	userService.AssertNumberOfCalls(t, "Save", 1)
-	userService.AssertNumberOfCalls(t, "Delete", 1)
+	userService.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
 	assert.Len(t, mirror.calls, 1)
 }
 
