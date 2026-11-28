@@ -15,6 +15,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -163,11 +164,12 @@ func (s *TenantUserService) SetIAMMirror(m IAMUserMirror) {
 // claimRedemption claims the invitation redemption of email. The user ID
 // derives from the email, so a claim held from the first lookup to the
 // return keeps two redemptions of one email from interleaving saves,
-// mirrors, Accepts and rollbacks; the second is refused, so a rollback can
-// only remove what its own redemption wrote (#2362). Both RegisterNewUser
-// and RegisterInvitedUser take it, so a self-registration and a redemption
-// of one email exclude each other too. The claim is in-process: one
-// TenantUserService serves a platformd.
+// mirrors, Accepts and rollbacks; the second is refused (#2362). Both
+// RegisterNewUser and RegisterInvitedUser take it, so a self-registration
+// and a redemption of one email exclude each other too. The claim is
+// in-process and does not span platformd instances: across instances, a
+// redemption whose Accept loses to another one keeps the winner's records
+// (see RegisterInvitedUser).
 func (s *TenantUserService) claimRedemption(email string) (release func(), ok bool) {
 	key := strings.ToLower(strings.TrimSpace(email))
 	s.redeemMu.Lock()
@@ -483,7 +485,8 @@ func (s *TenantUserService) RegisterInvitedUser(
 	// with. A mirror failure deletes the saved user and leaves the
 	// invitation pending so the link can be redeemed again. Accept
 	// rechecks the invitation after the IAM write, so the mirror's undo
-	// is kept: a refusal undoes the IAM write and the saved user.
+	// is kept: a refusal other than AlreadyAccepted undoes the IAM write
+	// and the saved user.
 	var undo func(context.Context) error
 	if s.iamMirror != nil {
 		var err error
@@ -512,9 +515,18 @@ func (s *TenantUserService) RegisterInvitedUser(
 			"email", user.Email,
 			"tenant_id", invitation.TenantID,
 		)
-		// Accept rechecks the invitation after the IAM write: a refusal
-		// (revoked, expired, already accepted, save error) undoes the IAM
-		// write and the saved user, and fails the registration. The
+		// The invitation was pending at the lookup, so AlreadyAccepted means
+		// a concurrent redemption of this email accepted it first, possibly
+		// on another platformd sharing the stores. It saved the same
+		// email-derived user ID and uses this IAM identity: they are its
+		// committed registration, so nothing is rolled back (#2362).
+		var accepted ErrInvitationAlreadyAccepted
+		if errors.As(err, &accepted) {
+			return nil, err
+		}
+		// The remaining refusals (revoked, expired, not found, save error)
+		// leave the invitation unaccepted, so no registration won: they
+		// undo the IAM write and the saved user, and fail the registration. The
 		// compensation runs on rollbackContext, so a request canceled after
 		// the IAM write still undoes it (#2362).
 		rbCtx, cancel := rollbackContext(ctx)
