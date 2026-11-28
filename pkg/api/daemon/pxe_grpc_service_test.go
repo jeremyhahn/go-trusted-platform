@@ -1431,6 +1431,67 @@ func TestPXEGRPCServiceFromConfig_DaemonPXESection(t *testing.T) {
 	})
 }
 
+// A configuration that only tunes one built-in zone carries a partial
+// zones list (an operator override without offsets); the PXE backend
+// builds its plan from the resolved zones, so enabling PXE still starts
+// (#1694, Codex round 17).
+func TestPXEGRPCServiceFromConfig_PartialZoneOverride(t *testing.T) {
+	ctx := context.Background()
+	logger := logging.DefaultLogger()
+
+	partialApp := func(t *testing.T) *app.App {
+		t.Helper()
+		var override zone.ZoneConfig
+		for _, z := range zone.Defaults() {
+			if z.Name == zone.ZoneControlPlane {
+				override = z
+			}
+		}
+		require.Equal(t, zone.ZoneControlPlane, override.Name)
+		// An override, not a full definition: no offset, port classes or
+		// lifecycle role, only the tunable policy fields.
+		override.Offset = 0
+		override.PortClasses = nil
+		override.LifecycleRole = ""
+		return &app.App{SDNConfig: &sdn.Config{
+			Enabled:     true,
+			Environment: &netplan.Environment{ID: 4},
+			Zones:       []zone.ZoneConfig{override},
+		}}
+	}
+	section := func(t *testing.T) *pxe.DaemonConfig {
+		return &pxe.DaemonConfig{
+			Enabled:         true,
+			BridgeName:      "br-pxe",
+			BindHost:        "127.0.0.1",
+			LocalFilesDir:   t.TempDir(),
+			InstallsDir:     t.TempDir(),
+			FirmwareDir:     t.TempDir(),
+			FirmwareOffline: true,
+			BootEntries:     []ipxe.BootEntry{{Name: "test", Description: "Test Entry", Kernel: "http://example.com/kernel"}},
+		}
+	}
+	starts := func(t *testing.T, a *app.App) {
+		t.Helper()
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, a, section(t), pxeTestFlowManager(t, &pxeRecordingPort{}))
+		require.NoError(t, err)
+		resp, err := svc.ListDevices(ctx, &platformv1.ListPXEDevicesRequest{})
+		require.NoError(t, err)
+		assert.Empty(t, resp.GetDevices())
+	}
+
+	t.Run("validated", func(t *testing.T) {
+		a := partialApp(t)
+		require.NoError(t, a.SDNConfig.Validate())
+		require.NotNil(t, a.SDNConfig.Plan())
+		starts(t, a)
+	})
+
+	t.Run("unvalidated", func(t *testing.T) {
+		starts(t, partialApp(t))
+	})
+}
+
 // pxeRecordingPort is an OVS port controller that records the access VLANs
 // the zone flow manager sets.
 type pxeRecordingPort struct {
