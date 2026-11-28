@@ -277,9 +277,36 @@ func (c *Client) ListPorts(ctx context.Context, bridgeName string) ([]*Port, err
 }
 
 // ListPortsStrict lists the ports of a bridge like ListPorts, but fails
-// when any listed port cannot be read.
+// when any listed port cannot be read: its Select fails, finds no row, or
+// the row does not parse. A caller deciding access from the listing must
+// not read a skipped port as "not on the bridge" (#2081 Codex round 8).
 func (c *Client) ListPortsStrict(ctx context.Context, bridgeName string) ([]*Port, error) {
-	return c.ListPorts(ctx, bridgeName)
+	if bridgeName == "" {
+		return nil, ErrInvalidBridgeName
+	}
+
+	bridge, err := c.GetBridge(ctx, bridgeName)
+	if err != nil {
+		return nil, err
+	}
+
+	ports := make([]*Port, 0, len(bridge.Ports))
+	for _, portUUID := range bridge.Ports {
+		rows, err := c.Select(ctx, portTable, []Condition{NewCondition("_uuid", "==", []interface{}{"uuid", portUUID})}, nil)
+		if err != nil {
+			return nil, fmt.Errorf("read port %s of bridge %s: %w", portUUID, bridgeName, err)
+		}
+		if len(rows) == 0 {
+			return nil, fmt.Errorf("read port %s of bridge %s: no port row", portUUID, bridgeName)
+		}
+		port, err := parsePort(rows[0])
+		if err != nil {
+			return nil, fmt.Errorf("parse port %s of bridge %s: %w", portUUID, bridgeName, err)
+		}
+		ports = append(ports, port)
+	}
+
+	return ports, nil
 }
 
 // UpdatePort updates port properties

@@ -33,6 +33,7 @@ type ovsClient interface {
 	SetPortState(ctx context.Context, portName string, state ovs.PortState) error
 	GetOFPort(ctx context.Context, portName string) (int32, error)
 	ListPorts(ctx context.Context, bridgeName string) ([]*ovs.Port, error)
+	ListPortsStrict(ctx context.Context, bridgeName string) ([]*ovs.Port, error)
 }
 
 // OVSFlowController implements FlowController using an OVS client
@@ -292,7 +293,10 @@ func (c *OVSFlowController) PortAccessVLAN(ctx context.Context, bridgeName, port
 		return 0, false, ErrInvalidPortID
 	}
 
-	ports, err := c.client.ListPorts(ctx, bridgeName)
+	// Strict listing: a port whose row could not be read is an error, never
+	// "not found", which callers read as permission to widen (#2081 Codex
+	// round 8).
+	ports, err := c.client.ListPortsStrict(ctx, bridgeName)
 	if err != nil {
 		return 0, false, &WrappedError{Msg: fmt.Sprintf("failed to list ports of bridge %s", bridgeName), Err: err}
 	}

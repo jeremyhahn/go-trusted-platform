@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -126,7 +127,9 @@ type service struct {
 	// refused until a quarantined (or failed) state is stored, because
 	// its durable record still names its earlier, wider placement. The map
 	// does not survive a service recreation: a reloaded service rebuilds an
-	// entry from the port's enforced placement (enforcedQuarantineUnstored).
+	// entry from the port's enforced placement, or from the stored
+	// quarantine intent marker of a device already on the quarantine VLAN
+	// (enforcedQuarantineUnstored).
 	pendingQuarantine map[string]struct{}
 }
 
@@ -181,10 +184,17 @@ func (s *service) refuseIfQuarantinePending(ctx context.Context, device *DeviceI
 	}
 }
 
-// enforcedQuarantineUnstored reports whether device's port is on the
-// quarantine VLAN while its stored record is neither quarantined, failed nor
-// on that VLAN: a quarantine whose state write failed before this service
-// was created. This is the reconciliation after a reload (#2081 Codex round
+// quarantineIntentPrefix starts the StateReason QuarantineDevice stores
+// before it quarantines a device whose record is already on the quarantine
+// VLAN. Any later Transition rewrites StateReason, which clears it.
+const quarantineIntentPrefix = "quarantine requested: "
+
+// enforcedQuarantineUnstored reports whether a quarantine whose state write
+// failed before this service was created is still pending: the stored record
+// is neither quarantined nor failed, and either it is on the quarantine VLAN
+// and carries the quarantineIntentPrefix marker (round 8), or it names
+// another VLAN while the port is on the quarantine VLAN. An unmarked record
+// on the quarantine VLAN is an ordinary new registration. This is the reconciliation after a reload (#2081 Codex round
 // 6). GetCurrentVLAN reads the switch's enforced placement, which survives
 // a daemon restart (round 7). Only ErrDeviceNotFound, no placement known
 // anywhere, lets the move through, and it records no pending entry; any
@@ -193,8 +203,11 @@ func (s *service) enforcedQuarantineUnstored(ctx context.Context, device *Device
 	if s.vlanManager == nil || s.config == nil {
 		return false, nil
 	}
-	if device.State == StateQuarantined || device.State == StateFailed || device.CurrentVLAN == s.config.QuarantineVLAN {
+	if device.State == StateQuarantined || device.State == StateFailed {
 		return false, nil
+	}
+	if device.CurrentVLAN == s.config.QuarantineVLAN {
+		return strings.HasPrefix(device.StateReason, quarantineIntentPrefix), nil
 	}
 	vlan, err := s.vlanManager.GetCurrentVLAN(ctx, device.PortID)
 	if err != nil {
@@ -1083,6 +1096,25 @@ func (s *service) QuarantineDevice(ctx context.Context, deviceID string, reason 
 	}
 
 	oldVLAN := device.CurrentVLAN
+
+	// A device already on the quarantine VLAN (a fresh registration) looks
+	// the same in its record as a requested quarantine whose state write
+	// failed. Store the intent first, so a restarted service still refuses
+	// widening moves until the quarantine is stored. On failure nothing
+	// changed and the device is already on quarantine flows (#2081 Codex
+	// round 8).
+	if s.vlanManager != nil && device.CurrentVLAN == s.config.QuarantineVLAN {
+		if markErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
+			d.StateReason = quarantineIntentPrefix + reason
+			return nil
+		}); markErr != nil {
+			return ErrProvisioningFailed{
+				DeviceID: deviceID,
+				Reason:   "failed to store the quarantine intent",
+				Cause:    markErr,
+			}
+		}
+	}
 
 	if s.vlanManager != nil {
 		if vlanErr := s.vlanManager.ApplyQuarantineFlows(ctx, device.PortID, device.MACAddress); vlanErr != nil {
