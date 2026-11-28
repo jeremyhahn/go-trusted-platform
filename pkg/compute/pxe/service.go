@@ -189,10 +189,31 @@ func (s *service) refuseIfQuarantinePending(ctx context.Context, device *DeviceI
 // VLAN. Any later Transition rewrites StateReason, which clears it.
 const quarantineIntentPrefix = "quarantine requested: "
 
+// storeQuarantineIntent marks the stored record of a device already on the
+// quarantine VLAN with the quarantineIntentPrefix marker before a
+// restrictive move, so a restarted service still sees the requested
+// quarantine if the state write that follows fails. QuarantineDevice and a
+// restrictive UpdateDeviceState (quarantined or failed) both store it; the
+// successful state write rewrites StateReason and clears the marker.
+func (s *service) storeQuarantineIntent(deviceID, reason string) error {
+	if err := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
+		d.StateReason = quarantineIntentPrefix + reason
+		return nil
+	}); err != nil {
+		return ErrProvisioningFailed{
+			DeviceID: deviceID,
+			Reason:   "failed to store the quarantine intent",
+			Cause:    err,
+		}
+	}
+	return nil
+}
+
 // enforcedQuarantineUnstored reports whether a quarantine whose state write
 // failed before this service was created is still pending: the stored record
 // is neither quarantined nor failed, and either it is on the quarantine VLAN
-// and carries the quarantineIntentPrefix marker (round 8), or it names
+// and carries the quarantineIntentPrefix marker (round 8; stored by
+// QuarantineDevice and by a restrictive UpdateDeviceState, round 9), or it names
 // another VLAN while the port is on the quarantine VLAN. An unmarked record
 // on the quarantine VLAN is an ordinary new registration. This is the reconciliation after a reload (#2081 Codex round
 // 6). GetCurrentVLAN reads the switch's enforced placement, which survives
@@ -804,6 +825,19 @@ func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, 
 		}
 	}
 
+	// A fresh registration already on the quarantine VLAN looks the same
+	// in its record as a restrictive update whose state write failed.
+	// Store the intent first, as QuarantineDevice does, so a restarted
+	// service still refuses widening moves until the restrictive state is
+	// stored. On failure nothing changed and the device is already on
+	// quarantine flows (#2081 Codex round 9).
+	if (state == StateQuarantined || state == StateFailed) &&
+		s.vlanManager != nil && device.CurrentVLAN == s.config.QuarantineVLAN {
+		if err := s.storeQuarantineIntent(deviceID, reason); err != nil {
+			return err
+		}
+	}
+
 	// Fail closed: a device whose VLAN move failed keeps its old state,
 	// so a device sent to failed or quarantined is never reported moved
 	// while it keeps its old network access.
@@ -835,7 +869,9 @@ func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, 
 		// failed), whose restrictive flows stay in place. A narrowing move
 		// whose write fails is remembered as a pending quarantine, so a
 		// later widening report is refused until the restrictive state is
-		// stored, as QuarantineDevice does (#2081 Codex round 4).
+		// stored, as QuarantineDevice does (#2081 Codex round 4). On the
+		// quarantine VLAN the durable intent marker stored above also
+		// survives a restart (#2081 Codex round 9).
 		if state != StateQuarantined && state != StateFailed {
 			s.restoreEnforcedFlows(ctx, device)
 		} else if s.vlanManager != nil {
@@ -1104,15 +1140,8 @@ func (s *service) QuarantineDevice(ctx context.Context, deviceID string, reason 
 	// changed and the device is already on quarantine flows (#2081 Codex
 	// round 8).
 	if s.vlanManager != nil && device.CurrentVLAN == s.config.QuarantineVLAN {
-		if markErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
-			d.StateReason = quarantineIntentPrefix + reason
-			return nil
-		}); markErr != nil {
-			return ErrProvisioningFailed{
-				DeviceID: deviceID,
-				Reason:   "failed to store the quarantine intent",
-				Cause:    markErr,
-			}
+		if err := s.storeQuarantineIntent(deviceID, reason); err != nil {
+			return err
 		}
 	}
 
