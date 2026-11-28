@@ -14,6 +14,7 @@ package rest
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -50,11 +51,23 @@ func init() {
 			{placeholder: "{repository}", field: "repository"},
 			{placeholder: "{reference}", field: "reference"},
 		},
+		encodeBody: refuseRegistryInspectDigest,
 	}
 
 	restResponseDecoders[platformv1.RegistryService_List_FullMethodName] = decodeRegistryList
 	restResponseDecoders[platformv1.RegistryService_Status_FullMethodName] = decodeRegistryStatus
 	restResponseDecoders[platformv1.RegistryService_Inspect_FullMethodName] = decodeRegistryInspect
+}
+
+// refuseRegistryInspectDigest refuses an Inspect carrying a Digest: the
+// REST route resolves the reference only, while gRPC gives the digest
+// precedence, so a moved tag would make REST return a different artifact.
+// Any other request goes on unchanged.
+func refuseRegistryInspectDigest(body interface{}) (interface{}, error) {
+	if req, ok := body.(*platformv1.InspectArtifactRequest); ok && req.GetDigest() != "" {
+		return nil, fmt.Errorf("REST Inspect request cannot pin digest %q; it resolves the reference only, use gRPC", req.GetDigest())
+	}
+	return body, nil
 }
 
 // registryTimestamp maps a zero time to an unset timestamp.

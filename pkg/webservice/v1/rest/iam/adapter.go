@@ -127,10 +127,11 @@ func policySubjects(specYAML string) (bool, error) {
 		} `yaml:"spec"`
 		Subjects interface{} `yaml:"subjects"`
 	}
-	// A document that does not unmarshal yields no rules either, so only
-	// the placeholder rule is sent: no selector to lose.
+	// policyYAMLRules decodes a struct without the selector, so its rules
+	// can survive a selector that fails to decode here; refuse the
+	// document rather than create those rules for every subject.
 	if err := yaml.Unmarshal([]byte(specYAML), &doc); err != nil {
-		return false, nil
+		return false, fmt.Errorf("policy subjects could not be decoded: %w", err)
 	}
 	found := false
 	for _, v := range []interface{}{doc.Spec.Subjects, doc.Subjects} {

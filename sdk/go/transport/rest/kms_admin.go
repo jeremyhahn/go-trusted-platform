@@ -99,6 +99,16 @@ func init() {
 func encodeKMSImportKey(req *platformv1.ImportKeyRequest) (map[string]interface{}, error) {
 	body := map[string]interface{}{"name": req.GetName()}
 	spec := req.GetKeySpec()
+	// The import route has no field for these: refuse them rather than
+	// import a key without the requested protection or size.
+	switch {
+	case spec.GetDeletionProtection():
+		return nil, fmt.Errorf("REST ImportKey request cannot carry key_spec.deletion_protection; import the key without it and protect it over gRPC")
+	case spec.GetExportable():
+		return nil, fmt.Errorf("REST ImportKey request cannot carry key_spec.exportable; use gRPC")
+	case spec.GetKeySize() != 0:
+		return nil, fmt.Errorf("REST ImportKey request cannot carry key_spec.key_size (%d); the algorithm fixes the size", spec.GetKeySize())
+	}
 	if alg := spec.GetAlgorithm(); alg != platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED {
 		name, ok := kmsKeyAlgorithmNames[alg]
 		if !ok {
