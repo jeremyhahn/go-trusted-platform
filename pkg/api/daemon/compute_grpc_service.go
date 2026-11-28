@@ -870,6 +870,8 @@ func (s *ComputeGRPCService) vmMigrator() (compute.VMMigrator, error) {
 func migrateVMErrToStatus(err error) error {
 	switch {
 	case errors.Is(err, compute.ErrLiveMigrationRequiresSharedStorage),
+		errors.Is(err, compute.ErrMigrationVTPMUnsupported),
+		errors.Is(err, compute.ErrLiveMigrationDiskLayout),
 		errors.Is(err, compute.ErrMigrationNotConfigured),
 		errors.Is(err, compute.ErrMigrationTLSNotConfigured):
 		return status.Error(codes.FailedPrecondition, err.Error())
@@ -1480,6 +1482,13 @@ func (s *ComputeGRPCService) instanceToVMProto(instance *compute.Instance) *plat
 		vm.Config = &platformv1.VMConfig{
 			Name: instance.Name,
 		}
+	}
+
+	if disks := instanceDisksToProto(instance); len(disks) > 0 {
+		if vm.Config == nil {
+			vm.Config = &platformv1.VMConfig{Name: instance.Name}
+		}
+		vm.Config.Disks = disks
 	}
 
 	return vm

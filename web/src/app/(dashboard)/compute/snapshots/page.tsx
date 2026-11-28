@@ -1,7 +1,8 @@
 'use client';
 
-import { useMemo } from 'react';
-import { Plus, RefreshCw, MoreHorizontal, RotateCcw, Trash2, Copy, Download, AlertCircle, Loader2 } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import Link from 'next/link';
+import { Plus, RefreshCw, RotateCcw, Trash2, AlertCircle, Loader2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Button } from '@/components/ui/button';
 import {
@@ -12,17 +13,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ServiceUnavailableState } from '@/components/features/platform';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Gated } from '@/components/features/capabilities/gated';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useApi, useCompute, useMutation, useToast } from '@/hooks';
 import type { Snapshot, VM } from 'trusted-platform-sdk';
@@ -41,6 +38,11 @@ const sourceTypeColors = {
 export default function SnapshotsPage() {
   const { toast } = useToast();
   const compute = useCompute();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createVmId, setCreateVmId] = useState('');
+  const [createName, setCreateName] = useState('');
+  // The row action waiting for the operator's confirm.
+  const [pending, setPending] = useState<{ kind: 'restore' | 'delete'; snapshot: SnapshotWithSource } | null>(null);
 
   // Fetch all VMs to get their snapshots
   const {
@@ -153,6 +155,46 @@ export default function SnapshotsPage() {
     }
   );
 
+  const resetCreate = () => {
+    setCreateVmId('');
+    setCreateName('');
+  };
+
+  // Create snapshot mutation
+  const createSnapshotMutation = useMutation(
+    // The server refuses unequal memory and disk flags: an internal snapshot
+    // always captures both.
+    async ({ vmId, name }: { vmId: string; name: string }) => {
+      return compute.createSnapshot({ vmId, config: { name: name.trim(), memorySnapshot: true, diskSnapshot: true } });
+    },
+    {
+      onSuccess: () => {
+        toast({
+          title: 'Snapshot created',
+          description: 'The snapshot has been created successfully',
+          variant: 'success',
+        });
+        setCreateOpen(false);
+        resetCreate();
+        refetchSnapshots();
+      },
+      onError: (error) => {
+        toast({
+          title: 'Error creating snapshot',
+          description: error.message,
+          variant: 'destructive',
+        });
+      },
+    }
+  );
+
+  const handleCreate = () => {
+    if (!createVmId || !createName.trim()) {
+      return;
+    }
+    createSnapshotMutation.mutate({ vmId: createVmId, name: createName });
+  };
+
   // Restore snapshot mutation
   const restoreSnapshotMutation = useMutation(
     async ({ vmId, snapshotId }: { vmId: string; snapshotId: string }) => {
@@ -178,32 +220,28 @@ export default function SnapshotsPage() {
   );
 
   const handleRestore = (snapshot: SnapshotWithSource) => {
-    if (window.confirm(`Are you sure you want to restore from snapshot ${snapshot.config?.name || snapshot.id}?`)) {
-      restoreSnapshotMutation.mutate({ vmId: snapshot.vmId, snapshotId: snapshot.id });
-    }
+    setPending({ kind: 'restore', snapshot });
   };
 
   const handleDelete = (snapshot: SnapshotWithSource) => {
-    if (window.confirm(`Are you sure you want to delete snapshot ${snapshot.config?.name || snapshot.id}?`)) {
-      deleteSnapshotMutation.mutate({ vmId: snapshot.vmId, snapshotId: snapshot.id });
+    setPending({ kind: 'delete', snapshot });
+  };
+
+  const confirmPending = () => {
+    if (!pending) {
+      return;
     }
+    const { kind, snapshot } = pending;
+    const target = { vmId: snapshot.vmId, snapshotId: snapshot.id };
+    if (kind === 'restore') {
+      restoreSnapshotMutation.mutate(target);
+    } else {
+      deleteSnapshotMutation.mutate(target);
+    }
+    setPending(null);
   };
 
-  const handleClone = () => {
-    toast({
-      title: 'Feature Not Available',
-      description: 'Snapshot cloning is not yet implemented in the API',
-      variant: 'default',
-    });
-  };
-
-  const handleExport = () => {
-    toast({
-      title: 'Feature Not Available',
-      description: 'Snapshot export is not yet implemented in the API',
-      variant: 'default',
-    });
-  };
+  const pendingName = pending ? pending.snapshot.config?.name || pending.snapshot.id : '';
 
   const handleRefresh = () => {
     refetchVMs();
@@ -283,20 +321,95 @@ export default function SnapshotsPage() {
           <Button variant="outline" size="icon" onClick={handleRefresh} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button
-            onClick={() =>
-              toast({
-                title: 'Feature Not Available',
-                description: 'Create snapshot from this page coming soon. Use VM details page to create snapshots.',
-                variant: 'default',
-              })
-            }
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            Create Snapshot
-          </Button>
+          <Gated op="POST /api/v1/compute/vms/{id}/snapshots">
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Create Snapshot
+            </Button>
+          </Gated>
         </div>
       </div>
+
+      <Dialog
+        open={createOpen}
+        onOpenChange={(open) => {
+          setCreateOpen(open);
+          if (!open) {
+            resetCreate();
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create snapshot</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="create-snapshot-vm">Source VM</Label>
+              <select
+                id="create-snapshot-vm"
+                aria-label="Source VM"
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={createVmId}
+                onChange={(e) => setCreateVmId(e.target.value)}
+              >
+                <option value="">Choose a VM</option>
+                {vms.map((vm: VM) => (
+                  <option key={vm.id} value={vm.id}>
+                    {vm.config?.name || vm.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="create-snapshot-name">Snapshot name</Label>
+              <Input
+                id="create-snapshot-name"
+                aria-label="Snapshot name"
+                value={createName}
+                onChange={(e) => setCreateName(e.target.value)}
+              />
+            </div>
+            <p className="text-sm text-muted-foreground">Snapshots capture memory and disk.</p>
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={handleCreate}
+              disabled={!createVmId || !createName.trim() || createSnapshotMutation.isLoading}
+            >
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={pending !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPending(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{pending?.kind === 'delete' ? 'Delete snapshot?' : 'Restore snapshot?'}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {pending?.kind === 'delete'
+              ? `Snapshot ${pendingName} will be deleted. This cannot be undone.`
+              : `The VM will be restored from snapshot ${pendingName}.`}
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPending(null)}>
+              Cancel
+            </Button>
+            <Button variant={pending?.kind === 'delete' ? 'destructive' : 'default'} onClick={confirmPending}>
+              {pending?.kind === 'delete' ? 'Delete' : 'Restore'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid gap-4 md:grid-cols-3">
         <div className="rounded-lg border border-border bg-card p-6">
@@ -324,7 +437,7 @@ export default function SnapshotsPage() {
           <AlertDescription>
             {vms.length === 0
               ? 'No VMs are currently running. Create a VM first to take snapshots.'
-              : 'No snapshots have been created yet. Navigate to a VM details page to create a snapshot.'}
+              : 'No snapshots have been created yet. Use Create Snapshot to take one.'}
           </AlertDescription>
         </Alert>
       ) : (
@@ -346,7 +459,12 @@ export default function SnapshotsPage() {
                 <TableRow key={`${snapshot.vmId}-${snapshot.id}`}>
                   <TableCell>
                     <div>
-                      <div className="font-medium">{snapshot.config?.name || snapshot.id}</div>
+                      <Link
+                        href={`/compute/snapshots/${encodeURIComponent(snapshot.id)}?vm=${encodeURIComponent(snapshot.vmId)}`}
+                        className="font-medium hover:underline"
+                      >
+                        {snapshot.config?.name || snapshot.id}
+                      </Link>
                       {snapshot.config?.description && (
                         <div className="text-sm text-muted-foreground">{snapshot.config.description}</div>
                       )}
@@ -370,43 +488,33 @@ export default function SnapshotsPage() {
                       : 'Unknown'}
                   </TableCell>
                   <TableCell className="text-right">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
+                    <div className="flex justify-end gap-1">
+                      <Gated op="POST /api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore">
                         <Button
                           variant="ghost"
-                          size="icon"
-                          disabled={
-                            restoreSnapshotMutation.isLoading || deleteSnapshotMutation.isLoading
-                          }
+                          size="sm"
+                          aria-label={`Restore ${snapshot.config?.name || snapshot.id}`}
+                          onClick={() => handleRestore(snapshot)}
+                          disabled={restoreSnapshotMutation.isLoading || deleteSnapshotMutation.isLoading}
                         >
-                          <MoreHorizontal className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => handleRestore(snapshot)}>
                           <RotateCcw className="mr-2 h-4 w-4" />
                           Restore
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleClone()}>
-                          <Copy className="mr-2 h-4 w-4" />
-                          Clone to New Instance
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleExport()}>
-                          <Download className="mr-2 h-4 w-4" />
-                          Export
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          onClick={() => handleDelete(snapshot)}
+                        </Button>
+                      </Gated>
+                      <Gated op="DELETE /api/v1/compute/vms/{id}/snapshots/{snapshotId}">
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           className="text-destructive"
+                          aria-label={`Delete ${snapshot.config?.name || snapshot.id}`}
+                          onClick={() => handleDelete(snapshot)}
+                          disabled={restoreSnapshotMutation.isLoading || deleteSnapshotMutation.isLoading}
                         >
                           <Trash2 className="mr-2 h-4 w-4" />
                           Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                        </Button>
+                      </Gated>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

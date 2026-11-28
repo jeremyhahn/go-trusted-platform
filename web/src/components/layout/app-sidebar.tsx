@@ -139,6 +139,7 @@ const navigation = [
       { title: "Virtual Machines", href: "/compute/vms" },
       { title: "Containers", href: "/compute/containers" },
       { title: "Snapshots", href: "/compute/snapshots" },
+      { title: "Migrations", href: "/compute/migrations" },
       { title: "Images", href: "/compute/images" },
       { title: "Registry", href: "/compute/registry" },
     ],

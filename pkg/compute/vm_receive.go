@@ -16,6 +16,7 @@ package compute
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
@@ -226,6 +227,11 @@ type incomingReceiverParams struct {
 	spec         MigrationSpec
 	credsDir     string
 	listen       netip.AddrPort
+	// lifetime is the context the receiving QEMU runs on. The receiver must
+	// outlive the PrepareMigration request that started it (it waits for the
+	// source and then for FinalizeMigration), so it is never that request's
+	// context.
+	lifetime context.Context
 }
 
 // newIncomingReceiver launches a receiving QEMU. It is a package-level seam so
@@ -244,6 +250,9 @@ var receiverStore sync.Map // *QEMUOrchestrator -> *receiverRegistry
 type receiverRegistry struct {
 	mu        sync.Mutex
 	receivers map[string]*trackedReceiver
+	// base is the orchestrator-owned context every receiver's lifetime derives from.
+	base   context.Context
+	cancel context.CancelFunc
 }
 
 // trackedReceiver pairs a launched receiver with the cleanup that releases its
@@ -257,6 +266,9 @@ type trackedReceiver struct {
 	// endLifetime stops the receiver's lifetime watch once it is finalized
 	// or reaped.
 	endLifetime context.CancelFunc
+	// cancel ends the lifetime the receiving QEMU runs on; an aborted
+	// receiver's is cancelled, an adopted guest's ends at Close.
+	cancel context.CancelFunc
 }
 
 // receiverLifetime bounds idle preparation: how long a prepared receiver waits
@@ -457,6 +469,9 @@ func (o *QEMUOrchestrator) releaseReceiver(receiverID string, tr *trackedReceive
 		tr.endLifetime()
 	}
 	defer tr.cleanup()
+	if tr.cancel != nil {
+		defer tr.cancel()
+	}
 	if err := tr.recv.Abort(context.Background()); err != nil {
 		o.logger.Errorf("Failed to abort migration receiver %s (%s): %v", receiverID, reason, err)
 		return
@@ -502,9 +517,30 @@ func receiversFor(o *QEMUOrchestrator) *receiverRegistry {
 	if v, ok := receiverStore.Load(o); ok {
 		return v.(*receiverRegistry)
 	}
-	reg := &receiverRegistry{receivers: make(map[string]*trackedReceiver)}
-	actual, _ := receiverStore.LoadOrStore(o, reg)
+	base, cancel := context.WithCancel(context.Background())
+	reg := &receiverRegistry{receivers: make(map[string]*trackedReceiver), base: base, cancel: cancel}
+	actual, loaded := receiverStore.LoadOrStore(o, reg)
+	if loaded {
+		cancel()
+	}
 	return actual.(*receiverRegistry)
+}
+
+// reapReceivers aborts every receiver still registered for o and releases its registry.
+func reapReceivers(o *QEMUOrchestrator) {
+	v, ok := receiverStore.LoadAndDelete(o)
+	if !ok {
+		return
+	}
+	reg := v.(*receiverRegistry)
+	reg.mu.Lock()
+	pending := reg.receivers
+	reg.receivers = make(map[string]*trackedReceiver)
+	reg.mu.Unlock()
+	for id, tr := range pending {
+		o.releaseReceiver(id, tr, "orchestrator shutdown")
+	}
+	reg.cancel()
 }
 
 func (r *receiverRegistry) put(id string, tr *trackedReceiver) {
@@ -549,21 +585,24 @@ func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSp
 	if spec.Config == nil {
 		return nil, ErrMigrationSpecRequired
 	}
-
 	// Refuse what the receiver cannot complete before any credential is
-	// issued or QEMU started (#2021 Codex round 2): it creates a fresh disk
-	// (no shared-storage live receive) and provisions no vTPM.
-	if spec.Mode == MigrateModeLive {
-		return nil, ErrLiveMigrationReceiveUnsupported
+	// issued or QEMU started (#2021 Codex round 2). A live receive opens the source's shared image (receiverDisk), so it
+	// needs shared storage here; the receiver provisions no vTPM and does not
+	// restore swtpm state.
+	if spec.Mode == MigrateModeLive && !o.config.SharedStorageEnabled() {
+		return nil, errors.Join(ErrLiveMigrationRequiresSharedStorage, ErrLiveMigrationReceiveUnsupported)
 	}
 	if spec.Config.TPMEnabled {
-		return nil, ErrTPMMigrationReceiveUnsupported
+		return nil, errors.Join(ErrMigrationVTPMUnsupported, ErrTPMMigrationReceiveUnsupported)
 	}
 
 	// The receiver is built from this host's arch profile; refuse a guest it
 	// cannot run before any credential is issued or QEMU started.
 	if source, destination := spec.Arch.OrDefault(), o.config.Arch.OrDefault(); source != destination {
 		return nil, &MigrationArchMismatchError{Source: source, Destination: destination}
+	}
+	if spec.Mode == MigrateModeLive && !o.config.SharedStorageEnabled() {
+		return nil, ErrLiveMigrationRequiresSharedStorage
 	}
 
 	serverTLS, ok := o.config.MigrationTLS.(MigrationServerTLSProvider)
@@ -588,6 +627,8 @@ func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSp
 		return nil, &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "materialize server migration TLS creds", Err: err}}
 	}
 
+	reg := receiversFor(o)
+	lifetime, cancel := context.WithCancel(reg.base)
 	// The receiver lives until FinalizeIncoming commits or aborts it, not until
 	// the prepare request ends: the transfer arrives on a later request, so the
 	// receiving QEMU must not be killed when this request's context is cancelled.
@@ -596,8 +637,10 @@ func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSp
 		spec:         spec,
 		credsDir:     credsDir,
 		listen:       listen,
+		lifetime:     lifetime,
 	})
 	if err != nil {
+		cancel()
 		cleanup()
 		return nil, &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "launch migration receiver", Err: err}}
 	}
@@ -607,7 +650,7 @@ func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSp
 	// FinalizeIncoming or Close takes it first.
 	receiverID := generateInstanceID()
 	ended, endLifetime := context.WithCancel(context.Background())
-	receiversFor(o).put(receiverID, &trackedReceiver{recv: recv, cleanup: cleanup, spec: spec, endLifetime: endLifetime})
+	reg.put(receiverID, &trackedReceiver{recv: recv, cleanup: cleanup, spec: spec, endLifetime: endLifetime, cancel: cancel})
 	go o.watchReceiverLifetime(ended.Done(), receiverID, receiverLifetime)
 
 	// A caller that went away before the reply never gets the receiver token,
@@ -664,6 +707,10 @@ func (o *QEMUOrchestrator) FinalizeIncoming(ctx context.Context, receiverID stri
 		tr.endLifetime()
 	}
 	defer tr.cleanup()
+	// An aborted receiver's lifetime ends with it.
+	if tr.cancel != nil {
+		defer tr.cancel()
+	}
 	if err := tr.recv.Abort(ctx); err != nil {
 		return &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "abort received VM", Err: err}}
 	}
@@ -802,6 +849,37 @@ func (r *qemuIncomingReceiver) ExitErr() error {
 // model matching the source spec, comes up with "-incoming defer" plus the
 // server tls-creds object, then over QMP installs the tls-creds migration
 // parameter and issues migrate-incoming on the configured listen address.
+// receiverDisk picks the image the receiving QEMU runs on and whether it must be created.
+// A live migration runs on the shared image the source left in place. The wire
+// carries no disk path, so the receiver mirrors the source layout
+// (<WorkDir>/<instance id>/disk.qcow2) from its own config and the instance id,
+// and refuses any image it cannot confine to the shared storage mount.
+func receiverDisk(o *QEMUOrchestrator, spec MigrationSpec, workDir string) (string, bool, error) {
+	if spec.Mode != MigrateModeLive {
+		return filepath.Join(workDir, "disk.qcow2"), true, nil
+	}
+	if !o.config.SharedStorageEnabled() {
+		return "", false, ErrLiveMigrationRequiresSharedStorage
+	}
+	id := spec.InstanceID
+	if id == "" || !filepath.IsLocal(id) || filepath.Base(id) != id {
+		return "", false, &WrappedError{Msg: fmt.Sprintf("live migration instance id %q is not a single path element", id), Err: ErrMigrationSpecRequired}
+	}
+	mount := o.config.SharedStorage.MountPath
+	if o.config.WorkDir == "" || mount == "" {
+		return "", false, &WrappedError{Msg: "live migration needs a work dir and a shared storage mount path", Err: ErrMigrationSpecRequired}
+	}
+	disk := filepath.Join(o.config.WorkDir, id, "disk.qcow2")
+	rel, err := filepath.Rel(filepath.Clean(mount), disk)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", false, fmt.Errorf("shared disk image %s is outside the shared storage mount %s", disk, mount)
+	}
+	if _, err := os.Stat(disk); err != nil {
+		return "", false, &WrappedError{Msg: "open shared disk image", Err: err}
+	}
+	return disk, false, nil
+}
+
 func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
 	o := p.orchestrator
 
@@ -837,7 +915,11 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 	}
 
 	qcfg := o.config.qemuBase()
-	qcfg.DiskPath = filepath.Join(workDir, "disk.qcow2")
+	diskPath, createDisk, err := receiverDisk(o, p.spec, workDir)
+	if err != nil {
+		return nil, err
+	}
+	qcfg.DiskPath = diskPath
 	qcfg.DiskSize = diskSize
 	qcfg.Memory = memory
 	qcfg.CPUs = cpus
@@ -852,11 +934,11 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 		return nil, &WrappedError{Msg: "create receiver VM", Err: err}
 	}
 
-	// A cold migration streams block devices into a fresh image; a live
-	// migration reuses the shared backing store. Either way the destination
-	// needs the disk file present before QEMU opens it.
-	if err := vm.CreateDisk(); err != nil {
-		return nil, &WrappedError{Msg: "create receiver disk", Err: err}
+	// A cold migration streams block devices into a fresh image; a live migration opens the shared one.
+	if createDisk {
+		if err := vm.CreateDisk(); err != nil {
+			return nil, &WrappedError{Msg: "create receiver disk", Err: err}
+		}
 	}
 
 	port, err := receiverPort(p.listen)
@@ -864,7 +946,11 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 		return nil, &WrappedError{Msg: "allocate receiver port", Err: err}
 	}
 
-	credsID, err := vm.StartIncoming(ctx, p.credsDir)
+	lifetime := p.lifetime
+	if lifetime == nil {
+		lifetime = context.WithoutCancel(ctx)
+	}
+	credsID, err := vm.StartIncoming(lifetime, p.credsDir)
 	if err != nil {
 		return nil, &WrappedError{Msg: "start receiver QEMU", Err: err}
 	}

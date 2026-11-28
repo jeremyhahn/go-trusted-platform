@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import Link from 'next/link';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import {
@@ -8,9 +9,7 @@ import {
   Play,
   Square,
   RotateCw,
-  Copy,
   Trash2,
-  Camera,
   RefreshCw,
   Pause,
 } from 'lucide-react';
@@ -26,10 +25,17 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import type { Snapshot, VM } from 'trusted-platform-sdk';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { VMMetricsCard } from '@/components/features/compute/vm-metrics';
+import { VMDisksCard } from '@/components/features/compute/vm-disks-card';
+import { VMAttestCard } from '@/components/features/compute/vm-attest-card';
+import { Gated } from '@/components/features/capabilities/gated';
+import { VMMigrateButton } from '@/components/features/compute/vm-migrate-dialog';
 import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
-import type { VMDetail } from '@/types/infrastructure';
 import { vmStatus } from '@/lib/compute-state';
+import { isServiceNotConfigured } from 'trusted-platform-sdk';
+import { ServiceUnavailableState } from '@/components/features/platform';
 
 const statusColors = {
   running: 'bg-green-500/10 text-green-500 border-green-500/20',
@@ -43,44 +49,96 @@ export default function VMDetailPage() {
   const pathname = usePathname();
   const router = useRouter();
   const vmId = resolveDynamicId(params, pathname, 'vms');
-  const [vm, setVM] = useState<VMDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [vm, setVM] = useState<(VM & { status: ReturnType<typeof vmStatus> }) | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Set when the server answers that compute is not configured on this node:
+  // the page shows the unavailable state and stops polling GetVM.
+  const [computeUnavailable, setComputeUnavailable] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const vmReadInFlight = useRef(false);
+  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const [snapshotsError, setSnapshotsError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const compute = useCompute();
   const { toast } = useToast();
 
+  const loadErrorText = (err: unknown): string => {
+    if (typeof err === 'string') return err;
+    if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string') {
+      return err.message;
+    }
+    return 'the control plane refused the request';
+  };
+
+  const stopPolling = () => {
+    if (pollRef.current !== null) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  const markComputeUnavailable = () => {
+    stopPolling();
+    setComputeUnavailable(true);
+  };
+
   const fetchVM = async () => {
     if (!vmId) {
-      setLoading(false);
+      setLoadError('No VM ID in the address');
       return;
     }
+    vmReadInFlight.current = true;
     try {
-      setLoading(true);
       const response = await compute.getVM(vmId);
-      if (response.success && response.data) {
-        // SDK returns { vm: VM }, but we need VMDetail
-        // For now, cast to VMDetail - proper type mapping would be handled by backend
-        setVM({
-          ...(response.data.vm as unknown as VMDetail),
-          status: vmStatus(response.data.vm.state),
-        });
+      if (response.success === false && isServiceNotConfigured(response.error)) {
+        markComputeUnavailable();
+        return;
       }
+      if (response.success === false || !response.data?.vm) {
+        setLoadError(loadErrorText(response.error ?? 'the control plane returned no VM'));
+        return;
+      }
+      const loaded: VM = response.data.vm;
+      // The server reports a suspended VM as VM_STATE_PAUSED (#2044).
+      const status = vmStatus(loaded.state);
+      setVM({ ...loaded, status: (status as string) === 'paused' ? 'suspended' : status });
+      setLoadError(null);
     } catch (error) {
-      toast({
-        title: 'Error',
-        description: `Failed to fetch VM details: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        variant: 'destructive',
-      });
+      if (isServiceNotConfigured(error)) {
+        markComputeUnavailable();
+        return;
+      }
+      setLoadError(loadErrorText(error));
     } finally {
-      setLoading(false);
+      vmReadInFlight.current = false;
+    }
+  };
+
+  const fetchSnapshots = async () => {
+    if (!vmId) return;
+    try {
+      const response = await compute.listSnapshots(vmId);
+      if (response.success === false) {
+        setSnapshotsError(loadErrorText(response.error));
+        return;
+      }
+      setSnapshots(response.data?.snapshots ?? []);
+      setSnapshotsError(null);
+    } catch (error) {
+      setSnapshotsError(loadErrorText(error));
     }
   };
 
   useEffect(() => {
     fetchVM();
+    fetchSnapshots();
     if (!vmId) return;
-    const interval = setInterval(fetchVM, 5000);
-    return () => clearInterval(interval);
+    // A poll tick never stacks a read on one still in flight (the SDK retries
+    // a 503 for 7 s), so a not-configured answer ends every read at once.
+    pollRef.current = setInterval(() => {
+      if (!vmReadInFlight.current) fetchVM();
+    }, 5000);
+    return stopPolling;
   }, [vmId]);
 
   const startVMMutation = useMutation(
@@ -149,14 +207,17 @@ export default function VMDetailPage() {
     }
   );
 
-  // TODO: Suspend/Resume functionality not available in SDK yet
-  // SDK only provides start/stop/reboot operations
-  // Placeholder mutations for future implementation
   const suspendVMMutation = useMutation(
-    async (vmId: string) => {
-      throw new Error('Suspend operation not yet implemented in SDK');
-    },
+    (vmId: string) => compute.suspendVM(vmId),
     {
+      onSuccess: () => {
+        toast({
+          title: 'Success',
+          description: 'VM suspended',
+        });
+        setActionLoading(false);
+        fetchVM();
+      },
       onError: (error: MutationError) => {
         toast({
           title: 'Error',
@@ -169,10 +230,16 @@ export default function VMDetailPage() {
   );
 
   const resumeVMMutation = useMutation(
-    async (vmId: string) => {
-      throw new Error('Resume operation not yet implemented in SDK');
-    },
+    (vmId: string) => compute.resumeVM(vmId),
     {
+      onSuccess: () => {
+        toast({
+          title: 'Success',
+          description: 'VM resumed',
+        });
+        setActionLoading(false);
+        fetchVM();
+      },
       onError: (error: MutationError) => {
         toast({
           title: 'Error',
@@ -198,24 +265,6 @@ export default function VMDetailPage() {
         toast({
           title: 'Error',
           description: `Failed to delete VM: ${error.message}`,
-          variant: 'destructive',
-        });
-        setActionLoading(false);
-      },
-    }
-  );
-
-  // TODO: Clone functionality not available in SDK yet
-  // This would require VM snapshot + restore to new VM functionality
-  const cloneVMMutation = useMutation(
-    async ({ vmId, name }: { vmId: string; name: string }) => {
-      throw new Error('Clone operation not yet implemented in SDK');
-    },
-    {
-      onError: (error: MutationError) => {
-        toast({
-          title: 'Error',
-          description: `Failed to clone VM: ${error.message}`,
           variant: 'destructive',
         });
         setActionLoading(false);
@@ -253,15 +302,36 @@ export default function VMDetailPage() {
     deleteVMMutation.mutate(vmId);
   };
 
-  const handleClone = () => {
-    const name = prompt('Enter name for cloned VM:');
-    if (!name) return;
 
-    setActionLoading(true);
-    cloneVMMutation.mutate({ vmId: vmId, name });
-  };
+  if (computeUnavailable) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" size="icon" onClick={() => router.back()}>
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div>
+            <h1 className="text-3xl font-bold">{vmId}</h1>
+            <p className="text-muted-foreground mt-1">Virtual Machine Details</p>
+          </div>
+        </div>
+        <ServiceUnavailableState
+          service="Compute"
+          description="The compute service is not configured on this node. In this topology, VMs and containers run on compute nodes; this node does not host workloads."
+        />
+      </div>
+    );
+  }
 
-  if (loading || !vm) {
+  if (!vm && loadError) {
+    return (
+      <Alert variant="destructive" data-testid="vm-detail-error">
+        <AlertDescription>Could not load the VM: {loadError}</AlertDescription>
+      </Alert>
+    );
+  }
+
+  if (!vm) {
     return (
       <div className="flex items-center justify-center h-64">
         <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -269,8 +339,9 @@ export default function VMDetailPage() {
     );
   }
 
-  const formatMemory = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
-  const formatStorage = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
+  const vmName = vm.config?.name || vm.id;
+  const disks = vm.config?.disks ?? [];
+  const snapshotName = (s: Snapshot) => s.config?.name || (s as Snapshot & { name?: string }).name || s.id;
 
   return (
     <div className="space-y-6">
@@ -280,71 +351,95 @@ export default function VMDetailPage() {
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div>
-            <h1 className="text-3xl font-bold">{vm.name}</h1>
+            <h1 className="text-3xl font-bold">{vmName}</h1>
             <p className="text-muted-foreground mt-1">Virtual Machine Details</p>
           </div>
         </div>
         <div className="flex gap-2">
           {vm.status !== 'running' && (
-            <Button
-              variant="outline"
-              onClick={handleStart}
-              disabled={actionLoading}
-            >
-              <Play className="mr-2 h-4 w-4" />
-              Start
-            </Button>
+            <Gated op="POST /api/v1/compute/vms/{id}/start">
+              <Button
+                variant="outline"
+                onClick={handleStart}
+                disabled={actionLoading}
+              >
+                <Play className="mr-2 h-4 w-4" />
+                Start
+              </Button>
+            </Gated>
           )}
           {vm.status === 'running' && (
             <>
-              <Button
-                variant="outline"
-                onClick={handleStop}
+              <Gated op="POST /api/v1/compute/vms/{id}/stop">
+                <Button
+                  variant="outline"
+                  onClick={handleStop}
+                  disabled={actionLoading}
+                >
+                  <Square className="mr-2 h-4 w-4" />
+                  Stop
+                </Button>
+              </Gated>
+              <Gated op="POST /api/v1/compute/vms/{id}/suspend">
+                <Button
+                  variant="outline"
+                  onClick={handleSuspend}
+                  disabled={actionLoading}
+                >
+                  <Pause className="mr-2 h-4 w-4" />
+                  Suspend
+                </Button>
+              </Gated>
+              <Gated op="POST /api/v1/compute/vms/{id}/reboot">
+                <Button
+                  variant="outline"
+                  onClick={handleReboot}
+                  disabled={actionLoading}
+                >
+                  <RotateCw className="mr-2 h-4 w-4" />
+                  Reboot
+                </Button>
+              </Gated>
+              <VMMigrateButton
+                vmId={vmId}
                 disabled={actionLoading}
-              >
-                <Square className="mr-2 h-4 w-4" />
-                Stop
-              </Button>
-              <Button
-                variant="outline"
-                onClick={handleSuspend}
-                disabled={actionLoading}
-              >
-                <Pause className="mr-2 h-4 w-4" />
-                Suspend
-              </Button>
-              <Button
-                variant="outline"
-                onClick={handleReboot}
-                disabled={actionLoading}
-              >
-                <RotateCw className="mr-2 h-4 w-4" />
-                Reboot
-              </Button>
+                // Fail closed: an unknown TPM state counts as a vTPM, which
+                // the server refuses to migrate (ErrMigrationVTPMUnsupported).
+                unsupportedReason={
+                  vm.config?.tpm?.enabled === false
+                    ? undefined
+                    : 'Live migration of a guest with a vTPM is not supported'
+                }
+                onMigrated={() => {
+                  // MigrateVM removed the source instance: leave its page.
+                  stopPolling();
+                  router.push('/compute/vms');
+                }}
+              />
             </>
           )}
           {vm.status === 'suspended' && (
+            <Gated op="POST /api/v1/compute/vms/{id}/resume">
+              <Button
+                variant="outline"
+                onClick={handleResume}
+                disabled={actionLoading}
+              >
+                <Play className="mr-2 h-4 w-4" />
+                Resume
+              </Button>
+            </Gated>
+          )}
+          <Gated op="DELETE /api/v1/compute/vms/{id}">
             <Button
-              variant="outline"
-              onClick={handleResume}
+              variant="destructive"
+              onClick={handleDelete}
               disabled={actionLoading}
             >
-              <Play className="mr-2 h-4 w-4" />
-              Resume
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete
             </Button>
-          )}
-          <Button variant="outline" onClick={handleClone} disabled={actionLoading}>
-            <Copy className="mr-2 h-4 w-4" />
-            Clone
-          </Button>
-          <Button
-            variant="destructive"
-            onClick={handleDelete}
-            disabled={actionLoading}
-          >
-            <Trash2 className="mr-2 h-4 w-4" />
-            Delete
-          </Button>
+          </Gated>
         </div>
       </div>
 
@@ -353,57 +448,87 @@ export default function VMDetailPage() {
           <CardHeader>
             <CardTitle>VM Information</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4" data-testid="vm-info">
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Status</span>
-              <Badge variant="outline" className={statusColors[vm.status]}>
+              <Badge variant="outline" className={statusColors[vm.status as keyof typeof statusColors]}>
                 {vm.status}
               </Badge>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">vCPUs</span>
-              <span className="font-medium">{vm.vcpus}</span>
+              <span className="text-muted-foreground">CPU</span>
+              <span className="font-medium">
+                {vm.config?.cpu?.cores != null ? `${vm.config.cpu.cores} vCPUs` : '-'}
+              </span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Memory</span>
-              <span className="font-medium">{formatMemory(vm.memoryMB)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Storage</span>
-              <span className="font-medium">{formatStorage(vm.storageMB)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">IP Address</span>
-              <span className="font-mono text-sm">{vm.ipAddress || '-'}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">OS Type</span>
-              <span className="font-medium capitalize">{vm.osType}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Created</span>
               <span className="font-medium">
-                {formatDistanceToNow(new Date(vm.createdAt), { addSuffix: true })}
+                {vm.config?.memory?.sizeMb != null ? `${vm.config.memory.sizeMb} MB` : '-'}
               </span>
             </div>
+            <div className="flex items-start justify-between gap-4">
+              <span className="text-muted-foreground">Disks</span>
+              <span className="text-right font-mono text-sm">
+                {disks.length === 0
+                  ? '-'
+                  : disks.map((d) => (
+                      <span key={d.id ?? d.path} className="block">
+                        {d.path}
+                        {d.sizeGb != null ? ` (${Number(d.sizeGb)} GB)` : ''}
+                      </span>
+                    ))}
+              </span>
+            </div>
+            {vm.hostId && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Host</span>
+                <span className="font-mono text-sm">{vm.hostId}</span>
+              </div>
+            )}
+            {vm.createdAt && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Created</span>
+                <span className="font-medium">
+                  {formatDistanceToNow(new Date(vm.createdAt), { addSuffix: true })}
+                </span>
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        <VMMetricsCard metrics={vm.metrics} />
+        <VMMetricsCard vmId={vmId} />
       </div>
+
+      <VMAttestCard vmId={vmId} />
+
+      <VMDisksCard
+        vmId={vmId}
+        disks={disks.map((d) => ({
+          id: d.id ?? d.path,
+          path: d.path,
+          // protojson sends the uint64 sizeGb as a string ("20").
+          sizeMB: Number(d.sizeGb ?? 0) * 1024,
+          // The SDK DiskType is the image format (raw, qcow2, ...); config disks are never CD-ROMs.
+          type: 'disk' as const,
+          readonly: Boolean(d.readonly),
+          // The server lists the boot disk first under bootDiskID "hd0"
+          // (compute_grpc_vm_disks.go) and refuses to detach it.
+          boot: d.id === 'hd0',
+        }))}
+        onChanged={fetchVM}
+      />
 
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle>Snapshots</CardTitle>
-            <Button size="sm">
-              <Camera className="mr-2 h-4 w-4" />
-              Create Snapshot
-            </Button>
-          </div>
+          <CardTitle>Snapshots</CardTitle>
         </CardHeader>
         <CardContent>
-          {vm.snapshots.length === 0 ? (
+          {snapshotsError ? (
+            <p className="text-center text-muted-foreground py-8" data-testid="vm-snapshots-error">
+              Could not list snapshots: {snapshotsError}
+            </p>
+          ) : snapshots.length === 0 ? (
             <p className="text-center text-muted-foreground py-8">No snapshots</p>
           ) : (
             <Table>
@@ -412,23 +537,26 @@ export default function VMDetailPage() {
                   <TableHead>Name</TableHead>
                   <TableHead>Size</TableHead>
                   <TableHead>Created</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {vm.snapshots.map((snapshot) => (
+                {snapshots.map((snapshot) => (
                   <TableRow key={snapshot.id}>
-                    <TableCell className="font-medium">{snapshot.name}</TableCell>
-                    <TableCell>{formatStorage(snapshot.sizeMB)}</TableCell>
-                    <TableCell>
-                      {formatDistanceToNow(new Date(snapshot.createdAt), {
-                        addSuffix: true,
-                      })}
+                    <TableCell className="font-medium">
+                      <Link
+                        href={`/compute/snapshots/${encodeURIComponent(snapshot.id)}?vm=${encodeURIComponent(vmId)}`}
+                        className="hover:underline"
+                      >
+                        {snapshotName(snapshot)}
+                      </Link>
                     </TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="ghost" size="sm">
-                        Restore
-                      </Button>
+                    <TableCell>
+                      {snapshot.sizeBytes != null ? formatStorage(Math.round(snapshot.sizeBytes / (1024 * 1024))) : '-'}
+                    </TableCell>
+                    <TableCell>
+                      {snapshot.createdAt
+                        ? formatDistanceToNow(new Date(snapshot.createdAt), { addSuffix: true })
+                        : '-'}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -439,4 +567,8 @@ export default function VMDetailPage() {
       </Card>
     </div>
   );
+}
+
+function formatStorage(mb: number): string {
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
 }

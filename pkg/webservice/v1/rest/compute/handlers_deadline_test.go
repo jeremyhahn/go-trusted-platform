@@ -49,7 +49,7 @@ func (lifecycleComputeServer) RebootVM(context.Context, *platformv1.RebootVMRequ
 }
 
 func (lifecycleComputeServer) MigrateVM(context.Context, *platformv1.MigrateVMRequest) (*platformv1.MigrateVMResponse, error) {
-	return &platformv1.MigrateVMResponse{}, nil
+	return &platformv1.MigrateVMResponse{Status: &platformv1.Status{Success: true}}, nil
 }
 
 // serveWithExpiredWriteDeadline serves the compute routes from a server whose
@@ -91,6 +91,20 @@ func TestComputeHandlers_LongRoutesOutliveTheWriteTimeout(t *testing.T) {
 			assert.Equal(t, http.StatusOK, resp.StatusCode, string(reply))
 		})
 	}
+}
+
+// TestComputeHandlers_MigrateOutlivesTheWriteTimeout pins that a migration,
+// which copies the guest's memory and disks, still answers its client after
+// the server's write timeout has passed.
+func TestComputeHandlers_MigrateOutlivesTheWriteTimeout(t *testing.T) {
+	server := serveWithExpiredWriteDeadline(t)
+
+	resp, err := postLifecycle(server, "migrate", `{"destinationHost":"destination.example.test"}`)
+	require.NoError(t, err, "the reply must reach the client after the write timeout")
+	defer resp.Body.Close()
+	reply, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, string(reply))
 }
 
 // A route that does not wait on the guest keeps the server's write timeout,

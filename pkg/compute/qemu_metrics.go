@@ -257,8 +257,15 @@ func readCounterFile(path string) (uint64, error) {
 }
 
 // defaultVMBlockStatsFor connects the instance's QMP monitor (reusing an
-// existing connection) and returns the block I/O counters.
+// existing connection) and returns the block I/O counters. An instance with no
+// QEMU handle (an adopted migration guest) reports ErrVMMetricsUnavailable.
 func defaultVMBlockStatsFor(ctx context.Context, o *QEMUOrchestrator, inst *qemuInstance) ([]qemu.BlockStat, error) {
+	if inst == nil || inst.vm == nil {
+		return nil, &SentinelCauseError{
+			Sentinel: ErrVMMetricsUnavailable,
+			Cause:    &MessageError{Msg: "instance has no QEMU handle"},
+		}
+	}
 	mon := inst.vm.Monitor()
 	if mon == nil || !mon.IsConnected() {
 		if err := inst.vm.ConnectMonitor(ctx); err != nil {

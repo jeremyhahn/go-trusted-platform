@@ -19,8 +19,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -913,8 +915,10 @@ func (o *QEMUOrchestrator) List(ctx context.Context, filter *InstanceFilter) ([]
 	result := make([]*Instance, 0, len(o.instances))
 
 	for _, qemuInst := range o.instances {
+		// Copy under the instance lock: disk and network operations change
+		// the record once the lock is released.
 		qemuInst.mu.Lock()
-		instance := qemuInst.instance
+		instance := cloneInstance(qemuInst.instance)
 		qemuInst.mu.Unlock()
 
 		// Apply filter if provided
@@ -922,9 +926,7 @@ func (o *QEMUOrchestrator) List(ctx context.Context, filter *InstanceFilter) ([]
 			continue
 		}
 
-		// Create a copy to avoid external modifications
-		instanceCopy := *instance
-		result = append(result, &instanceCopy)
+		result = append(result, instance)
 	}
 
 	return result, nil
@@ -947,9 +949,33 @@ func (o *QEMUOrchestrator) Get(ctx context.Context, instanceID string) (*Instanc
 	qemuInst.mu.Lock()
 	defer qemuInst.mu.Unlock()
 
-	// Return a copy
-	instanceCopy := *qemuInst.instance
-	return &instanceCopy, nil
+	return cloneInstance(qemuInst.instance), nil
+}
+
+// cloneInstance returns a deep copy of in that shares no slice, map or
+// pointer with it, so a caller can read it after the instance lock is
+// released while disk and network operations change the live record.
+func cloneInstance(in *Instance) *Instance {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Disks = slices.Clone(in.Disks)
+	out.NetworkAttachments = slices.Clone(in.NetworkAttachments)
+	out.Metadata = maps.Clone(in.Metadata)
+	if in.Profile != nil {
+		profile := *in.Profile
+		out.Profile = &profile
+	}
+	if in.Config != nil {
+		cfg := *in.Config
+		cfg.AdditionalDisks = slices.Clone(in.Config.AdditionalDisks)
+		cfg.Environment = maps.Clone(in.Config.Environment)
+		cfg.Labels = maps.Clone(in.Config.Labels)
+		cfg.Metadata = maps.Clone(in.Config.Metadata)
+		out.Config = &cfg
+	}
+	return &out
 }
 
 // AttachNetwork attaches a VM instance to an OVS network port
@@ -1217,8 +1243,23 @@ func (o *QEMUOrchestrator) GetState(ctx context.Context, instanceID string) (Ins
 	return o.lifecycle.GetState(instanceID)
 }
 
+// closeStopGuest stops a running guest's QEMU gracefully (ACPI power
+// button, then SIGTERM) while Close shuts the orchestrator down, and reports
+// whether the guest was running. Tests swap it to observe the stop.
+var closeStopGuest = func(vm *qemu.VM) (bool, error) {
+	if vm == nil || !vm.IsRunning() {
+		return false, nil
+	}
+	return true, vm.Stop()
+}
+
 // Close closes the orchestrator and releases resources
 func (o *QEMUOrchestrator) Close() error {
+	// Adopted (migrated-in) guests run under the receiver registry's
+	// lifetime context: stop every guest gracefully first, then reap the
+	// pending receivers and cancel that context.
+	defer reapReceivers(o)
+
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
@@ -1229,12 +1270,11 @@ func (o *QEMUOrchestrator) Close() error {
 	for instanceID, qemuInst := range o.instances {
 		o.closeConsole(instanceID)
 		// An adopted migrated guest may carry no VM handle; it counts as not
-		// running.
-		if qemuInst.vm != nil && qemuInst.vm.IsRunning() {
-			o.logger.Infof("Stopping instance %s during shutdown", instanceID)
-			if err := qemuInst.vm.Stop(); err != nil {
-				o.logger.Errorf("Failed to stop instance %s: %v", instanceID, err)
-			}
+		// running (closeStopGuest treats a nil VM as stopped).
+		if stopped, err := closeStopGuest(qemuInst.vm); err != nil {
+			o.logger.Errorf("Failed to stop instance %s: %v", instanceID, err)
+		} else if stopped {
+			o.logger.Infof("Stopped instance %s during shutdown", instanceID)
 		}
 		// Stop swtpm if running
 		if qemuInst.swtpm != nil && qemuInst.swtpm.IsRunning() {

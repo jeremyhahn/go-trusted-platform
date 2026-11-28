@@ -253,6 +253,69 @@ func awaitSignal(t *testing.T, c <-chan struct{}, what string) {
 	}
 }
 
+// TestReceiveIncoming_ReceiverOutlivesTheRequestContext pins that the
+// receiving QEMU is launched on a lifetime the PrepareMigration request does
+// not cancel: the receiver must stay up until FinalizeMigration.
+func TestReceiveIncoming_ReceiverOutlivesTheRequestContext(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := &fakeServerTLS{dir: t.TempDir()}
+	orch.config.MigrationTLS = tlsProv
+
+	recv := &fakeIncomingReceiver{port: 49200}
+	var gotParams *incomingReceiverParams
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		gotParams = p
+		return recv, nil
+	})
+
+	spec := MigrationSpec{
+		Arch:       orch.config.Arch,
+		InstanceID: "vm1",
+		VMName:     "guest",
+		Mode:       MigrateModeCold,
+		Config:     &InstanceConfig{Memory: 2048, CPUs: 2, DiskSize: "20G"},
+	}
+	handle, err := orch.ReceiveIncoming(context.Background(), spec)
+	require.NoError(t, err)
+
+	require.NotNil(t, gotParams)
+	require.NotNil(t, gotParams.lifetime)
+	assert.NoError(t, gotParams.lifetime.Err(), "the receiver QEMU must not die with the PrepareMigration request")
+
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, false))
+	assert.Error(t, gotParams.lifetime.Err(), "an aborted receiver's lifetime is cancelled")
+}
+
+func TestQEMUOrchestrator_CloseAbortsPreparedReceivers(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := &fakeServerTLS{dir: t.TempDir()}
+	orch.config.MigrationTLS = tlsProv
+
+	recv := &fakeIncomingReceiver{port: 49201}
+	var gotParams *incomingReceiverParams
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		gotParams = p
+		return recv, nil
+	})
+
+	handle, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:       orch.config.Arch,
+		InstanceID: "vm1",
+		VMName:     "guest",
+		Mode:       MigrateModeCold,
+		Config:     &InstanceConfig{Memory: 2048, CPUs: 2, DiskSize: "20G"},
+	})
+	require.NoError(t, err)
+
+	orch.Close()
+
+	assert.True(t, recv.aborted, "Close aborts a prepared receiver")
+	assert.True(t, tlsProv.cleanedUp, "Close releases the receiver's creds")
+	require.NotNil(t, gotParams)
+	assert.Error(t, gotParams.lifetime.Err(), "Close cancels the receiver's lifetime")
+	require.ErrorIs(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true), ErrReceiverNotFound)
+}
+
 func TestReceiveIncoming_UnfinalizedReceiverExpires(t *testing.T) {
 	swapReceiverLifetime(t, 20*time.Millisecond)
 	orch := newOpsOrchestrator(t)
@@ -762,6 +825,27 @@ func TestReceiveIncoming_MissingSpecConfig(t *testing.T) {
 	require.ErrorIs(t, err, ErrMigrationSpecRequired)
 }
 
+func TestReceiveIncoming_RefusesAVTPMGuest(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
+
+	launched := 0
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		launched++
+		return &fakeIncomingReceiver{port: 5002}, nil
+	})
+
+	_, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Mode:   MigrateModeCold,
+		Config: &InstanceConfig{Memory: 1024, TPMEnabled: true},
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrMigrationVTPMUnsupported)
+	assert.Zero(t, launched, "no receiver is launched for a vTPM guest")
+}
+
 func TestReceiveIncoming_AcceptsTheSourceGuestArch(t *testing.T) {
 	orch := newOpsOrchestrator(t)
 	orch.config.Arch = qemu.ArchAArch64
@@ -949,6 +1033,206 @@ func TestFinalizeIncoming_Commit(t *testing.T) {
 	// The receiver is consumed; a second finalize reports not-found.
 	err = orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true)
 	require.ErrorIs(t, err, ErrReceiverNotFound)
+}
+
+// commitReceivedGuest prepares a receiver for spec with a fake launcher and commits it.
+func commitReceivedGuest(t *testing.T, orch *QEMUOrchestrator, spec MigrationSpec) *fakeIncomingReceiver {
+	t.Helper()
+	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
+	recv := &fakeIncomingReceiver{port: 5001, vm: startReceivedVM(t, orch)}
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+	spec.Arch = orch.config.Arch
+	handle, err := orch.ReceiveIncoming(context.Background(), spec)
+	require.NoError(t, err)
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true))
+	return recv
+}
+
+func TestFinalizeIncoming_CommitRegistersTheReceivedGuest(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	ctx := context.Background()
+	recv := commitReceivedGuest(t, orch, MigrationSpec{
+		InstanceID: "vm1",
+		VMName:     "guest",
+		Mode:       MigrateModeCold,
+		Config:     &InstanceConfig{Memory: 1024, CPUs: 1},
+	})
+	assert.False(t, recv.aborted)
+	qcfg := recv.vm.GetConfig()
+
+	inst, err := orch.Get(ctx, "vm1")
+	require.NoError(t, err)
+	assert.Equal(t, "guest", inst.Name)
+	assert.Equal(t, ComputeTypeVM, inst.Type)
+	assert.Equal(t, StateRunning, inst.State)
+	require.NotNil(t, inst.Config)
+	assert.Equal(t, qcfg.WorkDir, inst.Config.WorkDir)
+	assert.Equal(t, qcfg.DiskPath, inst.Config.DiskPath)
+	assert.Equal(t, recv.vm.GetPID(), inst.PID, "the adopted guest carries the receiving QEMU's PID")
+
+	_, err = orch.GetVMMetrics(ctx, "vm1")
+	if err != nil {
+		assert.NotContains(t, err.Error(), "VM has no process ID")
+	}
+
+	state, err := orch.GetState(ctx, "vm1")
+	require.NoError(t, err)
+	assert.Equal(t, StateRunning, state)
+
+	list, err := orch.List(ctx, nil)
+	require.NoError(t, err)
+	ids := make([]string, 0, len(list))
+	for _, i := range list {
+		ids = append(ids, i.ID)
+	}
+	assert.Contains(t, ids, "vm1")
+}
+
+func TestFinalizeIncoming_CommitKeepsAnExistingInstance(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	ctx := context.Background()
+	existing := insertVMInstance(t, orch, "vm1", false, &InstanceConfig{Memory: 512})
+
+	commitReceivedGuest(t, orch, MigrationSpec{
+		InstanceID: "vm1",
+		VMName:     "guest",
+		Mode:       MigrateModeCold,
+		Config:     &InstanceConfig{Memory: 1024, CPUs: 1},
+	})
+
+	inst, err := orch.Get(ctx, "vm1")
+	require.NoError(t, err)
+	assert.Equal(t, "test-vm", inst.Name, "the existing instance is untouched")
+	assert.Equal(t, StateStopped, inst.State)
+	assert.Same(t, existing, orch.instances["vm1"])
+
+	list, err := orch.List(ctx, nil)
+	require.NoError(t, err)
+	var adopted *Instance
+	for _, i := range list {
+		if i.Name == "guest" {
+			adopted = i
+		}
+	}
+	require.NotNil(t, adopted, "the received guest is registered under a new ID")
+	assert.NotEqual(t, "vm1", adopted.ID)
+	assert.Equal(t, StateRunning, adopted.State)
+}
+
+func TestReceiverDisk_ColdCreatesAFreshImage(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	workDir := t.TempDir()
+
+	path, create, err := receiverDisk(orch, MigrationSpec{Mode: MigrateModeCold, Config: &InstanceConfig{DiskPath: "/elsewhere/disk.qcow2"}}, workDir)
+	require.NoError(t, err)
+	assert.Equal(t, workDir+"/disk.qcow2", path)
+	assert.True(t, create)
+}
+
+// sharedImage writes a disk image with known bytes under a shared mount and enables shared storage on orch.
+func sharedImage(t *testing.T, orch *QEMUOrchestrator) (mount, image string, content []byte) {
+	t.Helper()
+	mount = t.TempDir()
+	require.NoError(t, os.MkdirAll(mount+"/vm1", 0o755))
+	image = mount + "/vm1/disk.qcow2"
+	content = []byte("guest disk contents")
+	require.NoError(t, os.WriteFile(image, content, 0o600))
+	orch.config.SharedStorage = &SharedStorageConfig{Enabled: true, Backend: "nfs", MountPath: mount}
+	orch.config.WorkDir = mount
+	return mount, image, content
+}
+
+// liveSpec is a live migration spec as the daemon wire delivers it: the
+// instance id and a config with no disk path.
+func liveSpec(id string) MigrationSpec {
+	return MigrationSpec{Mode: MigrateModeLive, InstanceID: id, Config: &InstanceConfig{}}
+}
+
+func TestReceiverDisk_LiveOpensTheSharedImage(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	_, image, content := sharedImage(t, orch)
+
+	path, create, err := receiverDisk(orch, liveSpec("vm1"), t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, image, path)
+	assert.False(t, create, "live migration never recreates the shared image")
+
+	got, err := os.ReadFile(image)
+	require.NoError(t, err)
+	assert.Equal(t, content, got)
+}
+
+func TestReceiverDisk_LiveRefusesAMissingImage(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	sharedImage(t, orch)
+
+	path, _, err := receiverDisk(orch, liveSpec("missing"), t.TempDir())
+	require.Error(t, err)
+	assert.Empty(t, path)
+}
+
+func TestReceiverDisk_LiveRefusesAnUnsafeInstanceID(t *testing.T) {
+	for _, id := range []string{"", "..", "../x", "a/b", "/abs"} {
+		t.Run(id, func(t *testing.T) {
+			orch := newOpsOrchestrator(t)
+			parent := t.TempDir()
+			mount := filepath.Join(parent, "mount")
+			// Plant an image wherever the unchecked id would land, so only
+			// the id check can refuse it.
+			planted := filepath.Join(mount, id, "disk.qcow2")
+			require.NoError(t, os.MkdirAll(filepath.Dir(planted), 0o755))
+			require.NoError(t, os.WriteFile(planted, []byte("x"), 0o600))
+			orch.config.SharedStorage = &SharedStorageConfig{Enabled: true, Backend: "nfs", MountPath: parent}
+			orch.config.WorkDir = mount
+
+			path, _, err := receiverDisk(orch, liveSpec(id), t.TempDir())
+			require.Error(t, err)
+			assert.Empty(t, path)
+		})
+	}
+}
+
+func TestReceiverDisk_LiveIgnoresTheSpecDiskPath(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	_, image, _ := sharedImage(t, orch)
+	outside := t.TempDir() + "/disk.qcow2"
+	require.NoError(t, os.WriteFile(outside, []byte("x"), 0o600))
+
+	spec := liveSpec("vm1")
+	spec.Config.DiskPath = outside
+	path, create, err := receiverDisk(orch, spec, t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, image, path, "the receiver derives the image under the mount, never from the spec")
+	assert.False(t, create)
+
+	orch.config.SharedStorage.MountPath = ""
+	path, _, err = receiverDisk(orch, spec, t.TempDir())
+	require.Error(t, err, "without a mount path the image cannot be confined to shared storage")
+	assert.Empty(t, path)
+}
+
+func TestReceiveIncoming_LiveRefusedWithoutSharedStorage(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := &fakeServerTLS{dir: t.TempDir()}
+	orch.config.MigrationTLS = tlsProv
+
+	launched := false
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		launched = true
+		return &fakeIncomingReceiver{port: 5002}, nil
+	})
+
+	_, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Mode:   MigrateModeLive,
+		Config: &InstanceConfig{Memory: 1024, DiskPath: "/shared/vm1/disk.qcow2"},
+	})
+	require.ErrorIs(t, err, ErrLiveMigrationRequiresSharedStorage)
+	assert.False(t, launched, "no receiver is launched")
+	assert.False(t, tlsProv.materialized, "no creds are materialized")
 }
 
 func TestFinalizeIncoming_Abort(t *testing.T) {

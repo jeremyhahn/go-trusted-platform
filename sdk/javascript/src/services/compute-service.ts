@@ -4,7 +4,7 @@
  * Provides operations for VM and container lifecycle management.
  */
 
-import type { ApiClient } from '../client/api-client.js';
+import type { ApiClient, RequestOptions } from '../client/api-client.js';
 import type { Transport } from '../transport/transport.js';
 import type { ApiResponse, QueryParams } from '../types/api.js';
 import { appendQueryParams } from '../types/api.js';
@@ -21,7 +21,13 @@ import type {
   CreateSnapshotRequest,
   RestoreSnapshotRequest,
   DeleteSnapshotRequest,
+  GetSnapshotRequest,
+  GetSnapshotResponse,
+  SuspendVMResponse,
+  ResumeVMResponse,
   MigrateVMRequest,
+  PrepareMigrationRequest,
+  FinalizeMigrationRequest,
   CreateContainerRequest,
   StopContainerRequest,
   DeleteContainerRequest,
@@ -45,6 +51,8 @@ import type {
   DeleteSnapshotResponse,
   ListSnapshotsResponse,
   MigrateVMResponse,
+  PrepareMigrationResponse,
+  FinalizeMigrationResponse,
   CreateContainerResponse,
   StartContainerResponse,
   StopContainerResponse,
@@ -177,6 +185,26 @@ export class ComputeService extends BaseService {
     return this.client.post<RebootVMResponse>(
       this.buildUrl(`/vms/${this.encodePathSegment(request.id)}/reboot`),
       { force: request.force }
+    );
+  }
+
+  /**
+   * Suspend a running VM (POST /vms/{id}/suspend).
+   */
+  async suspendVM(id: string): Promise<ApiResponse<SuspendVMResponse>> {
+    return this.client.post<SuspendVMResponse>(
+      this.buildUrl(`/vms/${this.encodePathSegment(id)}/suspend`),
+      {}
+    );
+  }
+
+  /**
+   * Resume a suspended VM (POST /vms/{id}/resume).
+   */
+  async resumeVM(id: string): Promise<ApiResponse<ResumeVMResponse>> {
+    return this.client.post<ResumeVMResponse>(
+      this.buildUrl(`/vms/${this.encodePathSegment(id)}/resume`),
+      {}
     );
   }
 
@@ -326,6 +354,15 @@ export class ComputeService extends BaseService {
     );
   }
 
+  /**
+   * Get one snapshot of a VM (GET /vms/{id}/snapshots/{snapshotId}).
+   */
+  async getSnapshot(request: GetSnapshotRequest): Promise<ApiResponse<GetSnapshotResponse>> {
+    return this.client.get<GetSnapshotResponse>(
+      this.buildUrl(`/vms/${this.encodePathSegment(request.vmId)}/snapshots/${this.encodePathSegment(request.snapshotId)}`)
+    );
+  }
+
   // =========================================================================
   // VM Migration
   // =========================================================================
@@ -334,16 +371,46 @@ export class ComputeService extends BaseService {
    * Migrate VM to another host
    *
    * @param request - Migration request
+   * @param options - Request options; a migration copies the guest's memory
+   *   and disks, so callers pass a long timeout and turn retry off (a retry
+   *   would start a second migration)
    * @returns Migration result
    */
-  async migrateVM(request: MigrateVMRequest): Promise<ApiResponse<MigrateVMResponse>> {
+  async migrateVM(request: MigrateVMRequest, options?: RequestOptions): Promise<ApiResponse<MigrateVMResponse>> {
     return this.client.post<MigrateVMResponse>(
       this.buildUrl(`/vms/${this.encodePathSegment(request.vmId)}/migrate`),
       {
         destinationHost: request.destinationHost,
         liveMigration: request.liveMigration,
         bandwidthLimitMbps: request.bandwidthLimitMbps,
-      }
+      },
+      options
+    );
+  }
+
+
+  /** PrepareMigration: POST /api/v1/compute/migrations/prepare readies a receiver on this host. */
+  async prepareMigration(
+    request: PrepareMigrationRequest
+  ): Promise<ApiResponse<PrepareMigrationResponse>> {
+    const body: Record<string, unknown> = {
+      vmId: request.vmId,
+      vmName: request.vmName,
+      mode: request.mode,
+    };
+    if (request.spec !== undefined) {
+      body.spec = request.spec;
+    }
+    return this.client.post<PrepareMigrationResponse>(this.buildUrl('/migrations/prepare'), body);
+  }
+
+  /** FinalizeMigration: POST /api/v1/compute/migrations/{receiverId}/finalize commits or aborts a receiver. */
+  async finalizeMigration(
+    request: FinalizeMigrationRequest
+  ): Promise<ApiResponse<FinalizeMigrationResponse>> {
+    return this.client.post<FinalizeMigrationResponse>(
+      this.buildUrl(`/migrations/${this.encodePathSegment(request.receiverId)}/finalize`),
+      { commit: request.commit }
     );
   }
 

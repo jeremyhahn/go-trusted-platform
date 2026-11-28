@@ -264,6 +264,35 @@ func TestResizeDisk_OfflineBootDisk(t *testing.T) {
 	assert.Empty(t, mon.resizeNode)
 }
 
+// TestResizeDisk_BootDiskSizeReadsBack pins that resizing the boot disk
+// records its new size in Config.DiskSize, the size the API reports for hd0.
+func TestResizeDisk_BootDiskSizeReadsBack(t *testing.T) {
+	cases := []struct {
+		name    string
+		running bool
+		diskID  string
+		sizeGB  uint64
+		want    string
+	}{
+		{"running", true, "hd0", 20, "20G"},
+		{"stopped", false, "", 30, "30G"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			orch := newOpsOrchestrator(t)
+			insertVMInstance(t, orch, "vm1", tc.running, &InstanceConfig{WorkDir: t.TempDir(), DiskPath: "/boot.qcow2", DiskSize: "10G"})
+			installDiskSeams(t, &fakeDiskMon{}, nil)
+
+			require.NoError(t, orch.ResizeDisk(context.Background(), "vm1", tc.diskID, tc.sizeGB))
+
+			inst, err := orch.Get(context.Background(), "vm1")
+			require.NoError(t, err)
+			require.NotNil(t, inst.Config)
+			assert.Equal(t, tc.want, inst.Config.DiskSize)
+		})
+	}
+}
+
 func TestResizeDisk_Errors(t *testing.T) {
 	orch := newOpsOrchestrator(t)
 	wd := t.TempDir()

@@ -43,6 +43,11 @@ export interface VMDisk {
   sizeMB: number;
   type: 'disk' | 'cdrom';
   readonly: boolean;
+  /**
+   * The VM's boot disk. The server lists it as hd0 in config.disks and
+   * refuses to detach it (DetachDisk only knows attached disks).
+   */
+  boot?: boolean;
 }
 
 export interface VMNetworkInterface {

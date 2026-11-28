@@ -807,7 +807,7 @@ func TestCov964_MigrateVMUnknownInstance(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInstanceNotFound)
 	assert.False(t, dest.prepared, "the destination is never contacted")
 
-	orch.retireMigratedInstance("ghost")
+	orch.retireMigratedInstance("ghost", MigrateModeCold)
 	_, getErr := orch.Get(context.Background(), "vm1")
 	assert.NoError(t, getErr, "retiring an unknown VM leaves the others alone")
 }

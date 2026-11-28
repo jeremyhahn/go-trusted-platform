@@ -3,7 +3,9 @@
 import { useState } from 'react';
 import { MoreHorizontal, Play, Square, RotateCw, Trash2, Monitor } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import { Gated } from '@/components/features/capabilities/gated';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -165,7 +167,7 @@ export function VMTable({ vms, onRefresh, onConsole }: VMTableProps) {
   };
 
   return (
-    <div className="rounded-md border border-border">
+    <div className="rounded-md border border-border" data-testid="vm-table">
       <Table>
         <TableHeader>
           <TableRow>
@@ -182,14 +184,22 @@ export function VMTable({ vms, onRefresh, onConsole }: VMTableProps) {
         <TableBody>
           {vms.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={8} className="text-center text-muted-foreground">
+              <TableCell colSpan={8} className="text-center text-muted-foreground" data-testid="vm-table-empty">
                 No virtual machines found
               </TableCell>
             </TableRow>
           ) : (
             vms.map((vm) => (
-              <TableRow key={vm.id}>
-                <TableCell className="font-medium">{vm.name}</TableCell>
+              <TableRow key={vm.id} data-testid="vm-row">
+                <TableCell className="font-medium">
+                  <Link
+                    href={`/compute/vms/${encodeURIComponent(vm.id)}`}
+                    className="hover:underline"
+                    data-testid={`vm-link-${vm.id}`}
+                  >
+                    {vm.name}
+                  </Link>
+                </TableCell>
                 <TableCell>
                   <Badge variant="outline" className={statusColors[vm.status]}>
                     {vm.status}
@@ -211,6 +221,7 @@ export function VMTable({ vms, onRefresh, onConsole }: VMTableProps) {
                         variant="ghost"
                         size="icon"
                         disabled={loading === vm.id}
+                        aria-label={`Actions for ${vm.name}`}
                       >
                         <MoreHorizontal className="h-4 w-4" />
                       </Button>
@@ -219,27 +230,33 @@ export function VMTable({ vms, onRefresh, onConsole }: VMTableProps) {
                       <DropdownMenuLabel>Actions</DropdownMenuLabel>
                       <DropdownMenuSeparator />
                       {vm.status !== 'running' && (
-                        <DropdownMenuItem
-                          onClick={() => handleStart(vm.id)}
-                        >
-                          <Play className="mr-2 h-4 w-4" />
-                          Start
-                        </DropdownMenuItem>
+                        <Gated op="POST /api/v1/compute/vms/{id}/start">
+                          <DropdownMenuItem
+                            onClick={() => handleStart(vm.id)}
+                          >
+                            <Play className="mr-2 h-4 w-4" />
+                            Start
+                          </DropdownMenuItem>
+                        </Gated>
                       )}
                       {vm.status === 'running' && (
                         <>
-                          <DropdownMenuItem
-                            onClick={() => handleStop(vm.id)}
-                          >
-                            <Square className="mr-2 h-4 w-4" />
-                            Stop
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => handleReboot(vm.id)}
-                          >
-                            <RotateCw className="mr-2 h-4 w-4" />
-                            Reboot
-                          </DropdownMenuItem>
+                          <Gated op="POST /api/v1/compute/vms/{id}/stop">
+                            <DropdownMenuItem
+                              onClick={() => handleStop(vm.id)}
+                            >
+                              <Square className="mr-2 h-4 w-4" />
+                              Stop
+                            </DropdownMenuItem>
+                          </Gated>
+                          <Gated op="POST /api/v1/compute/vms/{id}/reboot">
+                            <DropdownMenuItem
+                              onClick={() => handleReboot(vm.id)}
+                            >
+                              <RotateCw className="mr-2 h-4 w-4" />
+                              Reboot
+                            </DropdownMenuItem>
+                          </Gated>
                           {onConsole && (
                             <DropdownMenuItem onClick={() => onConsole(vm)}>
                               <Monitor className="mr-2 h-4 w-4" />
@@ -249,13 +266,15 @@ export function VMTable({ vms, onRefresh, onConsole }: VMTableProps) {
                         </>
                       )}
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        onClick={() => handleDelete(vm.id)}
-                        className="text-destructive"
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
-                      </DropdownMenuItem>
+                      <Gated op="DELETE /api/v1/compute/vms/{id}">
+                        <DropdownMenuItem
+                          onClick={() => handleDelete(vm.id)}
+                          className="text-destructive"
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Delete
+                        </DropdownMenuItem>
+                      </Gated>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>

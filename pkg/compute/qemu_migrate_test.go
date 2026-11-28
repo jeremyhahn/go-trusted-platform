@@ -16,6 +16,8 @@ package compute
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"testing/synctest"
 
@@ -183,7 +185,11 @@ func migrateTestOrchestrator(t *testing.T, live bool) (*QEMUOrchestrator, *fakeC
 		orch.config.SharedStorage = &SharedStorageConfig{Enabled: true, Backend: "nfs"}
 	}
 
-	insertVMInstance(t, orch, "vm1", true, &InstanceConfig{WorkDir: t.TempDir(), DiskPath: "/vms/vm1/disk.qcow2", Memory: 2048})
+	// The guest sits at the shared layout <work dir>/<instance id>/disk.qcow2,
+	// the only image a live receiver opens.
+	instDir := filepath.Join(orch.config.WorkDir, "vm1")
+	require.NoError(t, os.MkdirAll(instDir, 0o700))
+	insertVMInstance(t, orch, "vm1", true, &InstanceConfig{WorkDir: instDir, DiskPath: filepath.Join(instDir, "disk.qcow2"), Memory: 2048})
 
 	fake := &fakeMigrateSession{}
 	orig := vmMigrationSessionFor
@@ -261,6 +267,22 @@ func TestMigrateVM_LiveHappyPath(t *testing.T) {
 	assert.NoError(t, coord.finalizeErr)
 }
 
+func TestMigrateVM_LiveKeepsTheSharedDisk(t *testing.T) {
+	orch, _, _, _ := migrateTestOrchestrator(t, true)
+	cfg := orch.instances["vm1"].instance.Config
+	disk := cfg.WorkDir + "/disk.qcow2"
+	content := []byte("shared guest disk")
+	require.NoError(t, os.WriteFile(disk, content, 0o600))
+	cfg.DiskPath = disk
+
+	_, err := migrateOnFakeClock(t, orch, MigrateOptions{Live: true})
+	require.NoError(t, err)
+
+	got, err := os.ReadFile(disk)
+	require.NoError(t, err, "the destination runs on the shared disk, so the source keeps it")
+	assert.Equal(t, content, got)
+}
+
 func TestMigrateVM_LiveWithoutSharedStorage(t *testing.T) {
 	orch, coord, _, _ := migrateTestOrchestrator(t, false)
 
@@ -269,6 +291,67 @@ func TestMigrateVM_LiveWithoutSharedStorage(t *testing.T) {
 	assert.ErrorIs(t, err, ErrLiveMigrationRequiresSharedStorage)
 	// The destination must never be contacted for a rejected request.
 	assert.False(t, coord.prepared)
+}
+
+func TestMigrateVM_RefusesAVTPMGuest(t *testing.T) {
+	t.Run("tpm enabled in the config", func(t *testing.T) {
+		orch, coord, _, _ := migrateTestOrchestrator(t, false)
+		orch.instances["vm1"].instance.Config.TPMEnabled = true
+
+		_, err := orch.MigrateVM(context.Background(), "vm1", "dest.example:10443", MigrateOptions{})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrMigrationVTPMUnsupported)
+		assert.False(t, coord.prepared, "the destination must never be contacted for a vTPM guest")
+	})
+
+	t.Run("attached to a provisioned tpm socket", func(t *testing.T) {
+		orch, coord, _, _ := migrateTestOrchestrator(t, false)
+		orch.instances["vm1"].instance.Metadata["tpm_socket"] = "/run/swtpm/vm1.sock"
+
+		_, err := orch.MigrateVM(context.Background(), "vm1", "dest.example:10443", MigrateOptions{})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrMigrationVTPMUnsupported)
+		assert.False(t, coord.prepared, "the destination must never be contacted for a vTPM guest")
+	})
+
+	t.Run("no vtpm migrates", func(t *testing.T) {
+		orch, coord, _, _ := migrateTestOrchestrator(t, false)
+		require.False(t, orch.instances["vm1"].instance.Config.TPMEnabled)
+
+		_, err := migrateOnFakeClock(t, orch, MigrateOptions{})
+		require.NoError(t, err)
+		assert.True(t, coord.prepared)
+	})
+}
+
+func TestMigrateVM_LiveRefusesADiskOutsideTheSharedLayout(t *testing.T) {
+	orch, coord, _, _ := migrateTestOrchestrator(t, true)
+	orch.instances["vm1"].instance.Config.DiskPath = filepath.Join(orch.config.WorkDir, "incoming-abc", "disk.qcow2")
+
+	_, err := orch.MigrateVM(context.Background(), "vm1", "dest.example:10443", MigrateOptions{Live: true})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrLiveMigrationDiskLayout)
+	assert.False(t, coord.prepared, "the destination must never be contacted for an off-layout live guest")
+}
+
+func TestMigrateVM_LiveAcceptsTheSharedLayout(t *testing.T) {
+	orch, coord, _, _ := migrateTestOrchestrator(t, true)
+	orch.instances["vm1"].instance.Config.DiskPath = filepath.Join(orch.config.WorkDir, "vm1", "disk.qcow2")
+
+	result, err := migrateOnFakeClock(t, orch, MigrateOptions{Live: true})
+	require.NoError(t, err)
+	assert.Equal(t, MigrateModeLive, result.Mode)
+	assert.True(t, coord.prepared)
+}
+
+func TestMigrateVM_ColdAcceptsADiskOutsideTheSharedLayout(t *testing.T) {
+	orch, coord, _, _ := migrateTestOrchestrator(t, false)
+	orch.instances["vm1"].instance.Config.DiskPath = filepath.Join(orch.config.WorkDir, "incoming-abc", "disk.qcow2")
+
+	result, err := migrateOnFakeClock(t, orch, MigrateOptions{})
+	require.NoError(t, err, "the shared layout rule applies to live migration only")
+	assert.Equal(t, MigrateModeCold, result.Mode)
+	assert.True(t, coord.prepared)
 }
 
 func TestMigrateVM_NoCoordinator(t *testing.T) {

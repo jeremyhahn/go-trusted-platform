@@ -126,4 +126,73 @@ describe('ComputeService wire shapes', () => {
 
     expect((postedBody(mockClient) as { pcrBank?: string }).pcrBank).toBeUndefined();
   });
+
+  it('suspends and resumes a VM with an empty body on its encoded path', async () => {
+    await service.suspendVM('vm/1');
+    await service.resumeVM('vm/1');
+
+    const calls = vi.mocked(mockClient.post).mock.calls;
+    expect(String(calls[0]?.[0])).toMatch(/\/v1\/compute\/vms\/vm%2F1\/suspend$/);
+    expect(calls[0]?.[1]).toEqual({});
+    expect(String(calls[1]?.[0])).toMatch(/\/v1\/compute\/vms\/vm%2F1\/resume$/);
+    expect(calls[1]?.[1]).toEqual({});
+  });
+
+  it('passes request options through on migrateVM', async () => {
+    const options = { timeout: 7200000, retry: { enabled: false } };
+    await service.migrateVM(
+      { vmId: 'vm-1', destinationHost: 'destination.example.test', liveMigration: true },
+      options
+    );
+    await service.migrateVM({ vmId: 'vm-1', destinationHost: 'destination.example.test', liveMigration: true });
+
+    const calls = vi.mocked(mockClient.post).mock.calls;
+    expect(String(calls[0]?.[0])).toMatch(/\/v1\/compute\/vms\/vm-1\/migrate$/);
+    expect(calls[0]?.[1]).toEqual({
+      destinationHost: 'destination.example.test',
+      liveMigration: true,
+      bandwidthLimitMbps: undefined,
+    });
+    expect(calls[0]?.[2]).toEqual(options);
+    expect(calls[1]?.[2]).toBeUndefined();
+  });
+
+  it('reads one snapshot on GET /vms/{id}/snapshots/{snapshotId}', async () => {
+    await service.getSnapshot({ vmId: 'vm-1', snapshotId: 's/1' });
+
+    const url = String(vi.mocked(mockClient.get).mock.calls[0]?.[0]);
+    expect(url).toMatch(/\/v1\/compute\/vms\/vm-1\/snapshots\/s%2F1$/);
+  });
+
+  it('prepares a migration receiver on POST /migrations/prepare', async () => {
+    await service.prepareMigration({
+      vmId: 'vm-1',
+      vmName: 'web-1',
+      mode: 'live',
+      spec: { memoryMb: 2048, cpus: 2, arch: 'x86_64' },
+    });
+
+    const url = String(vi.mocked(mockClient.post).mock.calls[0]?.[0]);
+    expect(url).toMatch(/\/v1\/compute\/migrations\/prepare$/);
+    expect(postedBody(mockClient)).toEqual({
+      vmId: 'vm-1',
+      vmName: 'web-1',
+      mode: 'live',
+      spec: { memoryMb: 2048, cpus: 2, arch: 'x86_64' },
+    });
+  });
+
+  it('omits the spec when the caller supplied none', async () => {
+    await service.prepareMigration({ vmId: 'vm-1', vmName: 'web-1', mode: 'cold' });
+
+    expect((postedBody(mockClient) as { spec?: unknown }).spec).toBeUndefined();
+  });
+
+  it('finalizes a receiver on its encoded path with only the commit flag in the body', async () => {
+    await service.finalizeMigration({ receiverId: 'rx/1', commit: false });
+
+    const url = String(vi.mocked(mockClient.post).mock.calls[0]?.[0]);
+    expect(url).toMatch(/\/v1\/compute\/migrations\/rx%2F1\/finalize$/);
+    expect(postedBody(mockClient)).toEqual({ commit: false });
+  });
 });

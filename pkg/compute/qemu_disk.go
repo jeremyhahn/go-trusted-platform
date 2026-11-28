@@ -303,6 +303,9 @@ func (o *QEMUOrchestrator) ResizeDisk(ctx context.Context, instanceID, diskID st
 
 	if trackIdx >= 0 {
 		inst.instance.Disks[trackIdx].SizeGB = newSizeGB
+	} else {
+		// The boot disk: Config.DiskSize is the size the API reports for it.
+		inst.instance.Config.DiskSize = fmt.Sprintf("%dG", newSizeGB)
 	}
 	inst.instance.UpdatedAt = time.Now()
 

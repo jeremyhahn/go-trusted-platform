@@ -16,6 +16,8 @@ package compute
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
@@ -186,6 +188,24 @@ func (o *QEMUOrchestrator) MigrateVM(ctx context.Context, instanceID, destinatio
 	}
 
 	inst.mu.Lock()
+	cfg := inst.instance.Config
+	tpmSocket := inst.instance.Metadata["tpm_socket"]
+	// The receiver does not restore swtpm state, so a vTPM guest would arrive
+	// without its TPM: refuse it before the destination is contacted.
+	if (cfg != nil && cfg.TPMEnabled) || tpmSocket != "" {
+		inst.mu.Unlock()
+		return nil, &SentinelCauseError{Sentinel: ErrMigrationVTPMUnsupported, Cause: &MessageError{Msg: "the guest has a vTPM"}}
+	}
+	// A live receiver opens <work dir>/<instance id>/disk.qcow2 only; a guest
+	// whose disk lives elsewhere (e.g. a cold-migrated incoming-* image) would
+	// pair its RAM with the wrong or a missing image.
+	if mode == MigrateModeLive {
+		shared := filepath.Join(o.config.WorkDir, instanceID, "disk.qcow2")
+		if cfg == nil || o.config.WorkDir == "" || filepath.Clean(cfg.DiskPath) != shared {
+			inst.mu.Unlock()
+			return nil, &SentinelCauseError{Sentinel: ErrLiveMigrationDiskLayout, Cause: &MessageError{Msg: "the guest disk is not " + shared}}
+		}
+	}
 	spec := MigrationSpec{
 		InstanceID: instanceID,
 		VMName:     inst.instance.Name,
@@ -269,7 +289,7 @@ func (o *QEMUOrchestrator) MigrateVM(ctx context.Context, instanceID, destinatio
 	if err := session.Quit(context.WithoutCancel(ctx)); err != nil {
 		o.logger.Warnf("migration: source quit for %s failed after successful transfer: %v", instanceID, err)
 	}
-	o.retireMigratedInstance(instanceID)
+	o.retireMigratedInstance(instanceID, mode)
 
 	o.logger.Infof("Migrated VM %s to %s (%s)", instanceID, destination, mode)
 	return &MigrationResult{Mode: mode, Success: true, Message: "migration completed"}, nil
@@ -280,16 +300,17 @@ func (o *QEMUOrchestrator) MigrateVM(ctx context.Context, instanceID, destinatio
 // console broker, the lifecycle record, and the on-disk work directory. It does
 // NOT go through Stop (the guest process has already handed off), so it is safe
 // even when the source QEMU has exited on its own.
-func (o *QEMUOrchestrator) retireMigratedInstance(instanceID string) {
+func (o *QEMUOrchestrator) retireMigratedInstance(instanceID string, mode MigrateMode) {
 	o.mu.Lock()
 	inst, ok := o.instances[instanceID]
 	if !ok {
 		o.mu.Unlock()
 		return
 	}
-	var workDir string
+	var workDir, diskPath string
 	if inst.instance != nil && inst.instance.Config != nil {
 		workDir = inst.instance.Config.WorkDir
+		diskPath = inst.instance.Config.DiskPath
 	}
 	delete(o.instances, instanceID)
 	delete(o.instanceToPort, instanceID)
@@ -299,11 +320,47 @@ func (o *QEMUOrchestrator) retireMigratedInstance(instanceID string) {
 	if err := o.lifecycle.DeleteInstance(instanceID); err != nil {
 		o.logger.Warnf("migration: lifecycle cleanup for %s failed: %v", instanceID, err)
 	}
-	if workDir != "" {
-		if err := os.RemoveAll(workDir); err != nil {
+	if workDir == "" {
+		return
+	}
+	if mode == MigrateModeLive && diskPath != "" {
+		// The destination now runs on the shared image, so only the other files go.
+		if err := removeAllExcept(workDir, filepath.Clean(diskPath)); err != nil {
 			o.logger.Warnf("migration: work directory cleanup for %s failed: %v", instanceID, err)
 		}
+		return
 	}
+	if err := os.RemoveAll(workDir); err != nil {
+		o.logger.Warnf("migration: work directory cleanup for %s failed: %v", instanceID, err)
+	}
+}
+
+// removeAllExcept removes everything under dir except keep and the directories leading to it.
+func removeAllExcept(dir, keep string) error {
+	rel, err := filepath.Rel(filepath.Clean(dir), keep)
+	if err != nil || !filepath.IsLocal(rel) {
+		return os.RemoveAll(dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		switch {
+		case path == keep:
+			continue
+		case entry.IsDir() && strings.HasPrefix(keep, path+string(filepath.Separator)):
+			err = removeAllExcept(path, keep)
+		default:
+			err = os.RemoveAll(path)
+		}
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 // rollbackMigration cancels an in-flight migration, resumes a cold-paused guest,

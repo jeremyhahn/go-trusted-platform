@@ -66,9 +66,10 @@ func (h *Handlers) extendWriteDeadline(w http.ResponseWriter, opts compute.StopO
 }
 
 // migrateReplyWindow is how long a migrate reply may take: the call waits on
-// the transfer and the receiver's finalize, and the UI waits an hour for it
-// (MIGRATION_TIMEOUT_MS in web/src/hooks/use-vm-operations.ts).
-const migrateReplyWindow = time.Hour
+// the transfer and the receiver's finalize, which outlasts the server's write
+// timeout; the web client waits the same window
+// (MIGRATE_REQUEST_TIMEOUT_MS in web/src/hooks/use-vm-migration.ts).
+const migrateReplyWindow = 2 * time.Hour
 
 // extendWriteDeadlineBy moves the reply's write deadline to window from now,
 // logging (and serving the request anyway) when the writer refuses.
