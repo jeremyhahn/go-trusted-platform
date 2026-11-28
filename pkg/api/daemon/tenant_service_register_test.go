@@ -53,3 +53,31 @@ func TestRegisterTenantGRPCServer_KeepsAnInjectedServer(t *testing.T) {
 	svc.registerTenantGRPCServer(grpc.NewServer())
 	assert.Same(t, existing, svc.grpcServer)
 }
+
+// TestDaemonTenantGRPCServer_ExistsWithoutAGRPCListener: a REST-only daemon
+// registers the tenant service on no gRPC listener, yet the owner-invitation
+// route runs the tenant server's RPC, so the server exists without a listener
+// and a later registration keeps the instance REST already holds (Codex #2362
+// round 14).
+func TestDaemonTenantGRPCServer_ExistsWithoutAGRPCListener(t *testing.T) {
+	svc := &TenantService{logger: slog.Default()}
+	d := &Daemon{tenantService: svc}
+
+	server := d.TenantGRPCServer()
+	require.NotNil(t, server, "a daemon with no gRPC listener still gets the tenant server")
+	require.NotNil(t, newTenantRESTInitialAdmin(server), "the REST owner-invitation adapter is wired, not left at 503")
+	assert.Same(t, server, d.TenantGRPCServer(), "every caller gets the one server")
+
+	gs := grpc.NewServer()
+	svc.registerTenantGRPCServer(gs)
+	assert.Same(t, server, svc.grpcServer, "a listener registration keeps the server REST already holds")
+	assert.Contains(t, gs.GetServiceInfo(), tenantServiceName)
+}
+
+// TestDaemonTenantGRPCServer_NilWithoutATenantService: with no tenant service
+// there is no tenant server, so the REST route keeps answering 503.
+func TestDaemonTenantGRPCServer_NilWithoutATenantService(t *testing.T) {
+	d := &Daemon{}
+	assert.Nil(t, d.TenantGRPCServer())
+	assert.Nil(t, newTenantRESTInitialAdmin(d.TenantGRPCServer()))
+}
