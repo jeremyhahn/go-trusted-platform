@@ -1237,6 +1237,63 @@ func TestSetUserPassword_TransportError(t *testing.T) {
 	}
 }
 
+// TestSetUserPassword_ActivatesDisabledReusedSlot covers the activation
+// path of a slot created disabled: a reused slot whose global enable flag a
+// disabled create cleared is enabled again once its password is set, so a
+// later role grant leaves an account that can authenticate.
+func TestSetUserPassword_ActivatesDisabledReusedSlot(t *testing.T) {
+	s := newStatefulUserSender()
+	um := newUM(s)
+	ctx := context.Background()
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
+	defer pwd.Destroy()
+	if err := um.CreateUser(ctx, User{
+		Slot: 4, Username: "alice", Enabled: true, Privilege: PrivilegeAdministrator,
+	}, pwd); err != nil {
+		t.Fatalf("CreateUser enabled: %v", err)
+	}
+	if err := um.DeleteUser(ctx, 4); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if err := um.CreateUser(ctx, User{
+		Slot: 4, Username: "bob", Enabled: false, Privilege: PrivilegeUser,
+	}, nil); err != nil {
+		t.Fatalf("CreateUser disabled: %v", err)
+	}
+	if s.enabled[4] {
+		t.Fatal("a disabled create left the reused slot globally enabled")
+	}
+	next := memguard.NewMemoryEnclave([]byte("s3cret"))
+	defer next.Destroy()
+	if err := um.SetUserPassword(ctx, 4, next); err != nil {
+		t.Fatalf("SetUserPassword: %v", err)
+	}
+	if err := um.SetUserPrivilege(ctx, 4, 0, PrivilegeUser); err != nil {
+		t.Fatalf("SetUserPrivilege: %v", err)
+	}
+	if !s.enabled[4] {
+		t.Error("password and role set, but the slot's global enable flag is still clear")
+	}
+}
+
+// TestSetUserPassword_FailedSetSendsNoEnable: when the password write fails,
+// the slot is never enabled, so a stale or blank password is not activated.
+func TestSetUserPassword_FailedSetSendsNoEnable(t *testing.T) {
+	m := newMock()
+	m.err = errors.New("transport")
+	um := newUM(m)
+	pwd := memguard.NewMemoryEnclave([]byte("x"))
+	defer pwd.Destroy()
+	if err := um.SetUserPassword(context.Background(), 5, pwd); err == nil {
+		t.Fatal("expected transport error")
+	}
+	for _, c := range m.calls {
+		if c.cmd == cmdSetUserPassword && len(c.data) >= 2 && c.data[1]&0x03 == pwdOpEnable {
+			t.Errorf("a failed password set was followed by an enable: % x", c.data)
+		}
+	}
+}
+
 // --- SetUserPrivilege ---
 
 func TestSetUserPrivilege_DefaultsChannel(t *testing.T) {
