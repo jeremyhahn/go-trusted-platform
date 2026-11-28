@@ -15,6 +15,7 @@ package pxe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -171,9 +172,14 @@ func (v *vlanIntegrationWrapper) GetCurrentVLAN(ctx context.Context, portID stri
 	if v.flowManager == nil {
 		return 0, ErrDeviceNotFound{DeviceID: portID}
 	}
-	vlanID, err := v.flowManager.GetPortVLAN(portID)
-	if err != nil {
+	// PortVLAN falls back to the switch's enforced placement, which a
+	// restarted daemon's empty port map does not know (#2081 Codex P1).
+	vlanID, err := v.flowManager.PortVLAN(ctx, portID)
+	if errors.Is(err, policy.ErrPortVLANUnknown) {
 		return 0, ErrDeviceNotFound{DeviceID: portID}
+	}
+	if err != nil {
+		return 0, &WrappedError{Msg: fmt.Sprintf("pxe: read the VLAN placement of port %s", portID), Err: err}
 	}
 	return vlanID, nil
 }

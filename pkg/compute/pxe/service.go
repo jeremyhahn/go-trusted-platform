@@ -18,6 +18,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -35,6 +36,11 @@ import (
 // may already be cancelled when the write fails (#2081 Codex): reusing it
 // would leave the widened flows in place.
 var rollbackTimeout = 30 * time.Second
+
+// failClosedTimeout bounds the quarantine fallback after a failed rollback.
+// The fallback gets its own deadline: the rollback may have spent its own
+// before it failed (#2081 Codex round 7).
+var failClosedTimeout = 30 * time.Second
 
 type Service interface {
 	// Lifecycle methods
@@ -153,7 +159,16 @@ func (s *service) refuseIfQuarantinePending(ctx context.Context, device *DeviceI
 	_, pending := s.pendingQuarantine[device.ID]
 	s.mu.RUnlock()
 	if !pending {
-		if !s.enforcedQuarantineUnstored(ctx, device) {
+		enforced, err := s.enforcedQuarantineUnstored(ctx, device)
+		if err != nil {
+			return ErrInvalidStateTransition{
+				DeviceID:  device.ID,
+				FromState: string(device.State),
+				ToState:   string(state),
+				Reason:    "the port's enforced placement could not be read, so a widening move is refused: " + err.Error(),
+			}
+		}
+		if !enforced {
 			return nil
 		}
 		s.setPendingQuarantine(device.ID, true)
@@ -170,17 +185,26 @@ func (s *service) refuseIfQuarantinePending(ctx context.Context, device *DeviceI
 // quarantine VLAN while its stored record is neither quarantined, failed nor
 // on that VLAN: a quarantine whose state write failed before this service
 // was created. This is the reconciliation after a reload (#2081 Codex round
-// 6). A GetCurrentVLAN error means no placement is known (a fresh flow
-// manager has no port map), and the move is not refused for it.
-func (s *service) enforcedQuarantineUnstored(ctx context.Context, device *DeviceInfo) bool {
+// 6). GetCurrentVLAN reads the switch's enforced placement, which survives
+// a daemon restart (round 7). Only ErrDeviceNotFound, no placement known
+// anywhere, lets the move through, and it records no pending entry; any
+// other read error is returned, and the caller refuses the widening move.
+func (s *service) enforcedQuarantineUnstored(ctx context.Context, device *DeviceInfo) (bool, error) {
 	if s.vlanManager == nil || s.config == nil {
-		return false
+		return false, nil
 	}
 	if device.State == StateQuarantined || device.State == StateFailed || device.CurrentVLAN == s.config.QuarantineVLAN {
-		return false
+		return false, nil
 	}
 	vlan, err := s.vlanManager.GetCurrentVLAN(ctx, device.PortID)
-	return err == nil && vlan == s.config.QuarantineVLAN
+	if err != nil {
+		var unknown ErrDeviceNotFound
+		if errors.As(err, &unknown) {
+			return false, nil
+		}
+		return false, err
+	}
+	return vlan == s.config.QuarantineVLAN, nil
 }
 
 // deviceLock is a device's lifecycle lock; refs counts the holders and
@@ -1131,7 +1155,7 @@ func (s *service) undoFlows(ctx context.Context, before *DeviceInfo) {
 		err = s.vlanManager.ApplyProvisioningFlows(cctx, before.PortID, before.MACAddress)
 	}
 	if err != nil {
-		s.failClosed(cctx, before, "undo", err)
+		s.failClosed(ctx, before, "undo", err)
 	}
 }
 
@@ -1171,14 +1195,18 @@ func (s *service) restoreEnforcedFlows(ctx context.Context, before *DeviceInfo) 
 		)
 		return
 	}
-	s.failClosed(cctx, before, "restore", err)
+	s.failClosed(ctx, before, "restore", err)
 }
 
 // failClosed applies the quarantine flows when a rollback could not put the
 // prior flows back, so a failed state write never leaves wider access than
 // the stored record allows.
 func (s *service) failClosed(ctx context.Context, device *DeviceInfo, step string, rollbackErr error) {
-	qErr := s.vlanManager.ApplyQuarantineFlows(ctx, device.PortID, device.MACAddress)
+	// A bounded context of its own, detached from the request and from the
+	// rollback's deadline, which a slow failed restore may have spent.
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failClosedTimeout)
+	defer cancel()
+	qErr := s.vlanManager.ApplyQuarantineFlows(fctx, device.PortID, device.MACAddress)
 	if qErr != nil {
 		s.logger.Error(&WrappedError{Msg: "failed to quarantine device after a failed flow rollback; the device may keep wider access", Err: qErr},
 			"device_id", device.ID,
