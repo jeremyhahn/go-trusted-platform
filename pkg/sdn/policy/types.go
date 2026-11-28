@@ -273,6 +273,15 @@ type PortBridgeChecker interface {
 	PortOnBridge(ctx context.Context, bridgeName, portName string) (bool, error)
 }
 
+// PortVLANReader is implemented by a port controller that can read a
+// port's access VLAN from the switch. The zone flow manager's port map is
+// in memory and empty after a restart, while the switch keeps the tag it
+// last set; the reader answers for a port the map does not know. ok is
+// false when the port has no access tag on bridgeName.
+type PortVLANReader interface {
+	PortAccessVLAN(ctx context.Context, bridgeName, portName string) (vlan uint16, ok bool, err error)
+}
+
 // CertificateValidator defines the interface for certificate validation
 type CertificateValidator interface {
 	// ValidateCertificate validates a certificate and returns any errors

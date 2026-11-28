@@ -18,8 +18,10 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,6 +32,17 @@ import (
 )
 
 // Service defines the interface for the PXE provisioning service.
+// rollbackTimeout bounds the flow rollback after a failed state write. The
+// rollback runs on a context detached from the request, because the request
+// may already be cancelled when the write fails (#2081 Codex): reusing it
+// would leave the widened flows in place.
+var rollbackTimeout = 30 * time.Second
+
+// failClosedTimeout bounds the quarantine fallback after a failed rollback.
+// The fallback gets its own deadline: the rollback may have spent its own
+// before it failed (#2081 Codex round 7).
+var failClosedTimeout = 30 * time.Second
+
 type Service interface {
 	// Lifecycle methods
 	Initialize(ctx context.Context, config *ServiceConfig) error
@@ -107,6 +120,125 @@ type service struct {
 	// cannot interleave and leave its port flows and recorded state
 	// disagreeing.
 	devLocks map[string]*deviceLock
+
+	// pendingQuarantine holds the devices whose quarantine flows are
+	// enforced but whose quarantine write has not committed, guarded by
+	// mu and created lazily. Every widening move of such a device is
+	// refused until a quarantined (or failed) state is stored, because
+	// its durable record still names its earlier, wider placement. The map
+	// does not survive a service recreation: a reloaded service rebuilds an
+	// entry from the port's enforced placement, or from the stored
+	// quarantine intent marker of a device already on the quarantine VLAN
+	// (enforcedQuarantineUnstored).
+	pendingQuarantine map[string]struct{}
+}
+
+// setPendingQuarantine records (pending true) or clears the enforced but
+// unstored quarantine of deviceID.
+func (s *service) setPendingQuarantine(deviceID string, pending bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !pending {
+		delete(s.pendingQuarantine, deviceID)
+		return
+	}
+	if s.pendingQuarantine == nil {
+		s.pendingQuarantine = make(map[string]struct{})
+	}
+	s.pendingQuarantine[deviceID] = struct{}{}
+}
+
+// refuseIfQuarantinePending returns an ErrInvalidStateTransition when
+// device has enforced quarantine flows that are not yet stored and the move
+// to state would widen its access. The pending entry comes from this
+// service's own failed quarantine write, or, after a reload, from the port's
+// enforced placement (enforcedQuarantineUnstored), in which case the entry
+// is recorded so the quarantine retry clears it.
+func (s *service) refuseIfQuarantinePending(ctx context.Context, device *DeviceInfo, state ProvisioningState) error {
+	if state == StateQuarantined || state == StateFailed {
+		return nil
+	}
+	s.mu.RLock()
+	_, pending := s.pendingQuarantine[device.ID]
+	s.mu.RUnlock()
+	if !pending {
+		enforced, err := s.enforcedQuarantineUnstored(ctx, device)
+		if err != nil {
+			return ErrInvalidStateTransition{
+				DeviceID:  device.ID,
+				FromState: string(device.State),
+				ToState:   string(state),
+				Reason:    "the port's enforced placement could not be read, so a widening move is refused: " + err.Error(),
+			}
+		}
+		if !enforced {
+			return nil
+		}
+		s.setPendingQuarantine(device.ID, true)
+	}
+	return ErrInvalidStateTransition{
+		DeviceID:  device.ID,
+		FromState: string(device.State),
+		ToState:   string(state),
+		Reason:    "quarantine flows are enforced but the quarantine is not stored; quarantine the device again first",
+	}
+}
+
+// quarantineIntentPrefix starts the StateReason QuarantineDevice stores
+// before it quarantines a device whose record is already on the quarantine
+// VLAN. Any later Transition rewrites StateReason, which clears it.
+const quarantineIntentPrefix = "quarantine requested: "
+
+// storeQuarantineIntent marks the stored record of a device already on the
+// quarantine VLAN with the quarantineIntentPrefix marker before a
+// restrictive move, so a restarted service still sees the requested
+// quarantine if the state write that follows fails. QuarantineDevice and a
+// restrictive UpdateDeviceState (quarantined or failed) both store it; the
+// successful state write rewrites StateReason and clears the marker.
+func (s *service) storeQuarantineIntent(deviceID, reason string) error {
+	if err := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
+		d.StateReason = quarantineIntentPrefix + reason
+		return nil
+	}); err != nil {
+		return ErrProvisioningFailed{
+			DeviceID: deviceID,
+			Reason:   "failed to store the quarantine intent",
+			Cause:    err,
+		}
+	}
+	return nil
+}
+
+// enforcedQuarantineUnstored reports whether a quarantine whose state write
+// failed before this service was created is still pending: the stored record
+// is neither quarantined nor failed, and either it is on the quarantine VLAN
+// and carries the quarantineIntentPrefix marker (round 8; stored by
+// QuarantineDevice and by a restrictive UpdateDeviceState, round 9), or it names
+// another VLAN while the port is on the quarantine VLAN. An unmarked record
+// on the quarantine VLAN is an ordinary new registration. This is the reconciliation after a reload (#2081 Codex round
+// 6). GetCurrentVLAN reads the switch's enforced placement, which survives
+// a daemon restart (round 7). Only ErrDeviceNotFound, no placement known
+// anywhere, lets the move through, and it records no pending entry; any
+// other read error is returned, and the caller refuses the widening move.
+func (s *service) enforcedQuarantineUnstored(ctx context.Context, device *DeviceInfo) (bool, error) {
+	if s.vlanManager == nil || s.config == nil {
+		return false, nil
+	}
+	if device.State == StateQuarantined || device.State == StateFailed {
+		return false, nil
+	}
+	if device.CurrentVLAN == s.config.QuarantineVLAN {
+		return strings.HasPrefix(device.StateReason, quarantineIntentPrefix), nil
+	}
+	vlan, err := s.vlanManager.GetCurrentVLAN(ctx, device.PortID)
+	if err != nil {
+		var unknown ErrDeviceNotFound
+		if errors.As(err, &unknown) {
+			return false, nil
+		}
+		return false, err
+	}
+	return vlan == s.config.QuarantineVLAN, nil
 }
 
 // deviceLock is a device's lifecycle lock; refs counts the holders and
@@ -601,6 +733,8 @@ func (s *service) RemoveDevice(ctx context.Context, deviceID string) error {
 		}
 	}
 
+	s.setPendingQuarantine(deviceID, false)
+
 	s.logger.Info("Device removed",
 		"device_id", deviceID,
 		"mac_address", device.MACAddress.String(),
@@ -677,6 +811,9 @@ func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, 
 			Reason:    "transition not allowed",
 		}
 	}
+	if err := s.refuseIfQuarantinePending(ctx, device, state); err != nil {
+		return err
+	}
 
 	// Authorizing needs a target VLAN, which only AuthorizeDevice enforces.
 	if state == StateAuthorized {
@@ -685,6 +822,19 @@ func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, 
 			FromState: string(device.State),
 			ToState:   string(StateAuthorized),
 			Reason:    "authorizing a device needs a target VLAN; use AuthorizeDevice",
+		}
+	}
+
+	// A fresh registration already on the quarantine VLAN looks the same
+	// in its record as a restrictive update whose state write failed.
+	// Store the intent first, as QuarantineDevice does, so a restarted
+	// service still refuses widening moves until the restrictive state is
+	// stored. On failure nothing changed and the device is already on
+	// quarantine flows (#2081 Codex round 9).
+	if (state == StateQuarantined || state == StateFailed) &&
+		s.vlanManager != nil && device.CurrentVLAN == s.config.QuarantineVLAN {
+		if err := s.storeQuarantineIntent(deviceID, reason); err != nil {
+			return err
 		}
 	}
 
@@ -704,7 +854,31 @@ func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, 
 		}
 	}
 
-	if err := s.stateManager.Transition(deviceID, state, reason); err != nil {
+	// State and the VLAN the move enforced in one record write, so
+	// GetDevice and a VLAN filter report the device where its port now
+	// is, and a failed write leaves state and VLAN as they were.
+	vlan, recordVLAN := s.vlanForState(state)
+	recordVLAN = recordVLAN && s.vlanManager != nil
+	if err := s.stateManager.TransitionWithUpdate(deviceID, state, reason, func(d *DeviceInfo) {
+		if recordVLAN {
+			d.CurrentVLAN = vlan
+		}
+	}); err != nil {
+		// The record still says the device is where it was; put the port
+		// back there unless the move only narrowed access (quarantined or
+		// failed), whose restrictive flows stay in place. A narrowing move
+		// whose write fails is remembered as a pending quarantine, so a
+		// later widening report is refused until the restrictive state is
+		// stored, as QuarantineDevice does (#2081 Codex round 4). On the
+		// quarantine VLAN the durable intent marker stored above also
+		// survives a restart (#2081 Codex round 9).
+		if state != StateQuarantined && state != StateFailed {
+			if rErr := s.restoreEnforcedFlows(ctx, device); rErr != nil {
+				err = errors.Join(err, rErr)
+			}
+		} else if s.vlanManager != nil {
+			s.setPendingQuarantine(deviceID, true)
+		}
 		return ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to transition device state",
@@ -712,20 +886,8 @@ func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, 
 		}
 	}
 
-	// Record the VLAN the move enforced, so GetDevice and a VLAN filter
-	// report the device where its port now is.
-	if vlan, ok := s.vlanForState(state); s.vlanManager != nil && ok {
-		updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
-			d.CurrentVLAN = vlan
-			return nil
-		})
-		if updateErr != nil {
-			return ErrProvisioningFailed{
-				DeviceID: deviceID,
-				Reason:   "failed to record current VLAN",
-				Cause:    updateErr,
-			}
-		}
+	if state == StateQuarantined || state == StateFailed {
+		s.setPendingQuarantine(deviceID, false)
 	}
 
 	s.logger.Info("Device state updated",
@@ -893,6 +1055,9 @@ func (s *service) AuthorizeDevice(ctx context.Context, deviceID string, targetVL
 			Reason:    "device must be in authorizing state",
 		}
 	}
+	if err := s.refuseIfQuarantinePending(ctx, device, StateAuthorized); err != nil {
+		return err
+	}
 
 	oldVLAN := device.CurrentVLAN
 
@@ -919,19 +1084,18 @@ func (s *service) AuthorizeDevice(ctx context.Context, deviceID string, targetVL
 			}
 		}
 
-		updateErr = s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
-			d.CurrentVLAN = targetVLAN
-			return nil
-		})
-		if updateErr != nil {
-			s.logger.Warn("Failed to update current VLAN in state",
-				"device_id", deviceID,
-				"error", updateErr.Error(),
-			)
-		}
 	}
 
-	if err := s.stateManager.Transition(deviceID, StateAuthorized, "device authorized for production"); err != nil {
+	// The lifecycle state and the enforced VLAN go to the store in one
+	// record write; if it fails the flows just applied are undone (#2081
+	// Codex), so no stored record pairs StateAuthorized with a stale VLAN.
+	err = s.stateManager.TransitionWithUpdate(deviceID, StateAuthorized, "device authorized for production", func(d *DeviceInfo) {
+		if s.vlanManager != nil {
+			d.CurrentVLAN = targetVLAN
+		}
+	})
+	if err != nil {
+		s.undoFlows(ctx, device)
 		return ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to transition to authorized state",
@@ -971,6 +1135,18 @@ func (s *service) QuarantineDevice(ctx context.Context, deviceID string, reason 
 
 	oldVLAN := device.CurrentVLAN
 
+	// A device already on the quarantine VLAN (a fresh registration) looks
+	// the same in its record as a requested quarantine whose state write
+	// failed. Store the intent first, so a restarted service still refuses
+	// widening moves until the quarantine is stored. On failure nothing
+	// changed and the device is already on quarantine flows (#2081 Codex
+	// round 8).
+	if s.vlanManager != nil && device.CurrentVLAN == s.config.QuarantineVLAN {
+		if err := s.storeQuarantineIntent(deviceID, reason); err != nil {
+			return err
+		}
+	}
+
 	if s.vlanManager != nil {
 		if vlanErr := s.vlanManager.ApplyQuarantineFlows(ctx, device.PortID, device.MACAddress); vlanErr != nil {
 			return ErrVLANTransitionFailed{
@@ -982,19 +1158,27 @@ func (s *service) QuarantineDevice(ctx context.Context, deviceID string, reason 
 			}
 		}
 
-		updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
-			d.CurrentVLAN = s.config.QuarantineVLAN
-			return nil
-		})
-		if updateErr != nil {
-			s.logger.Warn("Failed to update current VLAN in state",
-				"device_id", deviceID,
-				"error", updateErr.Error(),
-			)
-		}
 	}
 
-	if err := s.stateManager.Transition(deviceID, StateQuarantined, reason); err != nil {
+	// State and enforced VLAN in one record write. On failure the
+	// quarantine flows stay in place: a datastore outage must never
+	// restore the device's earlier (possibly production) access. The
+	// stored state is unchanged, so the service remembers the enforced
+	// quarantine until it is stored and refuses every widening move
+	// meanwhile; the caller retries the quarantine (#2081 Codex).
+	err = s.stateManager.TransitionWithUpdate(deviceID, StateQuarantined, reason, func(d *DeviceInfo) {
+		if s.vlanManager != nil {
+			d.CurrentVLAN = s.config.QuarantineVLAN
+		}
+	})
+	if err != nil {
+		if s.vlanManager != nil {
+			s.setPendingQuarantine(deviceID, true)
+		}
+		s.logger.Warn("Quarantine state write failed; quarantine flows kept",
+			"device_id", deviceID,
+			"error", err.Error(),
+		)
 		return ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to transition to quarantined state",
@@ -1002,12 +1186,121 @@ func (s *service) QuarantineDevice(ctx context.Context, deviceID string, reason 
 		}
 	}
 
+	s.setPendingQuarantine(deviceID, false)
+
 	s.logger.Warn("Device quarantined",
 		"device_id", deviceID,
 		"reason", reason,
 	)
 
 	return nil
+}
+
+// undoFlows puts back the flows that match the device record as it was
+// before a transition whose state write failed (#2081 Codex): authorized
+// devices get their stored VLAN back, quarantined devices stay in
+// quarantine, every other state returns to the provisioning flows.
+func (s *service) undoFlows(ctx context.Context, before *DeviceInfo) {
+	if s.vlanManager == nil || before == nil {
+		return
+	}
+	// The request may already be cancelled (#2081 Codex): roll back on a
+	// bounded context of our own.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
+	var err error
+	switch before.State {
+	case StateAuthorized:
+		err = s.vlanManager.ApplyAuthorizedFlows(cctx, before.PortID, before.MACAddress, before.CurrentVLAN)
+	case StateQuarantined:
+		err = s.vlanManager.ApplyQuarantineFlows(cctx, before.PortID, before.MACAddress)
+	default:
+		err = s.vlanManager.ApplyProvisioningFlows(cctx, before.PortID, before.MACAddress)
+	}
+	if err != nil {
+		s.failClosed(ctx, before, "undo", err)
+	}
+}
+
+// restoreEnforcedFlows reinstalls the flows of the VLAN before records as
+// enforced, after a state write failed. A device on the quarantine VLAN, in
+// quarantined or failed state, or with no known VLAN goes back to the
+// quarantine flows (fail closed).
+func (s *service) restoreEnforcedFlows(ctx context.Context, before *DeviceInfo) error {
+	if s.vlanManager == nil || before == nil {
+		return nil
+	}
+	// The request may already be cancelled (#2081 Codex): restore on a
+	// bounded context of our own.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
+	var err error
+	quarantine := false
+	switch {
+	case before.State == StateQuarantined || before.State == StateFailed ||
+		before.CurrentVLAN == s.config.QuarantineVLAN:
+		quarantine = true
+		err = s.vlanManager.ApplyQuarantineFlows(cctx, before.PortID, before.MACAddress)
+	case before.State == StateAuthorized && before.CurrentVLAN != 0:
+		err = s.vlanManager.ApplyAuthorizedFlows(cctx, before.PortID, before.MACAddress, before.CurrentVLAN)
+	case before.CurrentVLAN == s.config.ProvisioningVLAN:
+		err = s.vlanManager.ApplyProvisioningFlows(cctx, before.PortID, before.MACAddress)
+	default:
+		quarantine = true
+		err = s.vlanManager.ApplyQuarantineFlows(cctx, before.PortID, before.MACAddress)
+	}
+	if err == nil {
+		return nil
+	}
+	// A failed restore, quarantine included, gets a fresh quarantine attempt
+	// and then drop-all (#2081 Codex round 11).
+	step := "restore"
+	if quarantine {
+		step = "restore quarantine"
+	}
+	return s.failClosed(ctx, before, step, err)
+}
+
+// failClosed applies the quarantine flows when a rollback could not put the
+// prior flows back, so a failed state write never leaves wider access than
+// the stored record allows.
+func (s *service) failClosed(ctx context.Context, device *DeviceInfo, step string, rollbackErr error) error {
+	// A bounded context of its own, detached from the request and from the
+	// rollback's deadline, which a slow failed restore may have spent.
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failClosedTimeout)
+	defer cancel()
+	qErr := s.vlanManager.ApplyQuarantineFlows(fctx, device.PortID, device.MACAddress)
+	if qErr == nil {
+		s.logger.Warn("Flow rollback after a failed state write failed; device quarantined",
+			"device_id", device.ID,
+			"step", step,
+			"rollback_error", rollbackErr.Error(),
+		)
+		return nil
+	}
+	// Quarantine could not be installed, and a flow manager may have rolled
+	// the failed install back to a wider placement: drop all of the port's
+	// traffic rather than leave that access in place (#2081 Codex round 11).
+	bErr := errors.New("VLAN integration cannot block a port")
+	if b, ok := s.vlanManager.(interface {
+		BlockPort(context.Context, string) error
+	}); ok {
+		bErr = b.BlockPort(fctx, device.PortID)
+	}
+	if bErr != nil {
+		s.logger.Error(&WrappedError{Msg: "failed to quarantine or block device after a failed flow rollback; the device may keep wider access", Err: errors.Join(qErr, bErr)},
+			"device_id", device.ID,
+			"step", step,
+			"rollback_error", rollbackErr.Error(),
+		)
+		return errors.Join(rollbackErr, qErr, bErr)
+	}
+	s.logger.Error(&WrappedError{Msg: "failed to quarantine device after a failed flow rollback; port traffic dropped", Err: qErr},
+		"device_id", device.ID,
+		"step", step,
+		"rollback_error", rollbackErr.Error(),
+	)
+	return errors.Join(rollbackErr, qErr)
 }
 
 // RetryDevice resets a device to discovered state for retry. A retry is a new
@@ -1042,20 +1335,13 @@ func (s *service) RetryDevice(ctx context.Context, deviceID string) error {
 		}
 	}
 
-	updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
+	// Counter, fingerprint reset and transition in one record write, so
+	// a failed write never consumes a retry that did not start.
+	reason := fmt.Sprintf("retry initiated (attempt %d)", device.RetryCount+1)
+	if err := s.stateManager.TransitionWithUpdate(deviceID, StateDiscovered, reason, func(d *DeviceInfo) {
 		d.RetryCount++
 		d.IDevIDFingerprint = ""
-		return nil
-	})
-	if updateErr != nil {
-		return ErrProvisioningFailed{
-			DeviceID: deviceID,
-			Reason:   "failed to increment retry count",
-			Cause:    updateErr,
-		}
-	}
-
-	if err := s.stateManager.Transition(deviceID, StateDiscovered, fmt.Sprintf("retry initiated (attempt %d)", device.RetryCount+1)); err != nil {
+	}); err != nil {
 		return ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to transition to discovered state",

@@ -15,6 +15,7 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -444,6 +445,9 @@ type portUpdateRecorder struct {
 	err     error
 	ports   map[string][]*ovs.Port
 	listErr error
+	// strictErr fails only the strict listing, which reports a failed
+	// read of an individual port (#2081 Codex round 8).
+	strictErr error
 }
 
 func (r *portUpdateRecorder) ListPorts(_ context.Context, bridge string) ([]*ovs.Port, error) {
@@ -451,6 +455,13 @@ func (r *portUpdateRecorder) ListPorts(_ context.Context, bridge string) ([]*ovs
 		return nil, r.listErr
 	}
 	return r.ports[bridge], nil
+}
+
+func (r *portUpdateRecorder) ListPortsStrict(ctx context.Context, bridge string) ([]*ovs.Port, error) {
+	if r.strictErr != nil {
+		return nil, r.strictErr
+	}
+	return r.ListPorts(ctx, bridge)
 }
 
 func TestOVSFlowController_PortOnBridge(t *testing.T) {
@@ -473,6 +484,56 @@ func TestOVSFlowController_PortOnBridge(t *testing.T) {
 	on, err = failing.PortOnBridge(ctx, "br0", "tap0")
 	assert.Error(t, err)
 	assert.False(t, on)
+}
+
+// A restarted daemon reads a port's access VLAN from OVSDB (#2081 Codex P1).
+func TestOVSFlowController_PortAccessVLAN(t *testing.T) {
+	ctx := context.Background()
+	c := &OVSFlowController{client: &portUpdateRecorder{ports: map[string][]*ovs.Port{
+		"br0": {
+			{Name: "tap0", Tag: 401, VLANMode: "access"},
+			{Name: "tap1", Tag: 402},
+			{Name: "tap2", Tag: 401, VLANMode: "trunk"},
+			{Name: "tap3", VLANMode: "access"},
+			nil,
+		},
+	}}}
+
+	vlan, ok, err := c.PortAccessVLAN(ctx, "br0", "tap0")
+	assert.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, uint16(401), vlan)
+
+	vlan, ok, err = c.PortAccessVLAN(ctx, "br0", "tap1")
+	assert.NoError(t, err)
+	assert.True(t, ok, "an empty vlan_mode is access")
+	assert.Equal(t, uint16(402), vlan)
+
+	for _, port := range []string{"tap2", "tap3", "tap9"} {
+		_, ok, err = c.PortAccessVLAN(ctx, "br0", port)
+		assert.NoError(t, err, port)
+		assert.False(t, ok, "%s has no access tag", port)
+	}
+
+	failing := &OVSFlowController{client: &portUpdateRecorder{listErr: assert.AnError}}
+	_, ok, err = failing.PortAccessVLAN(ctx, "br0", "tap0")
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.False(t, ok)
+}
+
+// A failed read of one port is an error, never "port not found": the
+// caller would treat the unknown placement as permission to widen (#2081
+// Codex round 8).
+func TestOVSFlowController_PortAccessVLANPropagatesStrictError(t *testing.T) {
+	ctx := context.Background()
+	readErr := errors.New("port row read failed")
+	c := &OVSFlowController{client: &portUpdateRecorder{
+		ports:     map[string][]*ovs.Port{"br0": {}},
+		strictErr: readErr,
+	}}
+	_, ok, err := c.PortAccessVLAN(ctx, "br0", "tap0")
+	assert.ErrorIs(t, err, readErr)
+	assert.False(t, ok)
 }
 
 func (r *portUpdateRecorder) AddFlow(context.Context, string, *ovs.FlowMod) error       { return nil }

@@ -247,6 +247,10 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 // manager records the port in the quarantine zone.
 var ErrPortStateUnknown = errors.New("sdn/policy: zone move failed and could not be rolled back; the port is in an unknown state")
 
+// ErrPortVLANUnknown is returned by PortVLAN when neither the port map nor
+// the switch knows a placement for the port.
+var ErrPortVLANUnknown = errors.New("sdn/policy: no VLAN placement known for the port")
+
 // rollbackZoneMove undoes a zone move whose template batch failed after
 // SetPortVLAN: it deletes every flow of the batch (deleting an absent flow
 // is harmless) and puts the port back on its previous VLAN, or on the
@@ -431,6 +435,44 @@ func portBlockRule(ofPort string) zoneflows.FlowRule {
 	}
 }
 
+// DropPort blocks all of portID's traffic: it deletes the port's rules and
+// installs the highest-priority in_port drop-all (portBlockRule), so the
+// bridge's base pipeline cannot forward the port's unmatched traffic. The
+// port is recorded as quarantined whether or not the install succeeds; a
+// failed install is returned as an error. A later ApplyZoneFlows or
+// ApplyPortClassFlows deletes the drop-all with the port's other rules.
+func (m *ZoneFlowManager) DropPort(ctx context.Context, portID string) error {
+	if portID == "" {
+		return ErrInvalidPortID
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ofPort, err := m.openFlowPort(ctx, portID)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	if err := m.flowController.DeleteFlowsByPort(m.bridgeName, ofPort); err != nil {
+		errs = append(errs, &WrappedError{Msg: "zone flow manager: drop port: delete flows", Err: err})
+	}
+	if err := m.flowController.InstallFlows(m.bridgeName, []zoneflows.FlowRule{portBlockRule(ofPort)}); err != nil {
+		errs = append(errs, &WrappedError{Msg: "zone flow manager: drop port: install drop rule", Err: err})
+	}
+
+	m.portZoneMap[portID] = zone.ZoneQuarantine
+	delete(m.portClassMap, portID)
+	delete(m.portVLANMap, portID)
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	m.logger.Warn("port traffic dropped",
+		slog.String("port_id", portID),
+		complianceAttr(complianceSC7, complianceAC4))
+	return nil
+}
+
 // RemoveFlows removes all OpenFlow rules for portID and clears zone/VLAN tracking.
 // BridgeName returns the OVS bridge this manager deletes and installs
 // flows on.
@@ -554,6 +596,35 @@ func (m *ZoneFlowManager) GetPortVLAN(portID string) (uint16, error) {
 		return 0, &MessageError{Msg: fmt.Sprintf("zone flow manager: port not found: %s", portID)}
 	}
 	return v, nil
+}
+
+// PortVLAN returns portID's access or native VLAN. The port map is in
+// memory and empty after a restart, so a port it does not know is read from
+// the switch when the port controller is a PortVLANReader (#2081 Codex P1).
+// A port with no placement known is "port not found"; a failed switch read
+// is returned as its own error.
+func (m *ZoneFlowManager) PortVLAN(ctx context.Context, portID string) (uint16, error) {
+	m.mu.RLock()
+	v, ok := m.portVLANMap[portID]
+	m.mu.RUnlock()
+	if ok {
+		return v, nil
+	}
+	if m.portController == nil {
+		return 0, &WrappedError{Msg: fmt.Sprintf("zone flow manager: port not found: %s", portID), Err: ErrPortVLANUnknown}
+	}
+	reader, isReader := m.portController.(PortVLANReader)
+	if !isReader {
+		return 0, &WrappedError{Msg: fmt.Sprintf("zone flow manager: port not found: %s", portID), Err: ErrPortVLANUnknown}
+	}
+	vlan, found, err := reader.PortAccessVLAN(ctx, m.bridgeName, portID)
+	if err != nil {
+		return 0, &WrappedError{Msg: fmt.Sprintf("zone flow manager: read the switch VLAN of port %s", portID), Err: err}
+	}
+	if !found {
+		return 0, &WrappedError{Msg: fmt.Sprintf("zone flow manager: port not found: %s", portID), Err: ErrPortVLANUnknown}
+	}
+	return vlan, nil
 }
 
 // ZoneForVLAN returns the zone the network plan carries on VLAN v.

@@ -276,6 +276,39 @@ func (c *Client) ListPorts(ctx context.Context, bridgeName string) ([]*Port, err
 	return ports, nil
 }
 
+// ListPortsStrict lists the ports of a bridge like ListPorts, but fails
+// when any listed port cannot be read: its Select fails, finds no row, or
+// the row does not parse. A caller deciding access from the listing must
+// not read a skipped port as "not on the bridge" (#2081 Codex round 8).
+func (c *Client) ListPortsStrict(ctx context.Context, bridgeName string) ([]*Port, error) {
+	if bridgeName == "" {
+		return nil, ErrInvalidBridgeName
+	}
+
+	bridge, err := c.GetBridge(ctx, bridgeName)
+	if err != nil {
+		return nil, err
+	}
+
+	ports := make([]*Port, 0, len(bridge.Ports))
+	for _, portUUID := range bridge.Ports {
+		rows, err := c.Select(ctx, portTable, []Condition{NewCondition("_uuid", "==", []interface{}{"uuid", portUUID})}, nil)
+		if err != nil {
+			return nil, fmt.Errorf("read port %s of bridge %s: %w", portUUID, bridgeName, err)
+		}
+		if len(rows) == 0 {
+			return nil, fmt.Errorf("read port %s of bridge %s: no port row", portUUID, bridgeName)
+		}
+		port, err := parsePort(rows[0])
+		if err != nil {
+			return nil, fmt.Errorf("parse port %s of bridge %s: %w", portUUID, bridgeName, err)
+		}
+		ports = append(ports, port)
+	}
+
+	return ports, nil
+}
+
 // UpdatePort updates port properties
 func (c *Client) UpdatePort(ctx context.Context, name string, updates map[string]interface{}) error {
 	if name == "" {
@@ -469,19 +502,58 @@ func parsePort(row map[string]interface{}) (*Port, error) {
 		port.Name = name
 	}
 
-	// Parse tag
+	// Parse tag: an optional column, so OVSDB sends a scalar or a set of
+	// at most one element (["set",[401]] or ["set",[]]). A tag that does
+	// not decode is an error, never "no tag" (#2081 Codex round 11).
 	if tagVal, ok := row["tag"]; ok {
+		if arr, ok := tagVal.([]interface{}); ok {
+			if len(arr) != 2 || arr[0] != "set" {
+				return nil, fmt.Errorf("port tag: malformed set %v", tagVal)
+			}
+			items, ok := arr[1].([]interface{})
+			if !ok || len(items) > 1 {
+				return nil, fmt.Errorf("port tag: want at most one element, got %v", arr[1])
+			}
+			tagVal = nil
+			if len(items) == 1 {
+				tagVal = items[0]
+			}
+		}
 		switch v := tagVal.(type) {
+		case nil:
+			port.Tag = 0
 		case float64:
 			port.Tag = int64(v)
 		case int64:
 			port.Tag = v
-		case []interface{}:
-			// Empty set: ["set", []]
-			if len(v) == 2 && v[0] == "set" {
-				port.Tag = 0
+		case int:
+			port.Tag = int64(v)
+		default:
+			return nil, fmt.Errorf("port tag: unexpected value %v", tagVal)
+		}
+	}
+
+	// Parse vlan_mode: an optional enum, a scalar string or a set of at
+	// most one string.
+	if modeVal, ok := row["vlan_mode"]; ok {
+		if arr, ok := modeVal.([]interface{}); ok {
+			if len(arr) != 2 || arr[0] != "set" {
+				return nil, fmt.Errorf("port vlan_mode: malformed set %v", modeVal)
+			}
+			items, ok := arr[1].([]interface{})
+			if !ok || len(items) > 1 {
+				return nil, fmt.Errorf("port vlan_mode: want at most one element, got %v", arr[1])
+			}
+			modeVal = ""
+			if len(items) == 1 {
+				modeVal = items[0]
 			}
 		}
+		mode, ok := modeVal.(string)
+		if !ok {
+			return nil, fmt.Errorf("port vlan_mode: unexpected value %v", modeVal)
+		}
+		port.VLANMode = mode
 	}
 
 	// Parse interfaces

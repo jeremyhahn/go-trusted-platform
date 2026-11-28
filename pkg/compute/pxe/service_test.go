@@ -17,13 +17,16 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -970,6 +973,54 @@ func TestService_RetryDevice_MaxRetriesExceeded(t *testing.T) {
 	assert.True(t, errors.As(err, &maxRetriesErr))
 }
 
+// A failed persisting write leaves the device as it was, so the retry at
+// the last allowed attempt can be made again once storage recovers (#2081).
+func TestService_RetryDevice_PutFailureIsRetryable(t *testing.T) {
+	cfg := createTestConfig()
+	cfg.MaxRetries = 2
+	ctx := context.Background()
+
+	store := newFakeDeviceStore()
+	svc := &service{
+		logger:       logging.DefaultLogger(),
+		stateManager: NewStateManager(WithDeviceStore(store)),
+		vlanManager:  NewNoopVLANIntegration(testNetPlan),
+		config:       cfg,
+	}
+	svc.initialized.Store(true)
+
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:56", "port-1")
+	require.NoError(t, err)
+
+	// Use up all but the last retry.
+	for i := 0; i < cfg.MaxRetries-1; i++ {
+		require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateFailed, "test failure"))
+		require.NoError(t, svc.RetryDevice(ctx, device.ID))
+	}
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateFailed, "test failure"))
+	require.NoError(t, svc.stateManager.UpdateDevice(device.ID, func(d *DeviceInfo) error {
+		d.IDevIDFingerprint = "fp-before"
+		return nil
+	}))
+
+	store.mu.Lock()
+	store.putErr = errors.New("datastore unavailable")
+	store.mu.Unlock()
+	require.Error(t, svc.RetryDevice(ctx, device.ID))
+
+	got, err := svc.stateManager.Get(device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, cfg.MaxRetries-1, got.RetryCount, "retry count restored")
+	assert.Equal(t, "fp-before", got.IDevIDFingerprint, "fingerprint restored")
+	assert.Equal(t, StateFailed, got.State, "state restored")
+
+	require.NoError(t, svc.RetryDevice(ctx, device.ID))
+	got, err = svc.stateManager.Get(device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StateDiscovered, got.State)
+	assert.Equal(t, cfg.MaxRetries, got.RetryCount)
+}
+
 func TestService_RetryDevice_InvalidTransition(t *testing.T) {
 	svc, _ := initializeTestService(t)
 	ctx := context.Background()
@@ -1826,4 +1877,690 @@ func TestService_QuarantineAuthorize_Serialized(t *testing.T) {
 	assert.Equal(t, svc.config.QuarantineVLAN, got.CurrentVLAN)
 	assert.Equal(t, "quarantine", vlan.flows(),
 		"a quarantined device must not be left with production flows")
+}
+
+// recordingFlowsVLAN records the last flow set applied to the device.
+type recordingFlowsVLAN struct {
+	VLANIntegration
+	mu   sync.Mutex
+	last string
+}
+
+func (r *recordingFlowsVLAN) set(flows string) {
+	r.mu.Lock()
+	r.last = flows
+	r.mu.Unlock()
+}
+
+func (r *recordingFlowsVLAN) flows() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.last
+}
+
+func (r *recordingFlowsVLAN) ApplyQuarantineFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
+	r.set("quarantine")
+	return nil
+}
+
+func (r *recordingFlowsVLAN) ApplyProvisioningFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
+	r.set("provisioning")
+	return nil
+}
+
+func (r *recordingFlowsVLAN) ApplyAuthorizedFlows(ctx context.Context, portID string, mac net.HardwareAddr, vlanID uint16) error {
+	r.set("authorized")
+	return nil
+}
+
+// newStoreBackedService returns a service over a failing store with an
+// authorizing device whose state writes fail when failState is written.
+func newStoreBackedService(t *testing.T, failState ProvisioningState) (*service, *recordingFlowsVLAN, *failingDeviceStore, string) {
+	t.Helper()
+	store := newFailingDeviceStore()
+	vlan := &recordingFlowsVLAN{VLANIntegration: NewNoopVLANIntegration(testNetPlan)}
+	svc := &service{
+		logger:       logging.DefaultLogger(),
+		stateManager: NewStateManager(WithDeviceStore(store)),
+		vlanManager:  vlan,
+		config:       createTestConfig(),
+	}
+	svc.initialized.Store(true)
+	device, err := svc.RegisterDevice(context.Background(), "00:11:22:33:44:81", "port-81")
+	require.NoError(t, err)
+	require.NoError(t, svc.stateManager.UpdateDevice(device.ID, func(d *DeviceInfo) error {
+		d.State = StateAuthorizing
+		return nil
+	}))
+	store.mu.Lock()
+	store.failPut = func(d *DeviceInfo) bool { return d.State == failState }
+	store.mu.Unlock()
+	return svc, vlan, store, device.ID
+}
+
+func TestService_AuthorizeDevice_FailedStateWriteUndoesFlows(t *testing.T) {
+	svc, vlan, store, id := newStoreBackedService(t, StateAuthorized)
+	before, err := svc.stateManager.Get(id)
+	require.NoError(t, err)
+
+	require.Error(t, svc.AuthorizeDevice(context.Background(), id, 200))
+
+	got, err := svc.stateManager.Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateAuthorizing, got.State)
+	assert.Equal(t, before.CurrentVLAN, got.CurrentVLAN)
+	assert.Equal(t, "provisioning", vlan.flows(), "the production flows must be undone")
+
+	reloaded, err := reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.NotEqual(t, StateAuthorized, reloaded.State)
+	assert.Equal(t, before.CurrentVLAN, reloaded.CurrentVLAN)
+}
+
+func TestService_QuarantineDevice_FailedStateWriteKeepsQuarantineFlows(t *testing.T) {
+	svc, vlan, store, id := newStoreBackedService(t, StateQuarantined)
+	before, err := svc.stateManager.Get(id)
+	require.NoError(t, err)
+
+	require.Error(t, svc.QuarantineDevice(context.Background(), id, "posture failed"))
+
+	got, err := svc.stateManager.Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateAuthorizing, got.State)
+	assert.Equal(t, before.CurrentVLAN, got.CurrentVLAN)
+	assert.Equal(t, "quarantine", vlan.flows(), "a failed write must keep the restrictive quarantine flows")
+
+	reloaded, err := reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.NotEqual(t, StateQuarantined, reloaded.State)
+	assert.Equal(t, before.CurrentVLAN, reloaded.CurrentVLAN)
+
+	// After the outage the quarantine goes through and is stored.
+	store.mu.Lock()
+	store.failPut = nil
+	store.mu.Unlock()
+	require.NoError(t, svc.QuarantineDevice(context.Background(), id, "posture failed"))
+	reloaded, err = reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateQuarantined, reloaded.State)
+	assert.Equal(t, svc.config.QuarantineVLAN, reloaded.CurrentVLAN)
+}
+
+// setStoredDevice stores the device in state with currentVLAN, then makes
+// every later write that matches failPut fail.
+func setStoredDevice(t *testing.T, svc *service, store *failingDeviceStore, id string, state ProvisioningState, currentVLAN uint16, failPut func(*DeviceInfo) bool) {
+	t.Helper()
+	store.mu.Lock()
+	store.failPut = nil
+	store.mu.Unlock()
+	require.NoError(t, svc.stateManager.UpdateDevice(id, func(d *DeviceInfo) error {
+		d.State = state
+		d.CurrentVLAN = currentVLAN
+		return nil
+	}))
+	store.mu.Lock()
+	store.failPut = failPut
+	store.mu.Unlock()
+}
+
+// Quarantining an authorized device whose state write fails must not
+// restore production access (#2081 Codex P1).
+func TestService_QuarantineDevice_FromAuthorizedFailedWriteStaysIsolated(t *testing.T) {
+	const productionVLAN uint16 = 300
+	svc, vlan, store, id := newStoreBackedService(t, StateQuarantined)
+	setStoredDevice(t, svc, store, id, StateAuthorized, productionVLAN,
+		func(d *DeviceInfo) bool { return d.State == StateQuarantined })
+
+	require.Error(t, svc.QuarantineDevice(context.Background(), id, "posture failed"))
+	assert.Equal(t, "quarantine", vlan.flows(), "a datastore outage must not reconnect the device")
+
+	got, err := svc.stateManager.Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateAuthorized, got.State, "state is only changed by a committed write")
+
+	store.mu.Lock()
+	store.failPut = nil
+	store.mu.Unlock()
+	require.NoError(t, svc.QuarantineDevice(context.Background(), id, "posture failed"))
+	reloaded, err := reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateQuarantined, reloaded.State)
+	assert.Equal(t, svc.config.QuarantineVLAN, reloaded.CurrentVLAN)
+	assert.Equal(t, "quarantine", vlan.flows())
+}
+
+// enforcedPlacementVLAN reports the VLAN its last flows enforce, as the zone
+// flow manager's port map does.
+type enforcedPlacementVLAN struct {
+	*recordingFlowsVLAN
+	quarantine, provisioning uint16
+}
+
+func (v *enforcedPlacementVLAN) GetCurrentVLAN(_ context.Context, portID string) (uint16, error) {
+	switch v.flows() {
+	case "quarantine":
+		return v.quarantine, nil
+	case "provisioning":
+		return v.provisioning, nil
+	default:
+		return 0, ErrDeviceNotFound{DeviceID: portID}
+	}
+}
+
+// A quarantine whose write failed is enforced but not stored. A recreated
+// service has an empty pendingQuarantine map, so it must learn the enforced
+// quarantine from the port's placement and refuse the widening report until
+// the quarantine is stored (#2081 Codex round 6).
+func TestService_QuarantinePendingSurvivesServiceRecreation(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name  string
+		state ProvisioningState
+		widen func(s *service, id string) error
+	}{
+		{"install_complete report", StateInstalling, func(s *service, id string) error {
+			return s.UpdateDeviceState(ctx, id, StateInstallComplete, "install complete")
+		}},
+		{"authorize", StateAuthorizing, func(s *service, id string) error {
+			return s.AuthorizeDevice(ctx, id, 200)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, rec, store, id := newStoreBackedService(t, StateQuarantined)
+			vlan := &enforcedPlacementVLAN{recordingFlowsVLAN: rec, quarantine: svc.config.QuarantineVLAN, provisioning: svc.config.ProvisioningVLAN}
+			svc.vlanManager = vlan
+			setStoredDevice(t, svc, store, id, tc.state, svc.config.ProvisioningVLAN,
+				func(d *DeviceInfo) bool { return d.State == StateQuarantined })
+			rec.set("provisioning")
+
+			require.Error(t, svc.QuarantineDevice(ctx, id, "posture failed"))
+			require.Equal(t, "quarantine", rec.flows())
+
+			store.mu.Lock()
+			store.failPut = nil
+			store.mu.Unlock()
+
+			restarted := &service{
+				logger:       logging.DefaultLogger(),
+				stateManager: reloadFrom(t, store),
+				vlanManager:  vlan,
+				config:       svc.config,
+			}
+			restarted.initialized.Store(true)
+
+			err := tc.widen(restarted, id)
+			var refused ErrInvalidStateTransition
+			require.ErrorAs(t, err, &refused)
+			assert.Equal(t, "quarantine", rec.flows(), "the widening move must not reconnect the device")
+			stored, err := reloadFrom(t, store).Get(id)
+			require.NoError(t, err)
+			assert.Equal(t, tc.state, stored.State)
+
+			require.NoError(t, restarted.QuarantineDevice(ctx, id, "posture failed"))
+			reloaded, err := reloadFrom(t, store).Get(id)
+			require.NoError(t, err)
+			assert.Equal(t, StateQuarantined, reloaded.State)
+			assert.Equal(t, svc.config.QuarantineVLAN, reloaded.CurrentVLAN)
+		})
+	}
+}
+
+// fakeSwitch is the OVSDB port state that survives a daemon restart.
+type fakeSwitch struct {
+	mu      sync.Mutex
+	tags    map[string]int64
+	readErr error
+}
+
+func (s *fakeSwitch) tag(port string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tags[port]
+}
+
+// switchPort is a recordingPort over a fakeSwitch: it records the access
+// tag it sets and reads it back as OVSDB does.
+type switchPort struct {
+	recordingPort
+	sw *fakeSwitch
+}
+
+func (p *switchPort) SetPortVLAN(_ context.Context, port string, v int64) error {
+	p.sw.mu.Lock()
+	defer p.sw.mu.Unlock()
+	p.sw.tags[port] = v
+	return nil
+}
+
+func (p *switchPort) PortAccessVLAN(_ context.Context, _, port string) (uint16, bool, error) {
+	p.sw.mu.Lock()
+	defer p.sw.mu.Unlock()
+	if p.sw.readErr != nil {
+		return 0, false, p.sw.readErr
+	}
+	v, ok := p.sw.tags[port]
+	return uint16(v), ok && v > 0, nil
+}
+
+// newSwitchVLAN builds the real VLAN wrapper over a fresh zone flow manager
+// on sw, as a daemon start does.
+func newSwitchVLAN(t *testing.T, sw *fakeSwitch) VLANIntegration {
+	t.Helper()
+	port := &switchPort{sw: sw}
+	zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName: "br-fabric", FlowController: port, PortController: port, Plan: testNetPlan,
+	})
+	require.NoError(t, err)
+	return NewVLANIntegrationWrapper(WithFlowManager(zfm))
+}
+
+// A daemon restart builds a new flow manager with an empty port map. The
+// quarantine whose write failed is still enforced on the switch, so the
+// restarted service must read it there and refuse a widening move
+// (#2081 Codex P1); a placement it cannot read refuses the move too.
+func TestService_QuarantinePendingSurvivesDaemonRestart(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name  string
+		state ProvisioningState
+		widen func(s *service, id string) error
+	}{
+		{"install_complete report", StateInstalling, func(s *service, id string) error {
+			return s.UpdateDeviceState(ctx, id, StateInstallComplete, "install complete")
+		}},
+		{"authorize", StateAuthorizing, func(s *service, id string) error {
+			return s.AuthorizeDevice(ctx, id, 200)
+		}},
+	}
+	for _, tc := range cases {
+		for _, readFails := range []bool{false, true} {
+			name := tc.name
+			if readFails {
+				name += " placement read error"
+			}
+			t.Run(name, func(t *testing.T) {
+				sw := &fakeSwitch{tags: map[string]int64{}}
+				svc, _, store, id := newStoreBackedService(t, StateQuarantined)
+				svc.vlanManager = newSwitchVLAN(t, sw)
+				setStoredDevice(t, svc, store, id, tc.state, svc.config.ProvisioningVLAN,
+					func(d *DeviceInfo) bool { return d.State == StateQuarantined })
+				device, err := svc.stateManager.Get(id)
+				require.NoError(t, err)
+				port := device.PortID
+
+				require.Error(t, svc.QuarantineDevice(ctx, id, "posture failed"))
+				require.Equal(t, int64(svc.config.QuarantineVLAN), sw.tag(port))
+
+				store.mu.Lock()
+				store.failPut = nil
+				store.mu.Unlock()
+				sw.mu.Lock()
+				if readFails {
+					sw.readErr = errors.New("ovsdb down")
+				}
+				sw.mu.Unlock()
+
+				restarted := &service{
+					logger:       logging.DefaultLogger(),
+					stateManager: reloadFrom(t, store),
+					vlanManager:  newSwitchVLAN(t, sw),
+					config:       svc.config,
+				}
+				restarted.initialized.Store(true)
+
+				err = tc.widen(restarted, id)
+				var refused ErrInvalidStateTransition
+				require.ErrorAs(t, err, &refused)
+				assert.Equal(t, int64(svc.config.QuarantineVLAN), sw.tag(port),
+					"the widening move must not reconnect the device")
+				stored, err := reloadFrom(t, store).Get(id)
+				require.NoError(t, err)
+				assert.Equal(t, tc.state, stored.State)
+			})
+		}
+	}
+}
+
+// A discovered device already sits on the quarantine VLAN, so after a failed
+// quarantine write only a durable intent marker tells it apart from a fresh
+// registration. A restarted daemon must still refuse the widening moves
+// (#2081 Codex round 8).
+func TestService_QuarantineIntentSurvivesRestartOnQuarantineVLAN(t *testing.T) {
+	ctx := context.Background()
+	restart := func(t *testing.T, svc *service, store *failingDeviceStore, sw *fakeSwitch) *service {
+		t.Helper()
+		store.mu.Lock()
+		store.failPut = nil
+		store.mu.Unlock()
+		restarted := &service{
+			logger:       logging.DefaultLogger(),
+			stateManager: reloadFrom(t, store),
+			vlanManager:  newSwitchVLAN(t, sw),
+			config:       svc.config,
+		}
+		restarted.initialized.Store(true)
+		return restarted
+	}
+	cases := []struct {
+		name  string
+		widen func(s *service, id string) error
+	}{
+		{"boot", func(s *service, id string) error {
+			return s.UpdateDeviceState(ctx, id, StateBooting, "pxe boot")
+		}},
+		{"authorize", func(s *service, id string) error {
+			return s.AuthorizeDevice(ctx, id, 200)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sw := &fakeSwitch{tags: map[string]int64{}}
+			svc, _, store, id := newStoreBackedService(t, StateQuarantined)
+			svc.vlanManager = newSwitchVLAN(t, sw)
+			setStoredDevice(t, svc, store, id, StateDiscovered, svc.config.QuarantineVLAN,
+				func(d *DeviceInfo) bool { return d.State == StateQuarantined })
+			device, err := svc.stateManager.Get(id)
+			require.NoError(t, err)
+			port := device.PortID
+
+			require.Error(t, svc.QuarantineDevice(ctx, id, "posture failed"))
+			require.Equal(t, int64(svc.config.QuarantineVLAN), sw.tag(port))
+
+			restarted := restart(t, svc, store, sw)
+			err = tc.widen(restarted, id)
+			var refused ErrInvalidStateTransition
+			require.ErrorAs(t, err, &refused)
+			assert.Equal(t, int64(svc.config.QuarantineVLAN), sw.tag(port),
+				"the widening move must not reconnect the device")
+			stored, err := reloadFrom(t, store).Get(id)
+			require.NoError(t, err)
+			assert.Equal(t, StateDiscovered, stored.State)
+		})
+	}
+
+	t.Run("unmarked registration still boots", func(t *testing.T) {
+		sw := &fakeSwitch{tags: map[string]int64{}}
+		svc, _, store, id := newStoreBackedService(t, StateQuarantined)
+		svc.vlanManager = newSwitchVLAN(t, sw)
+		setStoredDevice(t, svc, store, id, StateDiscovered, svc.config.QuarantineVLAN, nil)
+		device, err := svc.stateManager.Get(id)
+		require.NoError(t, err)
+		sw.mu.Lock()
+		sw.tags[device.PortID] = int64(svc.config.QuarantineVLAN)
+		sw.mu.Unlock()
+
+		restarted := restart(t, svc, store, sw)
+		require.NoError(t, restarted.UpdateDeviceState(ctx, id, StateBooting, "pxe boot"))
+	})
+}
+
+// A restrictive UpdateDeviceState on a fresh registration (already on the
+// quarantine VLAN) whose state write fails must leave a durable intent, so
+// a restarted service still refuses a boot until the restrictive state is
+// stored (#2081 Codex round 9).
+func TestService_UpdateDeviceState_FailedRestrictiveWriteKeepsQuarantineAcrossRestart(t *testing.T) {
+	ctx := context.Background()
+	restart := func(t *testing.T, svc *service, store *failingDeviceStore, sw *fakeSwitch) *service {
+		t.Helper()
+		store.mu.Lock()
+		store.failPut = nil
+		store.mu.Unlock()
+		restarted := &service{
+			logger:       logging.DefaultLogger(),
+			stateManager: reloadFrom(t, store),
+			vlanManager:  newSwitchVLAN(t, sw),
+			config:       svc.config,
+		}
+		restarted.initialized.Store(true)
+		return restarted
+	}
+	cases := []struct {
+		name  string
+		state ProvisioningState
+	}{
+		{"quarantined", StateQuarantined},
+		{"failed", StateFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sw := &fakeSwitch{tags: map[string]int64{}}
+			svc, _, store, id := newStoreBackedService(t, tc.state)
+			svc.vlanManager = newSwitchVLAN(t, sw)
+			setStoredDevice(t, svc, store, id, StateDiscovered, svc.config.QuarantineVLAN,
+				func(d *DeviceInfo) bool { return d.State == tc.state })
+			device, err := svc.stateManager.Get(id)
+			require.NoError(t, err)
+			port := device.PortID
+
+			require.Error(t, svc.UpdateDeviceState(ctx, id, tc.state, "posture failed"))
+			require.Equal(t, int64(svc.config.QuarantineVLAN), sw.tag(port))
+
+			restarted := restart(t, svc, store, sw)
+			err = restarted.UpdateDeviceState(ctx, id, StateBooting, "pxe boot")
+			var refused ErrInvalidStateTransition
+			require.ErrorAs(t, err, &refused)
+			assert.Equal(t, int64(svc.config.QuarantineVLAN), sw.tag(port),
+				"the boot must not reconnect the device")
+			stored, err := reloadFrom(t, store).Get(id)
+			require.NoError(t, err)
+			assert.Equal(t, StateDiscovered, stored.State)
+
+			require.NoError(t, restarted.UpdateDeviceState(ctx, id, tc.state, "posture failed"))
+			stored, err = reloadFrom(t, store).Get(id)
+			require.NoError(t, err)
+			assert.Equal(t, tc.state, stored.State)
+			assert.Equal(t, svc.config.QuarantineVLAN, stored.CurrentVLAN)
+		})
+	}
+}
+
+// A failed transition write must not consume the retry (#2081 Codex P1).
+func TestService_RetryDevice_FailedTransitionWriteKeepsRetry(t *testing.T) {
+	svc, _, store, id := newStoreBackedService(t, StateQuarantined)
+	svc.config.MaxRetries = 1
+	setStoredDevice(t, svc, store, id, StateFailed, svc.config.QuarantineVLAN,
+		func(d *DeviceInfo) bool { return d.State == StateDiscovered })
+
+	require.Error(t, svc.RetryDevice(context.Background(), id))
+
+	got, err := svc.stateManager.Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateFailed, got.State)
+	assert.Equal(t, 0, got.RetryCount, "retry count unchanged in memory")
+	reloaded, err := reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateFailed, reloaded.State)
+	assert.Equal(t, 0, reloaded.RetryCount, "retry count unchanged in storage")
+
+	store.mu.Lock()
+	store.failPut = nil
+	store.mu.Unlock()
+	require.NoError(t, svc.RetryDevice(context.Background(), id))
+	reloaded, err = reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateDiscovered, reloaded.State)
+	assert.Equal(t, 1, reloaded.RetryCount)
+}
+
+// State and the VLAN it enforces are committed together (#2081 Codex P1).
+func TestService_UpdateDeviceState_FailedVLANWriteKeepsState(t *testing.T) {
+	svc, _, store, id := newStoreBackedService(t, StateQuarantined)
+	provisioningVLAN := svc.config.ProvisioningVLAN
+	setStoredDevice(t, svc, store, id, StateDiscovered, svc.config.QuarantineVLAN,
+		func(d *DeviceInfo) bool { return d.State == StateBooting && d.CurrentVLAN == provisioningVLAN })
+
+	require.Error(t, svc.UpdateDeviceState(context.Background(), id, StateBooting, "pxe boot"))
+
+	got, err := svc.stateManager.Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateDiscovered, got.State)
+	assert.Equal(t, svc.config.QuarantineVLAN, got.CurrentVLAN)
+	reloaded, err := reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateDiscovered, reloaded.State)
+	assert.Equal(t, svc.config.QuarantineVLAN, reloaded.CurrentVLAN)
+
+	store.mu.Lock()
+	store.failPut = nil
+	store.mu.Unlock()
+	require.NoError(t, svc.UpdateDeviceState(context.Background(), id, StateBooting, "pxe boot"))
+	reloaded, err = reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateBooting, reloaded.State)
+	assert.Equal(t, provisioningVLAN, reloaded.CurrentVLAN)
+}
+
+// restoreFailingPort is a recordingPort that tracks the live flows. Once
+// fail is set, installs of anything but a port drop-all fail; with
+// failDrop set the drop-all fails too. Deletes keep succeeding and remove
+// the port's in_port rules, as ovs-ofctl del-flows in_port=N does. It
+// records each flow operation in order.
+type restoreFailingPort struct {
+	recordingPort
+	mu       sync.Mutex
+	fail     bool
+	failDrop bool
+	ops      []string
+	live     []zoneflows.FlowRule
+}
+
+var errFlowInstall = errors.New("flow install failed")
+
+// isPortDropAll reports whether rules is a single highest-priority drop of
+// all of a port's traffic.
+func isPortDropAll(rules []zoneflows.FlowRule) bool {
+	return len(rules) == 1 && rules[0].Priority == 65535 && rules[0].Actions == "drop" &&
+		strings.HasPrefix(rules[0].Match, "in_port=") && !strings.Contains(rules[0].Match, ",")
+}
+
+func (p *restoreFailingPort) InstallFlows(_ string, rules []zoneflows.FlowRule) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	drop := isPortDropAll(rules)
+	if p.fail && (!drop || p.failDrop) {
+		p.ops = append(p.ops, "install-failed")
+		return errFlowInstall
+	}
+	if drop {
+		p.ops = append(p.ops, "install-drop")
+	} else {
+		p.ops = append(p.ops, "install")
+	}
+	p.live = append(p.live, rules...)
+	return nil
+}
+
+func (p *restoreFailingPort) DeleteFlowsByPort(_ string, ofPort string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.ops = append(p.ops, "delete")
+	kept := p.live[:0]
+	for _, r := range p.live {
+		onPort := false
+		for _, f := range strings.Split(r.Match, ",") {
+			if f == "in_port="+ofPort {
+				onPort = true
+			}
+		}
+		if !onPort {
+			kept = append(kept, r)
+		}
+	}
+	p.live = kept
+	return nil
+}
+
+// TestService_UpdateDeviceState_QuarantineRestoreFailureDropsAll: a
+// discovered-to-booting move installs provisioning flows, then the state
+// write fails and every quarantine restore fails too. Through the real
+// zone flow manager, on a bridge whose base pipeline forwards unmatched
+// traffic to NORMAL, the service must end with a highest-priority in_port
+// drop rule on the port (a flow delete alone would leave the device the
+// base pipeline's access) and return the error (#2081 Codex rounds 11, 14).
+// When the drop rule cannot be installed either, the error says so.
+func TestService_UpdateDeviceState_QuarantineRestoreFailureDropsAll(t *testing.T) {
+	for _, failDrop := range []bool{false, true} {
+		name := "drop installed"
+		if failDrop {
+			name = "drop fails"
+		}
+		t.Run(name, func(t *testing.T) {
+			svc, _, store, id := newStoreBackedService(t, StateQuarantined)
+			port := &restoreFailingPort{}
+			base, err := gateway.BasePipelineRules(gateway.TerminalNormal)
+			require.NoError(t, err)
+			require.NotEmpty(t, base)
+			require.NoError(t, port.InstallFlows("br-fabric", base))
+			zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+				BridgeName: "br-fabric", FlowController: port, PortController: port, Plan: testNetPlan,
+			})
+			require.NoError(t, err)
+			svc.vlanManager = NewVLANIntegrationWrapper(WithFlowManager(zfm))
+			// The booting write fails, and from then on every flow install
+			// but the drop-all fails: the provisioning move succeeds, every
+			// quarantine restore does not.
+			setStoredDevice(t, svc, store, id, StateDiscovered, svc.config.QuarantineVLAN,
+				func(d *DeviceInfo) bool {
+					if d.State != StateBooting {
+						return false
+					}
+					port.mu.Lock()
+					port.fail = true
+					port.failDrop = failDrop
+					port.mu.Unlock()
+					return true
+				})
+
+			port.mu.Lock()
+			port.ops = nil
+			port.mu.Unlock()
+
+			err = svc.UpdateDeviceState(context.Background(), id, StateBooting, "pxe boot")
+			require.Error(t, err)
+			assert.ErrorIs(t, err, errFlowInstall, "the failed restore is returned")
+
+			port.mu.Lock()
+			ops := append([]string(nil), port.ops...)
+			live := append([]zoneflows.FlowRule(nil), port.live...)
+			port.mu.Unlock()
+			require.NotEmpty(t, ops)
+			assert.Contains(t, ops, "install", "the provisioning flows are installed")
+			assert.GreaterOrEqual(t, countOps(ops, "install-failed"), 2,
+				"the quarantine restore is tried again after it fails")
+			for _, r := range base {
+				assert.Contains(t, live, r, "the base pipeline stays on the bridge")
+			}
+
+			got, gErr := svc.stateManager.Get(id)
+			require.NoError(t, gErr)
+			assert.Equal(t, StateDiscovered, got.State)
+			assert.Equal(t, svc.config.QuarantineVLAN, got.CurrentVLAN)
+
+			drop := zoneflows.FlowRule{Priority: 65535, Match: "in_port=1", Actions: "drop", Cookie: zoneflows.QuarantineCookie}
+			if failDrop {
+				assert.ErrorContains(t, err, "failed to block port", "the failed drop install is reported")
+				assert.Equal(t, "install-failed", ops[len(ops)-1], "%v", ops)
+				return
+			}
+			assert.Equal(t, "install-drop", ops[len(ops)-1],
+				"a port whose quarantine cannot be restored ends with a drop-all installed, not a delete: %v", ops)
+			assert.Contains(t, live, drop, "the highest-priority in_port drop rule is live")
+			for _, r := range live {
+				if r != drop && strings.Contains(r.Match, "in_port=1") {
+					assert.Less(t, r.Priority, drop.Priority, "the drop-all outranks rule %v", r)
+				}
+			}
+		})
+	}
+}
+
+func countOps(ops []string, op string) int {
+	n := 0
+	for _, o := range ops {
+		if o == op {
+			n++
+		}
+	}
+	return n
 }

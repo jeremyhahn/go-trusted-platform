@@ -1377,3 +1377,127 @@ func TestStateManager_Transition_InvalidTransitionAfterConcurrentStateChange(t *
 	current, _ := sm.Get("device-123")
 	assert.Equal(t, StateQuarantined, current.State)
 }
+
+// failingDeviceStore is an in-memory DeviceStore whose Puts fail while
+// failPuts is set, or when failPut matches the device being written
+// (#2081 Codex): it stands in for a datastore outage.
+type failingDeviceStore struct {
+	mu       sync.Mutex
+	records  map[string]*DeviceInfo
+	failPuts bool
+	failPut  func(*DeviceInfo) bool
+}
+
+type errStoreDown struct{}
+
+func (errStoreDown) Error() string { return "datastore down" }
+
+func newFailingDeviceStore() *failingDeviceStore {
+	return &failingDeviceStore{records: map[string]*DeviceInfo{}}
+}
+
+func (s *failingDeviceStore) setFailPuts(fail bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failPuts = fail
+}
+
+func (s *failingDeviceStore) Put(_ context.Context, device *DeviceInfo) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failPuts || (s.failPut != nil && s.failPut(device)) {
+		return errStoreDown{}
+	}
+	s.records[device.ID] = copyDeviceInfo(device)
+	return nil
+}
+
+func (s *failingDeviceStore) Delete(_ context.Context, deviceID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.records, deviceID)
+	return nil
+}
+
+func (s *failingDeviceStore) List(_ context.Context) ([]*DeviceInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*DeviceInfo, 0, len(s.records))
+	for _, d := range s.records {
+		out = append(out, copyDeviceInfo(d))
+	}
+	return out, nil
+}
+
+// reloadFrom builds a fresh StateManager over the store, as a restart does.
+func reloadFrom(t *testing.T, store DeviceStore) *StateManager {
+	t.Helper()
+	sm := NewStateManager(WithDeviceStore(store))
+	if err := sm.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return sm
+}
+
+func TestStateManager_Register_FailedPutIsRetryable(t *testing.T) {
+	store := newFailingDeviceStore()
+	sm := NewStateManager(WithDeviceStore(store))
+	mac := []byte{0x02, 0, 0, 0, 0x20, 0x81}
+
+	store.setFailPuts(true)
+	if err := sm.Register(&DeviceInfo{ID: "dev-r", MACAddress: mac, State: StateDiscovered}); err == nil {
+		t.Fatal("Register succeeded with the datastore down")
+	}
+	if _, err := sm.Get("dev-r"); err == nil {
+		t.Fatal("failed Register left the device in memory")
+	}
+	if _, err := sm.GetByMAC(mac); err == nil {
+		t.Fatal("failed Register left the MAC index populated")
+	}
+
+	store.setFailPuts(false)
+	if err := sm.Register(&DeviceInfo{ID: "dev-r", MACAddress: mac, State: StateDiscovered}); err != nil {
+		t.Fatalf("Register retry after recovery: %v", err)
+	}
+	if _, err := reloadFrom(t, store).Get("dev-r"); err != nil {
+		t.Fatalf("reload does not find the registered device: %v", err)
+	}
+}
+
+func TestStateManager_Transition_FailedPutIsRetryable(t *testing.T) {
+	store := newFailingDeviceStore()
+	sm := NewStateManager(WithDeviceStore(store))
+	handler := &stateTestEventHandler{}
+	sm.RegisterEventHandler(handler)
+	mac := []byte{0x02, 0, 0, 0, 0x20, 0x82}
+	if err := sm.Register(&DeviceInfo{ID: "dev-q", MACAddress: mac, State: StateDiscovered}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	store.setFailPuts(true)
+	if err := sm.Transition("dev-q", StateQuarantined, "posture failed"); err == nil {
+		t.Fatal("Transition succeeded with the datastore down")
+	}
+	got, err := sm.Get("dev-q")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != StateDiscovered {
+		t.Fatalf("failed Transition changed memory to %s", got.State)
+	}
+	if n := len(handler.getEvents()); n != 0 {
+		t.Fatalf("failed Transition emitted %d events", n)
+	}
+
+	store.setFailPuts(false)
+	if err := sm.Transition("dev-q", StateQuarantined, "posture failed"); err != nil {
+		t.Fatalf("Transition retry after recovery: %v", err)
+	}
+	reloaded, err := reloadFrom(t, store).Get("dev-q")
+	if err != nil {
+		t.Fatalf("reload Get: %v", err)
+	}
+	if reloaded.State != StateQuarantined {
+		t.Fatalf("reload state = %s, want %s", reloaded.State, StateQuarantined)
+	}
+}

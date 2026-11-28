@@ -15,6 +15,8 @@ package pxe
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"maps"
 	"net"
 	"sync"
@@ -57,11 +59,115 @@ type StateManager struct {
 	// now is the time source for every timestamp the state machine stamps.
 	// time.Now in production; tests inject a clock they step by hand (#284).
 	now func() time.Time
+
+	// store, when set, receives every device change before the in-memory
+	// update, so devices survive a restart (#2028) and a failed write
+	// leaves memory unchanged (#2081 Codex). storeMu orders the writes.
+	store   DeviceStore
+	storeMu sync.Mutex
+}
+
+// DeviceStore persists PXE devices in the deployment datastore
+// (docs/SPEC.md:23, #2028). Put stores the whole device record (state,
+// retry count, events and identity binding) under its ID; Delete removes
+// it; List returns every stored device for Load.
+type DeviceStore interface {
+	Put(ctx context.Context, device *DeviceInfo) error
+	Delete(ctx context.Context, deviceID string) error
+	List(ctx context.Context) ([]*DeviceInfo, error)
+}
+
+// StateManagerOption configures a StateManager.
+type StateManagerOption func(*StateManager)
+
+// WithDeviceStore writes every device change through to store; call Load
+// to refill the manager from it when the backend starts.
+func WithDeviceStore(store DeviceStore) StateManagerOption {
+	return func(sm *StateManager) {
+		sm.store = store
+	}
+}
+
+// Load refills the manager from its DeviceStore: every stored device is
+// registered by ID and MAC address in the state it was stored in. Without a
+// store Load does nothing.
+func (sm *StateManager) Load(ctx context.Context) error {
+	if sm.store == nil {
+		return nil
+	}
+	devices, err := sm.store.List(ctx)
+	if err != nil {
+		return fmt.Errorf("pxe: load devices from store: %w", err)
+	}
+	for _, device := range devices {
+		if device == nil || device.ID == "" || len(device.MACAddress) == 0 {
+			continue
+		}
+		sm.devices.Store(device.ID, &deviceEntry{device: device, version: 1})
+		sm.byMAC.Store(device.MACAddress.String(), device.ID)
+	}
+	return nil
+}
+
+// persistLocked writes the device's current entry, or deletes its record
+// when the device is gone. The caller holds storeMu.
+func (sm *StateManager) persistLocked(deviceID string) error {
+	ctx := context.Background()
+	if entryVal, ok := sm.devices.Load(deviceID); ok {
+		if err := sm.store.Put(ctx, entryVal.(*deviceEntry).device); err != nil {
+			return fmt.Errorf("pxe: store device %s: %w", deviceID, err)
+		}
+		return nil
+	}
+	if err := sm.store.Delete(ctx, deviceID); err != nil {
+		return fmt.Errorf("pxe: delete stored device %s: %w", deviceID, err)
+	}
+	return nil
+}
+
+// commit replaces the device's entry old with next, writing next to the
+// store first (#2081 Codex): a failed write leaves memory unchanged, so the
+// caller can retry the whole operation. It reports false with no error when
+// another writer replaced old first; the caller reloads and retries.
+func (sm *StateManager) commit(deviceID string, old, next *deviceEntry) (bool, error) {
+	if sm.store == nil {
+		return sm.devices.CompareAndSwap(deviceID, old, next), nil
+	}
+	sm.storeMu.Lock()
+	defer sm.storeMu.Unlock()
+	if cur, ok := sm.devices.Load(deviceID); !ok || cur.(*deviceEntry) != old {
+		return false, nil
+	}
+	ctx := context.Background()
+	// A failed write may still have committed (the datastore reports an
+	// unknown outcome as an error), so the old record is written back
+	// before the error is returned: a restart then never restores a
+	// transition reported as failed (#2081 Codex round 4).
+	if err := sm.store.Put(ctx, next.device); err != nil {
+		err = fmt.Errorf("pxe: store device %s: %w", deviceID, err)
+		if cerr := sm.store.Put(ctx, old.device); cerr != nil {
+			return false, errors.Join(err, fmt.Errorf("pxe: restore stored device %s: %w", deviceID, cerr))
+		}
+		return false, err
+	}
+	if sm.devices.CompareAndSwap(deviceID, old, next) {
+		return true, nil
+	}
+	// A writer that does not hold storeMu won the swap after the Put:
+	// put the record back in step with memory before the caller retries.
+	if err := sm.persistLocked(deviceID); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // NewStateManager creates a new StateManager instance.
-func NewStateManager() *StateManager {
-	return newStateManager(time.Now)
+func NewStateManager(opts ...StateManagerOption) *StateManager {
+	sm := newStateManager(time.Now)
+	for _, opt := range opts {
+		opt(sm)
+	}
+	return sm
 }
 
 // newStateManager creates a state manager that stamps devices and events with
@@ -104,6 +210,15 @@ func (sm *StateManager) Register(device *DeviceInfo) error {
 
 	macKey := device.MACAddress.String()
 
+	// With a store, registrations hold storeMu from the duplicate checks
+	// to the indexing, so the record is written before the device becomes
+	// visible: a failed write leaves both indexes empty and a retry
+	// registers the device again (#2081 Codex).
+	if sm.store != nil {
+		sm.storeMu.Lock()
+		defer sm.storeMu.Unlock()
+	}
+
 	// Check for existing device by MAC address
 	if existingID, loaded := sm.byMAC.Load(macKey); loaded {
 		return ErrDeviceAlreadyExists{
@@ -135,15 +250,34 @@ func (sm *StateManager) Register(device *DeviceInfo) error {
 		version: 1,
 	}
 
+	if sm.store != nil {
+		if err := sm.store.Put(context.Background(), device); err != nil {
+			err = fmt.Errorf("pxe: store device %s: %w", device.ID, err)
+			// A failed write may still have committed, so the record is
+			// deleted again: a restart never restores a registration
+			// reported as failed (#2081 Codex round 4).
+			if cerr := sm.store.Delete(context.Background(), device.ID); cerr != nil {
+				return errors.Join(err, fmt.Errorf("pxe: remove stored device %s: %w", device.ID, cerr))
+			}
+			return err
+		}
+	}
+
 	// Store device in both maps
 	// Use LoadOrStore to handle potential race conditions
 	if _, loaded := sm.devices.LoadOrStore(device.ID, entry); loaded {
+		if sm.store != nil {
+			_ = sm.persistLocked(device.ID)
+		}
 		return ErrDeviceAlreadyExists{DeviceID: device.ID}
 	}
 
 	if existingID, loaded := sm.byMAC.LoadOrStore(macKey, device.ID); loaded {
 		// Clean up the device entry since MAC was already registered
 		sm.devices.Delete(device.ID)
+		if sm.store != nil {
+			_ = sm.persistLocked(device.ID)
+		}
 		return ErrDeviceAlreadyExists{
 			DeviceID:   existingID.(string),
 			MACAddress: macKey,
@@ -167,6 +301,31 @@ func (sm *StateManager) Unregister(deviceID string) error {
 
 	entry := entryVal.(*deviceEntry)
 	macKey := entry.device.MACAddress.String()
+
+	// Delete the stored record first: if the datastore delete fails the
+	// device stays registered, so a later Unregister retries it instead of
+	// leaving a stale record that would restore the device on restart.
+	// storeMu stays held until the device is out of both maps, so a
+	// concurrent persist cannot Put the device back after the delete.
+	// A failed delete may still have committed (the datastore reports an
+	// unknown outcome as an error), so the record is written back before
+	// the error is returned and the store matches memory again (#2081
+	// Codex round 4).
+	if sm.store != nil {
+		sm.storeMu.Lock()
+		defer sm.storeMu.Unlock()
+		if err := sm.store.Delete(context.Background(), deviceID); err != nil {
+			err = fmt.Errorf("pxe: delete stored device %s: %w", deviceID, err)
+			restore := entry.device
+			if cur, ok := sm.devices.Load(deviceID); ok {
+				restore = cur.(*deviceEntry).device
+			}
+			if cerr := sm.store.Put(context.Background(), restore); cerr != nil {
+				return errors.Join(err, fmt.Errorf("pxe: restore stored device %s: %w", deviceID, cerr))
+			}
+			return err
+		}
+	}
 
 	// Remove from both maps
 	sm.devices.Delete(deviceID)
@@ -248,6 +407,18 @@ func (sm *StateManager) List(filter *DeviceFilter) []*DeviceInfo {
 // Transition changes a device's state and emits an event.
 // Returns an error if the device is not found or the transition is invalid.
 func (sm *StateManager) Transition(deviceID string, newState ProvisioningState, reason string) error {
+	return sm.transition(deviceID, newState, reason, nil)
+}
+
+// TransitionWithUpdate moves the device to newState and applies update to
+// the same record, so the lifecycle state and the fields that go with it
+// (the enforced VLAN) reach the store in one write (#2081 Codex). When the
+// write fails neither change is made and the error is returned.
+func (sm *StateManager) TransitionWithUpdate(deviceID string, newState ProvisioningState, reason string, update func(*DeviceInfo)) error {
+	return sm.transition(deviceID, newState, reason, update)
+}
+
+func (sm *StateManager) transition(deviceID string, newState ProvisioningState, reason string, update func(*DeviceInfo)) error {
 	if deviceID == "" {
 		return ErrDeviceNotFound{DeviceID: deviceID}
 	}
@@ -286,6 +457,9 @@ func (sm *StateManager) Transition(deviceID string, newState ProvisioningState, 
 		// Create updated device
 		now := sm.now()
 		updatedDevice := copyDeviceInfo(currentEntry.device)
+		if update != nil {
+			update(updatedDevice)
+		}
 		updatedDevice.State = newState
 		updatedDevice.StateReason = reason
 		updatedDevice.UpdatedAt = now
@@ -302,8 +476,13 @@ func (sm *StateManager) Transition(deviceID string, newState ProvisioningState, 
 			version: currentVersion + 1,
 		}
 
-		// Attempt atomic swap
-		if sm.devices.CompareAndSwap(deviceID, currentEntry, newEntry) {
+		// Write the record, then swap it in: a failed write leaves memory
+		// as it was, so a retry repeats the whole transition (#2081 Codex).
+		swapped, err := sm.commit(deviceID, currentEntry, newEntry)
+		if err != nil {
+			return err
+		}
+		if swapped {
 			// Handlers get their own copy: they run concurrently with
 			// readers of the stored event.
 			emitted := *event
@@ -375,7 +554,13 @@ func (sm *StateManager) UpdateDevice(deviceID string, fn func(*DeviceInfo) error
 		}
 
 		// Attempt atomic swap
-		if sm.devices.CompareAndSwap(deviceID, entry, newEntry) {
+		// Write the record first: a failed write leaves memory unchanged,
+		// so the caller can retry (#2081).
+		swapped, err := sm.commit(deviceID, entry, newEntry)
+		if err != nil {
+			return err
+		}
+		if swapped {
 			return nil
 		}
 		// CAS failed, retry
