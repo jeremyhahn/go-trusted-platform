@@ -15,7 +15,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -168,8 +167,8 @@ func (s *TenantUserService) SetIAMMirror(m IAMUserMirror) {
 // RegisterNewUser and RegisterInvitedUser take it, so a self-registration
 // and a redemption of one email exclude each other too. The claim is
 // in-process and does not span platformd instances: across instances, a
-// redemption whose Accept loses to another one keeps the winner's records
-// (see RegisterInvitedUser).
+// redemption whose Accept fails keeps the records, which may be another
+// instance's committed registration (see RegisterInvitedUser).
 func (s *TenantUserService) claimRedemption(email string) (release func(), ok bool) {
 	key := strings.ToLower(strings.TrimSpace(email))
 	s.redeemMu.Lock()
@@ -186,6 +185,26 @@ func (s *TenantUserService) claimRedemption(email string) (release func(), ok bo
 		defer s.redeemMu.Unlock()
 		delete(s.redeeming, key)
 	}, true
+}
+
+// unacceptedRedemption reports whether existing is the user an earlier
+// redemption of this invitation saved before its Accept failed: the
+// invitation is still pending, names existing's email and tenant, and
+// predates it. InvitationService refuses to invite an email the tenant
+// already holds, so the tenant can hold a pending invitation's email only
+// through a redemption of it (#2362).
+func (s *TenantUserService) unacceptedRedemption(ctx context.Context, existing *entities.User, token string) bool {
+	if existing.TenantID == "" {
+		return false
+	}
+	inv, err := s.invitationService.GetByToken(ctx, token)
+	if err != nil || inv == nil {
+		return false
+	}
+	return inv.Status == entities.InvitationStatusPending &&
+		inv.Email == existing.Email &&
+		inv.TenantID == existing.TenantID &&
+		!existing.CreatedAt.Before(inv.CreatedAt)
 }
 
 // RegisterNewUser creates a new tenant and registers the user as the owner.
@@ -363,7 +382,7 @@ const DefaultTenantOwnerRole = "admin"
 // 5. Set user.IsTenantOwner = false
 // 6. Add role from invitation to user
 // 7. Save the user
-// 8. Accept the invitation; a refusal undoes the IAM mirror and the save
+// 8. Accept the invitation; a refusal keeps the saved user and the IAM mirror for a retry
 // 9. Return the RegisterResult with IsNewTenant = false
 func (s *TenantUserService) RegisterInvitedUser(
 	ctx context.Context,
@@ -391,9 +410,11 @@ func (s *TenantUserService) RegisterInvitedUser(
 		"email", user.Email,
 	)
 
-	// Check if user already exists
+	// Check if user already exists. A user an earlier redemption of this
+	// invitation saved before its Accept failed is the retry's own record;
+	// any other existing user is refused.
 	existingUser, err := s.userService.GetByEmail(ctx, user.Email)
-	if err == nil && existingUser != nil {
+	if err == nil && existingUser != nil && !s.unacceptedRedemption(ctx, existingUser, invitationToken) {
 		return nil, ErrUserAlreadyExists{Email: user.Email}
 	}
 
@@ -483,14 +504,12 @@ func (s *TenantUserService) RegisterInvitedUser(
 	// are the invitation's role, plus the owner role for an owner
 	// invitation, so an ordinary invitee keeps the access it was invited
 	// with. A mirror failure deletes the saved user and leaves the
-	// invitation pending so the link can be redeemed again. Accept
-	// rechecks the invitation after the IAM write, so the mirror's undo
-	// is kept: a refusal other than AlreadyAccepted undoes the IAM write
-	// and the saved user.
-	var undo func(context.Context) error
+	// invitation pending so the link can be redeemed again. An Accept
+	// refusal undoes nothing: another redemption may have committed the
+	// same records.
 	if s.iamMirror != nil {
 		var err error
-		undo, err = s.iamMirror.MirrorInvitedUser(ctx, invitation.TenantID, user.Email, user.DisplayName, invitedMirrorRoles(user, invitation.Role))
+		_, err = s.iamMirror.MirrorInvitedUser(ctx, invitation.TenantID, user.Email, user.DisplayName, invitedMirrorRoles(user, invitation.Role))
 		if err != nil {
 			s.logger.Error(err, "failed to mirror invited user into IAM tenant, rolling back registration",
 				"user_id", user.ID,
@@ -515,35 +534,12 @@ func (s *TenantUserService) RegisterInvitedUser(
 			"email", user.Email,
 			"tenant_id", invitation.TenantID,
 		)
-		// The invitation was pending at the lookup, so AlreadyAccepted means
-		// a concurrent redemption of this email accepted it first, possibly
-		// on another platformd sharing the stores. It saved the same
-		// email-derived user ID and uses this IAM identity: they are its
-		// committed registration, so nothing is rolled back (#2362).
-		var accepted ErrInvitationAlreadyAccepted
-		if errors.As(err, &accepted) {
-			return nil, err
-		}
-		// The remaining refusals (revoked, expired, not found, save error)
-		// leave the invitation unaccepted, so no registration won: they
-		// undo the IAM write and the saved user, and fail the registration. The
-		// compensation runs on rollbackContext, so a request canceled after
-		// the IAM write still undoes it (#2362).
-		rbCtx, cancel := rollbackContext(ctx)
-		defer cancel()
-		if undo != nil {
-			if undoErr := undo(rbCtx); undoErr != nil {
-				s.logger.Error(undoErr, "failed to undo IAM mirror after invitation acceptance failure",
-					"email", user.Email,
-					"tenant_id", invitation.TenantID,
-				)
-			}
-		}
-		if delErr := s.userService.Delete(rbCtx, user.ID); delErr != nil {
-			s.logger.Error(delErr, "failed to delete invited user after invitation acceptance failure",
-				"user_id", user.ID,
-			)
-		}
+		// Accept is the step a concurrent redemption, possibly on another
+		// platformd sharing the stores, can win, and no answer tells
+		// whether it did. The saved user and the IAM identity may be its
+		// committed registration, so nothing is rolled back: the error is
+		// returned and a retry of the invitation completes the redemption
+		// over the kept user (unacceptedRedemption, #2362).
 		return nil, err
 	}
 
