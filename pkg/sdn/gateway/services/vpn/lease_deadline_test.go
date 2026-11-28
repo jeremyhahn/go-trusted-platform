@@ -546,6 +546,99 @@ func TestRenew_AFailedMarkerClearRefusesTheRenewalAndKeepsTheLeaseAcrossARestart
 	require.NoError(t, err)
 }
 
+// lostMarkerClearStore is a lease store whose marker-clearing Put (a lease
+// with a zero ClientExpiresAt) commits and then fails, as an HTTP PUT whose
+// response is lost. With failRemark set, a later marker-storing Put fails
+// without committing.
+type lostMarkerClearStore struct {
+	LeaseStore
+	lose       atomic.Bool
+	failRemark atomic.Bool
+	lost       atomic.Bool
+}
+
+func (s *lostMarkerClearStore) Put(ctx context.Context, lease *Lease) error {
+	if lease.ClientExpiresAt.IsZero() && s.lose.Load() {
+		if err := s.LeaseStore.Put(ctx, lease); err != nil {
+			return err
+		}
+		s.lost.Store(true)
+		return errors.New("response lost")
+	}
+	if !lease.ClientExpiresAt.IsZero() && s.failRemark.Load() && s.lost.Load() {
+		return errors.New("disk full")
+	}
+	return s.LeaseStore.Put(ctx, lease)
+}
+
+// lostClearHarness builds a MASQUE harness whose lease store is a
+// lostMarkerClearStore and returns the deps a restart reuses.
+func lostClearHarness(t *testing.T) (*harness, Deps, *lostMarkerClearStore) {
+	t.Helper()
+	managed := newManagedFakePlane(DataPlaneMASQUE, new([]string))
+	host := hostOf(t, managed)
+	peers := &renewFailingPeers{hostPeers: &hostPeers{host: host}}
+	dp, err := NewDatapathPlane(DataPlaneMASQUE, peers)
+	require.NoError(t, err)
+	var deps Deps
+	var store *lostMarkerClearStore
+	h := newHarnessWith(t, testConfig(), func(d *Deps) {
+		d.DataPlanes[DataPlaneMASQUE] = dp
+		store = &lostMarkerClearStore{LeaseStore: d.Leases}
+		d.Leases = store
+		deps = *d
+	})
+	host.now = h.clock.Now
+	return h, deps, store
+}
+
+// A marker-clearing write that committed before its response was lost must
+// not leave the refused client without its stored marker: a restart restores
+// the renew bypass and the client's retry is accepted (Codex #2336 round 19).
+func TestRenew_ALostMarkerClearResponseKeepsTheRenewBypassAcrossARestart(t *testing.T) {
+	ctx := context.Background()
+	h, deps, store := lostClearHarness(t)
+	lease, err := h.svc.Admit(ctx, h.request(t))
+	require.NoError(t, err)
+	h.intoRenewWindow()
+	store.lose.Store(true)
+	_, err = h.svc.Renew(ctx, lease.ID, renewalEvidence(t, h))
+	var unavailable *ErrLeaseStoreUnavailable
+	require.ErrorAs(t, err, &unavailable, "a renewal whose clear response was lost is refused")
+	stored, err := store.Get(ctx, lease.ID)
+	require.NoError(t, err)
+	require.True(t, stored.ClientExpiresAt.Equal(lease.ExpiresAt), "the refusal's marker is stored again")
+
+	store.lose.Store(false)
+	require.NoError(t, restartWith(t, h, deps))
+	renewed, err := h.svc.Renew(ctx, lease.ID, renewalEvidence(t, h))
+	require.NoError(t, err, "the restored service keeps the client's renew bypass")
+	require.True(t, renewed.ExpiresAt.After(lease.ExpiresAt))
+	stored, err = store.Get(ctx, lease.ID)
+	require.NoError(t, err)
+	assert.True(t, stored.ClientExpiresAt.IsZero(), "the accepted retry clears the marker")
+}
+
+// When the marker cannot be stored again either, the renewal reads the store
+// back and reports the renewal done when the store holds the clear, so the
+// client's deadline matches the record (Codex #2336 round 19).
+func TestRenew_AnUnknownMarkerClearIsResolvedByReadingTheStore(t *testing.T) {
+	ctx := context.Background()
+	h, _, store := lostClearHarness(t)
+	lease, err := h.svc.Admit(ctx, h.request(t))
+	require.NoError(t, err)
+	h.intoRenewWindow()
+	store.lose.Store(true)
+	store.failRemark.Store(true)
+	renewed, err := h.svc.Renew(ctx, lease.ID, renewalEvidence(t, h))
+	require.NoError(t, err, "the store holds the clear: the renewal is done")
+	require.True(t, renewed.ExpiresAt.After(lease.ExpiresAt))
+	stored, err := store.Get(ctx, lease.ID)
+	require.NoError(t, err)
+	assert.True(t, stored.ClientExpiresAt.IsZero())
+	assert.True(t, stored.ExpiresAt.Equal(renewed.ExpiresAt))
+}
+
 // TestPlaneHost_ADelayedRenewalOfARemovedLeaseDoesNotExtendItsReplacement:
 // lease A's renewal, delayed past A's removal, must not extend replacement
 // lease B, which reuses A's key; B keeps its own deadline (Codex #2336 round 17).
