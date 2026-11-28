@@ -166,7 +166,6 @@ var daemonDivergentClaims = map[string]string{
 	"/platform.v1.TenantService/CheckQuota":             "#452 (claim from #304): the daemon checks at POST /api/v1/tenants/{id}/check-quota with its own JSON; the claim is the webservice's /quota-check (sdk_rest_roundtrip_test.go)",
 	"/platform.v1.TenantService/GetTenantBarrierStatus": "#452: the daemon serves GET /api/v1/tenants/{id}/barrier/status (docs/tenant/api.md); the claim is the webservice's /barrier",
 	"/platform.v1.TenantService/GetTenantByName":        "#452 (claim from #304): the daemon looks up at GET /api/v1/tenants/name/{name}; the claim is the webservice's system-only /by-name/{name} (sdk_rest_roundtrip_test.go)",
-	"/platform.v1.TenantService/GetTenantDEKStatus":     "#452 (claim from #304): the daemon serves GET /api/v1/tenants/{id}/dek/status with its own JSON; the claim is the webservice's /dek (sdk_rest_roundtrip_test.go)",
 
 	"/platform.v1.RegistryService/Delete": "#452: the daemon serves DELETE /api/v1/compute/images/{repository:.+} (rest/registry/router.go's route), one path var holding repository[:tag]; the claim's {repository}:{reference} segment has no route of its shape",
 

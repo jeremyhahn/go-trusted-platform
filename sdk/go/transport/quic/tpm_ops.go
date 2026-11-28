@@ -1,0 +1,138 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package quic
+
+import (
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
+)
+
+// Codecs for the physical-TPM event log, random and credential calls
+// (OpTPM2Category · 0x13 / 0x14 / 0x20 / 0x21). The bodies are the shared
+// quicwire types the server handler answers (#2069).
+
+var tpmOpsRequestEncoders = map[string]categoryRequestEncoder{
+	platformv1.TPMService_GetRandom_FullMethodName: requestEncoder(platformv1.TPMService_GetRandom_FullMethodName,
+		func(r *platformv1.GetRandomRequest) (interface{}, error) {
+			return &quicwire.TPM2RandomRequest{NumBytes: r.GetNumBytes()}, nil
+		}),
+	platformv1.TPMService_MakeCredential_FullMethodName: requestEncoder(platformv1.TPMService_MakeCredential_FullMethodName,
+		func(r *platformv1.MakeCredentialRequest) (interface{}, error) {
+			return &quicwire.TPM2MakeCredentialRequest{
+				AKName: r.GetAkName(),
+				Secret: r.GetSecret(),
+				EKCert: r.GetEkCert(),
+				IAKPub: r.GetIakPub(),
+			}, nil
+		}),
+	platformv1.TPMService_ActivateCredential_FullMethodName: requestEncoder(platformv1.TPMService_ActivateCredential_FullMethodName,
+		func(r *platformv1.TPMActivateCredentialRequest) (interface{}, error) {
+			return &quicwire.TPM2ActivateCredentialRequest{
+				CredentialBlob:  r.GetCredentialBlob(),
+				EncryptedSecret: r.GetEncryptedSecret(),
+			}, nil
+		}),
+	// GetAK reads the platform AK through SubOpTPM2GetIAK, which takes no
+	// selector: a handle or an algorithm is refused before any send, as in
+	// the MCP mapping. The untyped nil sends only the sub-opcode byte.
+	platformv1.TPMService_GetAK_FullMethodName: requestEncoder(platformv1.TPMService_GetAK_FullMethodName,
+		func(r *platformv1.GetAKRequest) (interface{}, error) {
+			if r.GetHandle() != 0 {
+				return nil, ErrTPMSelectorUnsupported{Method: platformv1.TPMService_GetAK_FullMethodName, Field: "handle"}
+			}
+			if r.GetAlgorithm() != platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED {
+				return nil, ErrTPMSelectorUnsupported{Method: platformv1.TPMService_GetAK_FullMethodName, Field: "algorithm"}
+			}
+			return nil, nil
+		}),
+}
+
+var tpmOpsResponseDecoders = map[string]categoryResponseDecoder{
+	platformv1.TPMService_GetEventLog_FullMethodName: responseDecoder(platformv1.TPMService_GetEventLog_FullMethodName,
+		func(w *quicwire.TPM2EventLogResponse, out *platformv1.GetEventLogResponse) error {
+			out.EventLog = w.EventLog
+			out.Format = w.Format
+			out.EventCount = w.EventCount
+			out.Entries = make([]*platformv1.EventLogEntry, 0, len(w.Entries))
+			for _, e := range w.Entries {
+				digests := make([]*platformv1.EventDigest, 0, len(e.Digests))
+				for _, d := range e.Digests {
+					digests = append(digests, &platformv1.EventDigest{AlgorithmId: d.AlgorithmID, Digest: d.Digest})
+				}
+				out.Entries = append(out.Entries, &platformv1.EventLogEntry{
+					EventNum:    e.EventNum,
+					PcrIndex:    e.PCRIndex,
+					EventType:   e.EventType,
+					DigestCount: e.DigestCount,
+					Digests:     digests,
+					EventSize:   e.EventSize,
+					EventString: e.EventString,
+				})
+			}
+			return nil
+		}),
+	platformv1.TPMService_GetRandom_FullMethodName: responseDecoder(platformv1.TPMService_GetRandom_FullMethodName,
+		func(w *quicwire.TPM2RandomResponse, out *platformv1.GetRandomResponse) error {
+			out.RandomBytes = w.RandomBytes
+			return nil
+		}),
+	platformv1.TPMService_MakeCredential_FullMethodName: responseDecoder(platformv1.TPMService_MakeCredential_FullMethodName,
+		func(w *quicwire.TPM2MakeCredentialResponse, out *platformv1.MakeCredentialResponse) error {
+			out.CredentialBlob = w.CredentialBlob
+			out.EncryptedSecret = w.EncryptedSecret
+			out.Secret = w.Secret
+			return nil
+		}),
+	platformv1.TPMService_ActivateCredential_FullMethodName: responseDecoder(platformv1.TPMService_ActivateCredential_FullMethodName,
+		func(w *quicwire.TPM2ActivateCredentialResponse, out *platformv1.TPMActivateCredentialResponse) error {
+			out.Secret = w.Secret
+			return nil
+		}),
+	// GetAK reads the platform AK (the IAK) through SubOpTPM2GetIAK; the
+	// wire algorithm is the x509 family name, mapped to the KeyAlgorithm
+	// the gRPC service reports for the same AK.
+	platformv1.TPMService_GetAK_FullMethodName: responseDecoder(platformv1.TPMService_GetAK_FullMethodName,
+		func(w *quicwire.TPM2KeyResponse, out *platformv1.GetAKResponse) error {
+			out.Handle = w.Handle
+			out.PublicKey = w.PublicKey
+			out.Algorithm = akAlgorithmFromFamily(w.Algorithm)
+			out.Name = w.Name
+			return nil
+		}),
+}
+
+// akAlgorithmFromFamily maps the x509 public key algorithm family the
+// server sends for the AK ("RSA", "ECDSA", "Ed25519") to a KeyAlgorithm.
+// It mirrors keyAlgorithmToProto in pkg/api/daemon/tpm_grpc_service.go,
+// which maps the family only, so every transport reports the same value;
+// any other family is KEY_ALGORITHM_UNSPECIFIED.
+func akAlgorithmFromFamily(family string) platformv1.KeyAlgorithm {
+	switch family {
+	case "RSA":
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048
+	case "ECDSA":
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256
+	case "Ed25519":
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519
+	default:
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED
+	}
+}
+
+func init() {
+	categoryEmptyBodyMethods[platformv1.TPMService_GetEventLog_FullMethodName] = struct{}{}
+	// GetAK's empty body comes from its request encoder above, which
+	// first refuses the selectors handleGetIAK cannot honour.
+	registerCategoryCodecs(tpmOpsRequestEncoders, tpmOpsResponseDecoders)
+}

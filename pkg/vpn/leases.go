@@ -40,11 +40,15 @@ type Lease struct {
 	WireGuardPublicKey []byte `json:"wireguard_public_key,omitempty"`
 	// ClientCertificateSHA256 is the fingerprint the MASQUE plane binds a
 	// session by.
-	ClientCertificateSHA256 []byte                 `json:"client_certificate_sha256,omitempty"`
-	IssuedAt                time.Time              `json:"issued_at"`
-	ExpiresAt               time.Time              `json:"expires_at"`
-	Renewals                int                    `json:"renewals,omitempty"`
-	Verdict                 vpncore.VerdictSummary `json:"verdict"`
+	ClientCertificateSHA256 []byte    `json:"client_certificate_sha256,omitempty"`
+	IssuedAt                time.Time `json:"issued_at"`
+	ExpiresAt               time.Time `json:"expires_at"`
+	// ClientExpiresAt is the deadline the client last received while the
+	// gateway host still owes an extension to ExpiresAt; the gateway's
+	// Restore rebuilds the renew bypass from it. Zero when nothing is owed.
+	ClientExpiresAt time.Time              `json:"client_expires_at,omitzero"`
+	Renewals        int                    `json:"renewals,omitempty"`
+	Verdict         vpncore.VerdictSummary `json:"verdict"`
 }
 
 // EntityID implements entities.KeyValueEntity.

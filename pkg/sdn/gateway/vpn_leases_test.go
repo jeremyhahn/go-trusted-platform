@@ -87,6 +87,21 @@ func recordedLease() gwstate.DesiredVPNLease {
 	}
 }
 
+// TestProjectedLease_RoundTripsTheClientDeadline pins the renew-bypass
+// marker through the control-plane record: a fresh projection rebuilt from
+// the record must still know the deadline the client last received.
+func TestProjectedLease_RoundTripsTheClientDeadline(t *testing.T) {
+	record := recordedLease()
+	lease, err := projectedLease(0, &record)
+	require.NoError(t, err)
+	lease.ClientExpiresAt = lease.ExpiresAt.Add(-30 * time.Minute)
+
+	back, err := projectedLease(0, desiredLease(lease))
+	require.NoError(t, err)
+	assert.True(t, back.ClientExpiresAt.Equal(lease.ClientExpiresAt),
+		"the client deadline survives the projection: got %v, want %v", back.ClientExpiresAt, lease.ClientExpiresAt)
+}
+
 // newProjectedRig is the vpn rig with a control plane that recorded lease-1
 // and enrols its device, over an IPAM holding the service's pool.
 func newProjectedRig(t *testing.T) (*vpnRig, *fakeLeaseControl) {
@@ -674,6 +689,66 @@ func TestProjectedLeaseStore_Rebuild(t *testing.T) {
 		var invalid *gwstate.ErrDesiredConfigInvalid
 		require.True(t, errors.As(err, &invalid), "got %v", err)
 		assert.Equal(t, "vpn.leases[1].address", invalid.Field)
+	})
+}
+
+func getRecorded(t *testing.T, store *projectedLeaseStore, id vpn.LeaseID) (*vpn.Lease, error) {
+	t.Helper()
+	r, ok := any(store).(interface {
+		GetRecorded(context.Context, vpn.LeaseID) (*vpn.Lease, error)
+	})
+	require.True(t, ok, "projectedLeaseStore reads the control plane's record")
+	return r.GetRecorded(context.Background(), id)
+}
+
+// TestProjectedLeaseStore_GetRecordedReadsTheControlPlane: the read-back after
+// an unknown marker clear reads the control plane's record, not the
+// projection, and brings the projection in line with it (Codex #2336 round 20).
+func TestProjectedLeaseStore_GetRecordedReadsTheControlPlane(t *testing.T) {
+	ctx := context.Background()
+	t.Run("the record answers and the projection follows", func(t *testing.T) {
+		record := recordedLease()
+		stale, err := projectedLease(0, &record)
+		require.NoError(t, err)
+		stale.ClientExpiresAt = stale.ExpiresAt
+		local := vpn.NewMemoryLeaseStore()
+		require.NoError(t, local.Put(ctx, stale))
+		store := newProjectedStore(t, local, &fakeLeaseControl{desired: &gwstate.DesiredConfig{
+			VPN: &gwstate.DesiredVPN{Leases: []gwstate.DesiredVPNLease{record}},
+		}})
+
+		got, err := getRecorded(t, store, vpn.LeaseID(record.ID))
+		require.NoError(t, err)
+
+		assert.True(t, got.ClientExpiresAt.IsZero())
+		assert.True(t, got.ExpiresAt.Equal(record.ExpiresAt))
+		projected, err := store.Get(ctx, vpn.LeaseID(record.ID))
+		require.NoError(t, err)
+		assert.True(t, projected.ClientExpiresAt.IsZero(), "the projection matches the record")
+	})
+	t.Run("a lease the record does not hold", func(t *testing.T) {
+		record := recordedLease()
+		store := newProjectedStore(t, vpn.NewMemoryLeaseStore(), &fakeLeaseControl{desired: &gwstate.DesiredConfig{}})
+		_, err := getRecorded(t, store, vpn.LeaseID(record.ID))
+		var nf *vpn.ErrLeaseNotFound
+		require.True(t, errors.As(err, &nf), "got %v", err)
+	})
+	t.Run("a lease awaiting its DELETE", func(t *testing.T) {
+		record := recordedLease()
+		store := newProjectedStore(t, vpn.NewMemoryLeaseStore(), &fakeLeaseControl{desired: &gwstate.DesiredConfig{
+			VPN: &gwstate.DesiredVPN{Leases: []gwstate.DesiredVPNLease{record}},
+		}})
+		store.pending = map[vpn.LeaseID]string{vpn.LeaseID(record.ID): record.TenantID}
+		_, err := getRecorded(t, store, vpn.LeaseID(record.ID))
+		var nf *vpn.ErrLeaseNotFound
+		require.True(t, errors.As(err, &nf), "got %v", err)
+	})
+	t.Run("an unreachable control plane", func(t *testing.T) {
+		record := recordedLease()
+		store := newProjectedStore(t, vpn.NewMemoryLeaseStore(), &fakeLeaseControl{fetchErr: errors.New("control plane down")})
+		_, err := getRecorded(t, store, vpn.LeaseID(record.ID))
+		var unavailable *vpn.ErrLeaseStoreUnavailable
+		require.True(t, errors.As(err, &unavailable), "got %v", err)
 	})
 }
 
