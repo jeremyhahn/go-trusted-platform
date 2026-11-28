@@ -257,6 +257,46 @@ describe('AttestationQuoteCard', () => {
     expect(body.channelBinding).toBe('Y2I=');
   });
 
+  // Get quote fills the binding field for the quote it fetched; a pasted
+  // envelope for another quote is checked against its own binding.
+  async function fetchThenPaste(envelope: unknown) {
+    const sent = stubControlPlane(routes());
+    render(withControlPlane(<AttestationQuoteCard />));
+
+    const get = await ready('Get quote');
+    await waitFor(() => expect(get.getAttribute('data-capability-enabled')).toBe('true'));
+    fireEvent.change(screen.getByTestId('attestation-quote-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(get);
+    await screen.findByTestId('attestation-quote-result');
+    await waitFor(() =>
+      expect((screen.getByTestId('attestation-verify-channel-binding') as HTMLInputElement).value).toBe('Y2I='),
+    );
+
+    fireEvent.change(screen.getByTestId('attestation-verify-quote'), { target: { value: JSON.stringify(envelope) } });
+    fireEvent.change(screen.getByTestId('attestation-verify-ak-pem'), { target: { value: PEM } });
+    fireEvent.change(screen.getByTestId('attestation-verify-nonce'), { target: { value: 'bm9uY2U=' } });
+    fireEvent.click(await ready('Verify quote'));
+    await screen.findByTestId('attestation-quote-verdict');
+
+    const verifies = posts(sent, '/api/v1/attestation/quote/verify');
+    expect(verifies).toHaveLength(1);
+    return verifies[0].body as { quote: typeof QUOTE; channelBinding?: string };
+  }
+
+  it('uses the imported envelope binding, not the one Get quote filled in', async () => {
+    // Codex #2370 round 11: the autofilled binding belongs to the fetched
+    // quote, not the imported one.
+    const body = await fetchThenPaste({ quote: { ...QUOTE, nonce: 'b3RoZXI=' }, channelBinding: 'bmV3' });
+    expect(body.channelBinding).toBe('bmV3');
+    expect(body.quote.nonce).toBe('b3RoZXI=');
+  });
+
+  it('sends no binding for an imported unbound envelope after Get quote filled one in', async () => {
+    // protojson omits an empty binding: an envelope with no channelBinding is unbound.
+    const body = await fetchThenPaste({ quote: QUOTE });
+    expect('channelBinding' in body).toBe(false);
+  });
+
   it('clears the previous verdict when an input changes or a verify is refused', async () => {
     const table = routes();
     stubControlPlane(table);
