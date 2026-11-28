@@ -22,6 +22,8 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -784,5 +786,110 @@ func TestDumpEntityType_AggregatedListResponseSendsOnce(t *testing.T) {
 			t.Fatalf("entity %d sent twice", resp.EntityId)
 		}
 		seen[resp.EntityId] = struct{}{}
+	}
+}
+
+// restListClient behaves like the pinned go-quicbaas SDK REST List: it
+// ignores the page token, returns only the first batch (at most pageSize of
+// its records, every one with ID 0) and the same next token on every call.
+// From the 5th call it returns an empty token, so a walk that trusts the
+// token ends instead of looping forever.
+type restListClient struct {
+	*quicbaas.MockClient
+	records int
+	calls   int
+}
+
+func (c *restListClient) List(ctx context.Context, entityType string, pageSize uint64, pageToken string, shardID uint64) ([]*service.Entity, string, error) {
+	c.calls++
+	n := min(c.records, int(pageSize))
+	entities := make([]*service.Entity, 0, n)
+	for i := 0; i < n; i++ {
+		entities = append(entities, &service.Entity{ID: 0, Data: []byte(`{}`)})
+	}
+	if c.calls >= 5 {
+		return entities, "", nil
+	}
+	return entities, "batch-1", nil
+}
+
+type restListFactory struct {
+	*quicbaas.MockFactory
+	client *restListClient
+}
+
+func (f *restListFactory) QuicBaaSClient() quicbaas.ClientInterface {
+	return f.client
+}
+
+func newRestListFactory(t *testing.T, ctx context.Context) *restListFactory {
+	t.Helper()
+	mockFactory := quicbaas.NewMockFactory()
+	if err := mockFactory.Start(ctx); err != nil {
+		t.Fatalf("failed to start mock factory: %v", err)
+	}
+	t.Cleanup(func() { _ = mockFactory.Stop(ctx) })
+	mockClient := mockFactory.MockClient()
+	mockClient.SetEntityTypes([]string{"users"})
+	mockClient.SetEmbedded(false)
+	return &restListFactory{
+		MockFactory: mockFactory,
+		client:      &restListClient{MockClient: mockClient, records: 150},
+	}
+}
+
+// TestDumpEntityType_IncompleteRemoteWalkFails covers #2081 Codex round 5:
+// a remote List that repeats its page token and leaves every ID 0 must end
+// the dump with an Internal error, not a duplicated, partial success.
+func TestDumpEntityType_IncompleteRemoteWalkFails(t *testing.T) {
+	ctx := context.Background()
+	factory := newRestListFactory(t, ctx)
+	svc, err := NewService(DefaultConfig(), WithQuicBaaSFactory(factory))
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	stream := &mockDumpStream{ctx: ctx}
+	err = svc.DumpEntityType(&platformv1.DumpEntityTypeRequest{EntityType: "users"}, stream)
+	if err == nil {
+		t.Fatalf("an incomplete remote walk must fail the dump")
+	}
+	if status.Code(err) != codes.Internal {
+		t.Errorf("expected codes.Internal, got %v (%v)", status.Code(err), err)
+	}
+	if len(stream.responses) != 100 {
+		t.Errorf("the repeated remote page must not be sent: got %d responses, want 100", len(stream.responses))
+	}
+}
+
+// TestListEntityTypes_IncompleteRemoteWalkReportsError covers #2081 Codex
+// round 5: a remote List that repeats its page token reports the type as
+// error with no count.
+func TestListEntityTypes_IncompleteRemoteWalkReportsError(t *testing.T) {
+	ctx := context.Background()
+	factory := newRestListFactory(t, ctx)
+	svc, err := NewService(DefaultConfig(), WithQuicBaaSFactory(factory))
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	resp, err := svc.ListEntityTypes(ctx, &platformv1.ListEntityTypesRequest{})
+	if err != nil {
+		t.Fatalf("ListEntityTypes failed: %v", err)
+	}
+	if len(resp.EntityTypes) != 1 {
+		t.Fatalf("expected 1 entity type, got %d", len(resp.EntityTypes))
+	}
+	if resp.EntityTypes[0].Status != "error" {
+		t.Errorf("an incomplete remote walk reports no count: status %q, want error", resp.EntityTypes[0].Status)
+	}
+	if resp.EntityTypes[0].EntityCount != 0 {
+		t.Errorf("an incomplete remote walk reports no count: entity count %d", resp.EntityTypes[0].EntityCount)
+	}
+	if resp.TotalEntities != 0 {
+		t.Errorf("an incomplete remote walk reports no count: total entities %d", resp.TotalEntities)
+	}
+	if resp.ActiveTypes != 0 {
+		t.Errorf("an incomplete remote walk reports no count: active types %d", resp.ActiveTypes)
 	}
 }
