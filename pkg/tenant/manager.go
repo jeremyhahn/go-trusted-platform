@@ -585,8 +585,9 @@ func (m *Manager) UpdateTenant(ctx context.Context, id string, req *UpdateTenant
 // Steps:
 // 1. Set state to deleting
 // 2. Delete DEK
-// 3. Seal the per-tenant barrier
-// 4. Delete from QuicBaaS IAM
+// 3. Delete from QuicBaaS IAM, which deprovisions the tenant's users and
+// then destroys the per-tenant barrier. The platform does not seal the
+// barrier first: the upstream user deprovisioning refuses a sealed tenant.
 func (m *Manager) DeleteTenant(ctx context.Context, id string) error {
 	if id == "" {
 		return ErrInvalidRequest{Reason: "tenant ID is required"}
@@ -625,26 +626,8 @@ func (m *Manager) DeleteTenant(ctx context.Context, id string) error {
 		}
 	}
 
-	// Step 3: Seal the per-tenant barrier before IAM tenant deletion so any
-	// in-flight reads/writes are refused while the metadata cleanup runs.
-	// A failed seal is logged but does not block deletion — the IAM delete
-	// below removes the underlying QRDB tenant record which implicitly
-	// tears down the barrier registry entry.
-	if m.tenantBarrierClient != nil {
-		sealReq := &quicbaassdk.QRDBTenantBarrierSealRequest{TenantID: id}
-		if err := m.tenantBarrierClient.TenantBarrierSeal(ctx, sealReq); err != nil {
-			m.logger.Warn("failed to seal per-tenant barrier before delete",
-				slog.String("tenant_id", id),
-				slog.Any("error", err),
-			)
-		} else {
-			m.logger.Info("per-tenant barrier sealed before IAM delete",
-				slog.String("tenant_id", id),
-			)
-		}
-	}
-
-	// Step 4: Delete from QuicBaaS IAM
+	// Step 3: Delete from QuicBaaS IAM. The upstream delete deprovisions the
+	// tenant's users while the barrier is still open, then destroys it.
 	if err := m.deleteFromIAM(ctx, id); err != nil {
 		m.logger.Error("failed to delete tenant from IAM",
 			slog.String("tenant_id", id),
