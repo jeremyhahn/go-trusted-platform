@@ -616,7 +616,9 @@ func (s *HTTPServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if s.config.ProxyCACertPool != nil {
 		tlsCfg.RootCAs = s.config.ProxyCACertPool
 	}
-	allowPrivate := s.config.proxyAllowPrivateDestinations
+	// Internal destinations stay refused unless the operator named this
+	// exact URL as a boot asset; a host or prefix match is not enough.
+	allowPrivate := s.config.proxyAllowPrivateDestinations || s.configuredBootAssetURL(targetURL)
 	dialer := &net.Dialer{
 		Timeout: 30 * time.Second,
 		// Control runs for every resolved address, so names that resolve inside are refused too.
@@ -790,6 +792,38 @@ func (s *HTTPServer) proxyURL(originalURL string) string {
 	// Convert https://host/path to http://server:port/proxy/https/host/path
 	stripped := strings.TrimPrefix(originalURL, "https://")
 	return fmt.Sprintf("%s/proxy/https/%s", s.config.ExternalURL, stripped)
+}
+
+// configuredBootAssetURL reports whether target is exactly an https:// URL
+// the operator configured in a BootEntry: its Kernel, its Initrd, or an
+// https:// token in its Args (split as proxyArgsURLs splits them).
+func (s *HTTPServer) configuredBootAssetURL(target string) bool {
+	if !strings.HasPrefix(target, "https://") {
+		return false
+	}
+	for i := range s.config.BootEntries {
+		entry := &s.config.BootEntries[i]
+		if entry.Kernel == target || entry.Initrd == target {
+			return true
+		}
+		args := entry.Args
+		for {
+			idx := strings.Index(args, "https://")
+			if idx == -1 {
+				break
+			}
+			args = args[idx:]
+			end := strings.IndexAny(args, " \t\n")
+			if end == -1 {
+				end = len(args)
+			}
+			if args[:end] == target {
+				return true
+			}
+			args = args[end:]
+		}
+	}
+	return false
 }
 
 // maxInstallLogUploadBytes caps install-log uploads. 16 MiB is plenty for a
