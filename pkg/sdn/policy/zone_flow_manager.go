@@ -435,6 +435,44 @@ func portBlockRule(ofPort string) zoneflows.FlowRule {
 	}
 }
 
+// DropPort blocks all of portID's traffic: it deletes the port's rules and
+// installs the highest-priority in_port drop-all (portBlockRule), so the
+// bridge's base pipeline cannot forward the port's unmatched traffic. The
+// port is recorded as quarantined whether or not the install succeeds; a
+// failed install is returned as an error. A later ApplyZoneFlows or
+// ApplyPortClassFlows deletes the drop-all with the port's other rules.
+func (m *ZoneFlowManager) DropPort(ctx context.Context, portID string) error {
+	if portID == "" {
+		return ErrInvalidPortID
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ofPort, err := m.openFlowPort(ctx, portID)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	if err := m.flowController.DeleteFlowsByPort(m.bridgeName, ofPort); err != nil {
+		errs = append(errs, &WrappedError{Msg: "zone flow manager: drop port: delete flows", Err: err})
+	}
+	if err := m.flowController.InstallFlows(m.bridgeName, []zoneflows.FlowRule{portBlockRule(ofPort)}); err != nil {
+		errs = append(errs, &WrappedError{Msg: "zone flow manager: drop port: install drop rule", Err: err})
+	}
+
+	m.portZoneMap[portID] = zone.ZoneQuarantine
+	delete(m.portClassMap, portID)
+	delete(m.portVLANMap, portID)
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	m.logger.Warn("port traffic dropped",
+		slog.String("port_id", portID),
+		complianceAttr(complianceSC7, complianceAC4))
+	return nil
+}
+
 // RemoveFlows removes all OpenFlow rules for portID and clears zone/VLAN tracking.
 // BridgeName returns the OVS bridge this manager deletes and installs
 // flows on.

@@ -225,7 +225,9 @@ func (v *vlanIntegrationWrapper) ApplyAuthorizedFlows(ctx context.Context, portI
 	return v.applyZoneWithLog(ctx, portID, z, mac)
 }
 
-// BlockPort removes all OVS flows for the port (no new traffic accepted).
+// BlockPort drops all of the port's traffic: the flow manager replaces the
+// port's flows with a highest-priority in_port drop rule, and an error is
+// returned when that rule cannot be installed.
 func (v *vlanIntegrationWrapper) BlockPort(ctx context.Context, portID string) error {
 	if v.closed.Load() {
 		return ErrServiceNotRunning{}
@@ -236,7 +238,7 @@ func (v *vlanIntegrationWrapper) BlockPort(ctx context.Context, portID string) e
 	if v.flowManager == nil {
 		return nil
 	}
-	if err := v.flowManager.RemoveFlows(portID); err != nil {
+	if err := v.flowManager.DropPort(ctx, portID); err != nil {
 		return ErrVLANTransitionFailed{DeviceID: portID, Reason: "failed to block port", Cause: err}
 	}
 	return nil
