@@ -3313,9 +3313,12 @@ type DeviceVerdictEvent struct {
 	// rather than an absence of evidence. Meaningless when passed.
 	Cryptographic bool `protobuf:"varint,8,opt,name=cryptographic,proto3" json:"cryptographic,omitempty"`
 	// Reason is the failure detail; empty when passed.
-	Reason        string `protobuf:"bytes,9,opt,name=reason,proto3" json:"reason,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Reason string `protobuf:"bytes,9,opt,name=reason,proto3" json:"reason,omitempty"`
+	// BaselineSource is the provenance of the baseline the verdict was judged
+	// against when it was recorded: "signed" or "tofu"; empty when unknown.
+	BaselineSource string `protobuf:"bytes,10,opt,name=baseline_source,json=baselineSource,proto3" json:"baseline_source,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *DeviceVerdictEvent) Reset() {
@@ -3407,6 +3410,13 @@ func (x *DeviceVerdictEvent) GetCryptographic() bool {
 func (x *DeviceVerdictEvent) GetReason() string {
 	if x != nil {
 		return x.Reason
+	}
+	return ""
+}
+
+func (x *DeviceVerdictEvent) GetBaselineSource() string {
+	if x != nil {
+		return x.BaselineSource
 	}
 	return ""
 }
@@ -3686,7 +3696,7 @@ const file_attestation_proto_rawDesc = "" +
 	"\await_ms\x18\x02 \x01(\rR\x06waitMs\"q\n" +
 	"\x1aPollDeviceVerdictsResponse\x12\x16\n" +
 	"\x06cursor\x18\x01 \x01(\tR\x06cursor\x12;\n" +
-	"\bverdicts\x18\x02 \x03(\v2\x1f.platform.v1.DeviceVerdictEventR\bverdicts\"\xad\x02\n" +
+	"\bverdicts\x18\x02 \x03(\v2\x1f.platform.v1.DeviceVerdictEventR\bverdicts\"\xd6\x02\n" +
 	"\x12DeviceVerdictEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12;\n" +
 	"\vrecorded_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
@@ -3697,7 +3707,9 @@ const file_attestation_proto_rawDesc = "" +
 	"\x06serial\x18\x06 \x01(\tR\x06serial\x12\x16\n" +
 	"\x06passed\x18\a \x01(\bR\x06passed\x12$\n" +
 	"\rcryptographic\x18\b \x01(\bR\rcryptographic\x12\x16\n" +
-	"\x06reason\x18\t \x01(\tR\x06reason*\xe0\x01\n" +
+	"\x06reason\x18\t \x01(\tR\x06reason\x12'\n" +
+	"\x0fbaseline_source\x18\n" +
+	" \x01(\tR\x0ebaselineSource*\xe0\x01\n" +
 	"\x18AttestationHashAlgorithm\x12*\n" +
 	"&ATTESTATION_HASH_ALGORITHM_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fATTESTATION_HASH_ALGORITHM_SHA1\x10\x01\x12%\n" +
