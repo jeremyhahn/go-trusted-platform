@@ -110,8 +110,6 @@ export {
   // Invitation hooks
   useInvitation,
   useInvitationList,
-  useInvitationGet,
-  useInvitationGetByToken,
   // EAB hooks
   useEAB,
   useEABList,
@@ -136,7 +134,6 @@ export {
 export type {
   UseInvitationResult,
   UseInvitationListOptions,
-  UseInvitationGetOptions,
   UseEABResult,
   UseEABListOptions,
   UseDeviceTemplateResult,

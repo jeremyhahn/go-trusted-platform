@@ -16,8 +16,6 @@ import type {
   RevokeInvitationResponse,
   AcceptInvitationRequest,
   AcceptInvitationResponse,
-  GetInvitationResponse,
-  GetInvitationByTokenResponse,
 } from '../../types/invitation.js';
 import type { ApiResponse } from '../../types/api.js';
 import { usePlatformClient } from '../context.js';
@@ -191,86 +189,5 @@ export function useInvitationList(
       options?.filters?.email,
     ],
     Object.keys(apiOptions).length > 0 ? apiOptions : undefined
-  );
-}
-
-/**
- * Options for the single-invitation read hooks.
- */
-export interface UseInvitationGetOptions {
-  /** Whether the query runs (default: true). An undefined or empty key always disables it. */
-  enabled?: boolean;
-  /** Refetch interval in milliseconds. */
-  refetchInterval?: number;
-}
-
-function invitationGetApiOptions(
-  key: string | undefined,
-  options?: UseInvitationGetOptions
-): { enabled?: boolean; refetchInterval?: number } | undefined {
-  const apiOptions: {
-    enabled?: boolean;
-    refetchInterval?: number;
-  } = {};
-
-  if (key === undefined || key === '' || options?.enabled === false) {
-    apiOptions.enabled = false;
-  } else if (options?.enabled !== undefined) {
-    apiOptions.enabled = options.enabled;
-  }
-
-  if (options?.refetchInterval !== undefined) {
-    apiOptions.refetchInterval = options.refetchInterval;
-  }
-
-  return Object.keys(apiOptions).length > 0 ? apiOptions : undefined;
-}
-
-/**
- * Hook for reading one invitation by ID (GET /api/v1/invitations/{id}).
- *
- * The query is disabled while the ID is undefined or empty.
- *
- * @example
- * ```tsx
- * const { data, loading, error, refetch } = useInvitationGet(invitationId);
- * ```
- */
-export function useInvitationGet(
-  id: string | undefined,
-  options?: UseInvitationGetOptions
-): UseApiResult<GetInvitationResponse> {
-  const client = usePlatformClient();
-  const service = client.invitation;
-
-  return useApi<GetInvitationResponse>(
-    () => service.get(id as string),
-    [id],
-    invitationGetApiOptions(id, options)
-  );
-}
-
-/**
- * Hook for reading one invitation by its token
- * (GET /api/v1/invitations/token/{token}).
- *
- * The query is disabled while the token is undefined or empty.
- *
- * @example
- * ```tsx
- * const { data, loading, error } = useInvitationGetByToken(token);
- * ```
- */
-export function useInvitationGetByToken(
-  token: string | undefined,
-  options?: UseInvitationGetOptions
-): UseApiResult<GetInvitationByTokenResponse> {
-  const client = usePlatformClient();
-  const service = client.invitation;
-
-  return useApi<GetInvitationByTokenResponse>(
-    () => service.getByToken(token as string),
-    [token],
-    invitationGetApiOptions(token, options)
   );
 }

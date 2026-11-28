@@ -1036,9 +1036,6 @@ export type {
   DeleteEABCredentialResponse,
   GetEABQRCodeResponse,
   GetEnrollmentURLResponse,
-  MarkEABCredentialUsedResponse,
-  CleanupExpiredEABCredentialsRequest,
-  CleanupExpiredEABCredentialsResponse,
 } from './types/eab.js';
 
 // vTPM Instance types
@@ -1142,8 +1139,6 @@ export {
   // Invitation hooks
   useInvitation,
   useInvitationList,
-  useInvitationGet,
-  useInvitationGetByToken,
   // EAB hooks
   useEAB,
   useEABList,
@@ -1172,7 +1167,6 @@ export type {
   UseMutationResult,
   UseInvitationResult,
   UseInvitationListOptions,
-  UseInvitationGetOptions,
   UseEABResult,
   UseEABListOptions,
   UseDeviceTemplateResult,

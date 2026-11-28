@@ -22,9 +22,6 @@ import type {
   DeleteEABCredentialResponse,
   GetEABQRCodeResponse,
   GetEnrollmentURLResponse,
-  MarkEABCredentialUsedResponse,
-  CleanupExpiredEABCredentialsRequest,
-  CleanupExpiredEABCredentialsResponse,
   EABCredentialId,
 } from '../types/eab.js';
 
@@ -206,37 +203,6 @@ export class EABService extends BaseService {
   async getEnrollmentURL(id: EABCredentialId, path?: string): Promise<ApiResponse<GetEnrollmentURLResponse>> {
     return this.client.get<GetEnrollmentURLResponse>(
       this.buildUrl(`/credentials/${encodeURIComponent(String(id))}/url`, path ? { filters: { path } } : undefined)
-    );
-  }
-
-  /**
-   * Mark an EAB credential as used
-   *
-   * Calls POST /v1/eab/credentials/{id}/used.
-   *
-   * @param id - Credential ID
-   * @returns Operation status
-   */
-  async markUsed(id: EABCredentialId): Promise<ApiResponse<MarkEABCredentialUsedResponse>> {
-    return this.client.post<MarkEABCredentialUsedResponse>(
-      this.buildUrl(`/credentials/${encodeURIComponent(String(id))}/used`),
-      {}
-    );
-  }
-
-  /**
-   * Delete expired EAB credentials
-   *
-   * Calls POST /v1/eab/credentials/cleanup.
-   *
-   * @param tenantId - Restrict the cleanup to one tenant (optional)
-   * @returns Number of credentials deleted
-   */
-  async cleanupExpired(tenantId?: string): Promise<ApiResponse<CleanupExpiredEABCredentialsResponse>> {
-    const body: CleanupExpiredEABCredentialsRequest = tenantId ? { tenantId } : {};
-    return this.client.post<CleanupExpiredEABCredentialsResponse>(
-      this.buildUrl('/credentials/cleanup'),
-      body
     );
   }
 }

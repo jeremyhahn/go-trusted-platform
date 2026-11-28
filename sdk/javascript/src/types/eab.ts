@@ -287,33 +287,3 @@ export interface GetEnrollmentURLResponse {
   /** URL expiration timestamp */
   expiresAt: string;
 }
-
-/**
- * Mark EAB credential used response (platform.v1.MarkEABCredentialUsedResponse)
- */
-export interface MarkEABCredentialUsedResponse {
-  /** Operation status */
-  status: EABStatus;
-  /** Response timestamp */
-  timestamp?: string;
-}
-
-/**
- * Cleanup expired EAB credentials request (platform.v1.CleanupExpiredEABCredentialsRequest)
- */
-export interface CleanupExpiredEABCredentialsRequest {
-  /** Restrict the cleanup to one tenant (optional) */
-  tenantId?: string;
-}
-
-/**
- * Cleanup expired EAB credentials response (platform.v1.CleanupExpiredEABCredentialsResponse)
- */
-export interface CleanupExpiredEABCredentialsResponse {
-  /** Number of credentials deleted */
-  deletedCount: number;
-  /** Operation status */
-  status: EABStatus;
-  /** Response timestamp */
-  timestamp?: string;
-}
